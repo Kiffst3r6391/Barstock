@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BarStock"
+version = "1.0.0"
+description = "Bar stock management system for Prestonfield Golf Club"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "fpdf",
+    "matplotlib",
+    "tkcalendar",
+    "babel",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller"]
+dev = ["pytest", "mypy", "ruff"]
+
+[tool.setuptools]
+py-modules = [
+    "BarStockApp",
+    "actions",
+    "categories",
+    "conversions",
+    "csv_upload",
+    "data_manager",
+    "pdf_generator",
+    "reports",
+    "sales_mapping",
+    "stock_service",
+    "supplier_mapping",
+    "order_sheet_layout",
+    "update_stock",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["tests/"]
+
+[tool.ruff]
+line-length = 120
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
