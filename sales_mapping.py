@@ -1,7 +1,9 @@
 # Sales to Parent Stock Mapping
 # When these items are sold, deduct from parent stock instead/as well
-# Format: child_item_id: (parent_item_id, quantity_factor, description)
+# Format: child_item_id: (parent_item_id, quantity_factor, description, visible_in_stock)
 # quantity_factor = how much to deduct from parent per 1 unit sold
+# visible_in_stock = optional bool; if True the item still appears in Manage Stock
+#                    (defaults to False for half pints, shandies, dashes, etc.)
 
 SALES_TO_PARENT = {
     # HALF PINTS -> deduct from full pint
@@ -68,6 +70,12 @@ SALES_TO_PARENT = {
     'tg_tennents': ('tennents_lager', 1.0, 'TG Tennents'),
     'tb_best': ('belhaven_best', 1.0, 'TB Best'),
     'tg_single_serve_wine': ('single_serve_wine', 1.0, 'TG Single Serve Wine'),
+
+    # COCKTAILS / MIXED DRINKS -> deduct multiple ingredients
+    # Aperol Spritz: 50ml Aperol + 1 single-serve Prosecco
+    # Aperol system quantity is in 35ml measures, so 50ml = 50/35 measures.
+    # Marked visible_in_stock=True so it still appears in Manage Stock.
+    'aperol_spritz': (['aperol', 'prosecco_single_serve'], [50/35, 1.0], 'Aperol Spritz', True),
 }
 
 
@@ -154,7 +162,7 @@ def get_effective_cost_price(item_id, inventory_df, col_item_id='item_id', col_c
     if not mapping:
         return inventory_df.loc[inventory_df[col_item_id] == item_id, col_cost_price].values[0]
 
-    parent_items, factors, _ = mapping
+    parent_items, factors, _ = mapping[:3]
     if isinstance(parent_items, list):
         # Multiple parents - return own cost (blending would be complex)
         return inventory_df.loc[inventory_df[col_item_id] == item_id, col_cost_price].values[0]
@@ -227,7 +235,7 @@ def apply_sale_to_parent(item_id, quantity_sold, inventory_df, col_item_id, col_
     if not mapping:
         return []
 
-    parent_items, factors, description = mapping
+    parent_items, factors, description = mapping[:3]
     adjustments = []
 
     # Handle single or multiple parents
@@ -258,7 +266,7 @@ def get_affected_parents_description(item_id):
     if not mapping:
         return None
 
-    parent_items, factors, description = mapping
+    parent_items, factors, description = mapping[:3]
 
     if isinstance(parent_items, list):
         details = [f"{factor} from {parent}" for parent, factor in zip(parent_items, factors)]
@@ -272,14 +280,20 @@ def is_hidden_from_stock_view(item_id):
 
     These are child items (half pints, dash, shandies) that deduct from parent stock.
     They should still appear in sales transactions.
+
+    Items with a SALES_TO_PARENT mapping can opt out of hiding by setting the
+    optional fourth tuple element to True.
     """
     mapping = SALES_TO_PARENT.get(item_id.lower())
-    return mapping is not None
+    if not mapping:
+        return False
+    # Optional fourth element controls visibility (default hidden)
+    return not (len(mapping) > 3 and mapping[3])
 
 
 def get_hidden_items():
     """Get list of all item IDs that should be hidden from stock view."""
-    return [k for k, v in SALES_TO_PARENT.items() if v is not None]
+    return [k for k, v in SALES_TO_PARENT.items() if v is not None and not (len(v) > 3 and v[3])]
 
 
 def get_children_for_parent(parent_id):

@@ -165,6 +165,7 @@ CATEGORY_MAP = {
     'cart_roll_tea_coffee': 'Others',
     'ef_tg_3_course': 'Others',
     'margarita': 'Others',
+    'aperol_spritz': 'Others',
     # Cart items
     'cart_corona': 'Cart Sales',
     'cart_cans': 'Cart Sales',

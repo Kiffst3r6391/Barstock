@@ -24,3 +24,12 @@ BarStockManagement-macOS.zip
 # IDE
 .vscode/
 .idea/
+
+# Live data / generated reports
+*.csv
+*.pdf
+sales_reports/
+apply_baseline_reset.py
+
+# Claude session files
+.claude/
