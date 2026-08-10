@@ -697,6 +697,9 @@ class BarStockManagementSystem:
         # Upload banner
         self._render_upload_banner(self.dashboard_area)
 
+        # Items needing attention
+        self._render_attention_table(self.dashboard_area)
+
         # Quick actions panel
         quick_panel = self.create_panel(self.dashboard_area, "Quick Actions")
         quick_grid = self.themed_frame(quick_panel, bg=THEME_PANEL)
@@ -716,9 +719,6 @@ class BarStockManagementSystem:
             self.tile_button(quick_grid, text, command).grid(
                 row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew'
             )
-
-        # Stock alerts panel
-        self._render_stock_alerts_panel(self.dashboard_area)
 
         # Report shortcuts panel
         reports_panel = self.create_panel(self.dashboard_area, "Report Shortcuts")
@@ -776,7 +776,7 @@ class BarStockManagementSystem:
         return btn
 
     def update_dashboard_stats(self, parent=None):
-        """Render dark-themed dashboard summary cards."""
+        """Render simplified dashboard summary cards."""
         if parent is None:
             if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
                 return
@@ -788,45 +788,131 @@ class BarStockManagementSystem:
         self.stats_frame.pack(fill='x', pady=(0, 18))
 
         total_items = len(self.inventory_df)
-        total_stock_value = (self.inventory_df[COL_QUANTITY] * self.inventory_df[COL_COST_PRICE]).sum()
-        transaction_count = len(self.log_df)
 
+        # Negative stock count (excluding hidden/excluded items)
+        neg_stock_count = 0
+        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
+            neg_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] < 0]
+            neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
+            neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(should_exclude)]
+            neg_stock_count = len(neg_stock_df)
+
+        # Low stock count (at or below reorder level)
         low_stock_count = 0
-        if COL_REORDER_LEVEL in self.inventory_df.columns:
+        if COL_REORDER_LEVEL in self.inventory_df.columns and not self.inventory_df.empty:
             low_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] <= self.inventory_df[COL_REORDER_LEVEL]]
             low_stock_df = low_stock_df[low_stock_df[COL_REORDER_LEVEL] > 0]
+            low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
+            low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(should_exclude)]
             low_stock_count = len(low_stock_df)
 
-        neg_stock_count = 0
-        if COL_ALLOW_NEGATIVE in self.inventory_df.columns and not self.inventory_df.empty:
-            neg_stock_df = self.inventory_df[(self.inventory_df[COL_QUANTITY] < 0) & (self.inventory_df[COL_ALLOW_NEGATIVE] == False)]
-            if not neg_stock_df.empty and COL_ITEM_ID in neg_stock_df.columns:
-                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(should_exclude)]
-                neg_stock_count = len(neg_stock_df)
+        # Last delivery timestamp
+        last_delivery = "None"
+        if not self.log_df.empty and COL_ACTION in self.log_df.columns:
+            deliveries = self.log_df[self.log_df[COL_ACTION] == ACTION_DELIVERY]
+            if not deliveries.empty and COL_TIMESTAMP in deliveries.columns:
+                try:
+                    latest = deliveries[COL_TIMESTAMP].max()
+                    last_delivery = latest.split()[0]
+                except Exception:
+                    last_delivery = "Unknown"
 
-        critical_stock_count = 0
+        # Latest backup date
+        latest_backup = "None"
+        try:
+            import glob
+            backups = sorted(glob.glob(os.path.join(DATA_DIR, 'backups', 'barstock_*.db')), key=os.path.getmtime, reverse=True)
+            if backups:
+                mtime = os.path.getmtime(backups[0])
+                latest_backup = datetime.fromtimestamp(mtime).strftime('%d/%m/%Y')
+        except Exception:
+            latest_backup = "Unknown"
+
+        # Reorder-level alert total
+        reorder_alert_count = low_stock_count
+
+        self.create_card(self.stats_frame, "Items in Stock", f"{total_items}",
+                         f"{reorder_alert_count} below reorder level",
+                         status='warning' if reorder_alert_count > 0 else 'normal')
+        self.create_card(self.stats_frame, "Negative Stock", f"{neg_stock_count}",
+                         "Needs attention" if neg_stock_count > 0 else "All positive",
+                         status='danger' if neg_stock_count > 0 else 'normal')
+        self.create_card(self.stats_frame, "Last Delivery", last_delivery,
+                         "Booker/Tennent’s/Belhaven" if last_delivery != "None" else "Add a delivery")
+        self.create_card(self.stats_frame, "Latest Backup", latest_backup,
+                         "Auto-backup on open" if latest_backup != "None" else "Not yet backed up")
+
+    def _render_attention_table(self, parent=None):
+        """Show a simple table of items that need action: negative, low, or discrepancy."""
+        if parent is None:
+            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+                return
+            parent = self.dashboard_area
+        if hasattr(self, 'attention_frame'):
+            self.attention_frame.destroy()
+
+        attention = []
         if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
-            critical_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] < -10]
-            if not critical_stock_df.empty:
-                critical_stock_df = critical_stock_df[~critical_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-                critical_stock_df = critical_stock_df[~critical_stock_df[COL_ITEM_ID].apply(should_exclude)]
-                critical_stock_count = len(critical_stock_df)
+            for _, row in self.inventory_df.iterrows():
+                item_id = row[COL_ITEM_ID]
+                if is_hidden_from_stock_view(item_id) or should_exclude(item_id):
+                    continue
+                qty = float(row[COL_QUANTITY])
+                reorder = float(row.get(COL_REORDER_LEVEL, 0) or 0)
+                name = row.get(COL_ITEM_NAME, item_id)
+                measure = row.get(COL_MEASURE, '')
 
-        self.create_card(self.stats_frame, "Total Items", f"{total_items}", f"{transaction_count} transactions")
-        self.create_card(self.stats_frame, "Stock Value", f"£{total_stock_value:,.2f}", "at cost price")
+                if qty < 0:
+                    attention.append({
+                        'name': name,
+                        'qty': qty,
+                        'measure': measure,
+                        'status': 'Negative',
+                        'action': 'Stocktake or delivery',
+                        'tag': 'danger'
+                    })
+                elif reorder > 0 and qty <= reorder:
+                    attention.append({
+                        'name': name,
+                        'qty': qty,
+                        'measure': measure,
+                        'status': 'Low',
+                        'action': 'Order soon',
+                        'tag': 'warning'
+                    })
 
-        if critical_stock_count > 0:
-            self.create_card(self.stats_frame, "Critical Stock", f"{critical_stock_count}", "Below -10 units", status='danger')
-        elif low_stock_count > 0:
-            self.create_card(self.stats_frame, "Low Stock", f"{low_stock_count}", "At or below reorder", status='warning')
-        else:
-            self.create_card(self.stats_frame, "Stock Level", "OK", "No alerts", status='normal')
+        panel = self.create_panel(parent, "Items needing attention")
 
-        if neg_stock_count > 0:
-            self.create_card(self.stats_frame, "Negative Stock", f"{neg_stock_count}", "Needs attention", status='danger')
-        else:
-            self.create_card(self.stats_frame, "Negative Stock", "None", "All positive", status='normal')
+        if not attention:
+            self.themed_label(panel, "No issues found. All tracked stock is positive and above reorder levels.",
+                              font=(THEME_FONT, 11), fg=THEME_SUCCESS).pack(anchor='w', padx=14, pady=(0, 14))
+            return
+
+        tree_frame = self.themed_frame(panel, bg=THEME_PANEL)
+        tree_frame.pack(fill='both', expand=True, padx=14, pady=(0, 14))
+
+        tree = ttk.Treeview(tree_frame, columns=('name', 'current', 'status', 'action'), show='headings', height=min(8, len(attention)))
+        tree.heading('name', text='Item')
+        tree.heading('current', text='Current Stock')
+        tree.heading('status', text='Status')
+        tree.heading('action', text='Action')
+        tree.column('name', width=250)
+        tree.column('current', width=140, anchor='e')
+        tree.column('status', width=110, anchor='center')
+        tree.column('action', width=200)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill='both', expand=True)
+
+        for item in attention:
+            current_text = f"{item['qty']:.1f} {item['measure']}s" if item['measure'] else f"{item['qty']:.1f}"
+            tag = 'danger' if item['tag'] == 'danger' else 'warning'
+            tree.insert('', tk.END, values=(item['name'], current_text, item['status'], item['action']), tags=(tag,))
+
+        tree.tag_configure('danger', foreground=THEME_DANGER, font=(THEME_FONT, 10, 'bold'))
+        tree.tag_configure('warning', foreground=THEME_WARNING, font=(THEME_FONT, 10, 'bold'))
 
     def _safe_slice(self, df, required_cols):
         """Return a copy of df if it has all required columns, else an empty DataFrame with those columns."""
