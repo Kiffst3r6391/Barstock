@@ -110,9 +110,9 @@ def build_with_pyinstaller():
         '--add-data', 'data_manager.py:.',
         '--add-data', 'pdf_generator.py:.',
         '--add-data', 'reports.py:.',
+        '--add-data', 'inventory_sync.py:.',
         '--add-data', 'stock_service.py:.',
         '--add-data', 'csv_upload.py:.',
-        '--add-data', 'update_stock.py:.',
         # Hidden imports
         '--hidden-import', 'pandas',
         '--hidden-import', 'numpy',
@@ -142,9 +142,9 @@ def build_with_pyinstaller():
         '--hidden-import', 'data_manager',
         '--hidden-import', 'pdf_generator',
         '--hidden-import', 'reports',
+        '--hidden-import', 'inventory_sync',
         '--hidden-import', 'stock_service',
         '--hidden-import', 'csv_upload',
-        '--hidden-import', 'update_stock',
         # Exclude unnecessary packages
         '--exclude-module', 'scipy',
         '--exclude-module', 'sphinx',
