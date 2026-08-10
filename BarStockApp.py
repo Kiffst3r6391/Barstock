@@ -108,18 +108,18 @@ CATEGORY_OPTIONS = ['Draught', 'Bottle', 'Spirit', 'Can', 'Soft', 'Snack', 'Wine
 DIVISION_OPTIONS = ['Beer - Draught', 'Beer - Bottled', 'Spirits', 'Soft Drinks', 'Post Mix', 'Mineral', 'Wine', 'Snacks', 'Other']
 
 # Dark dashboard theme constants
-THEME_BG = '#121212'
-THEME_SIDEBAR = '#1a1a1a'
-THEME_CARD = '#1e1e1e'
-THEME_PANEL = '#1e1e1e'
-THEME_BORDER = '#2a2a2a'
-THEME_TEXT = '#eeeeee'
-THEME_TEXT_MUTED = '#888888'
-THEME_ACCENT = '#2563eb'
-THEME_ACCENT_HOVER = '#1d4ed8'
-THEME_SUCCESS = '#4ade80'
-THEME_WARNING = '#facc15'
-THEME_DANGER = '#f87171'
+THEME_BG = '#0f1419'
+THEME_SIDEBAR = '#1a2028'
+THEME_CARD = '#232b36'
+THEME_PANEL = '#232b36'
+THEME_BORDER = '#2f3844'
+THEME_TEXT = '#f5f2ec'
+THEME_TEXT_MUTED = '#9aa3ad'
+THEME_ACCENT = '#c89f5e'
+THEME_ACCENT_HOVER = '#e8b86d'
+THEME_SUCCESS = '#5a9e6e'
+THEME_WARNING = '#c99a46'
+THEME_DANGER = '#c95d5d'
 THEME_FONT = '-apple-system, BlinkMacSystemFont, SF Pro, Segoe UI, Arial'
 
 
@@ -445,31 +445,31 @@ class BarStockManagementSystem:
         return tile
 
     def create_card(self, parent, title, value, subtext='', status='normal'):
-        """Create a dashboard summary card."""
+        """Create a simplified dashboard summary card."""
         card = tk.Frame(parent, bg=THEME_CARD, bd=1, relief='solid',
                          highlightbackground=THEME_BORDER, highlightthickness=1)
         card.pack(side='left', fill='both', expand=True, padx=8, pady=5)
 
-        title_lbl = tk.Label(card, text=title.upper(), font=(THEME_FONT, 9),
+        title_lbl = tk.Label(card, text=title.upper(), font=(THEME_FONT, 9, 'bold'),
                              fg=THEME_TEXT_MUTED, bg=THEME_CARD)
-        title_lbl.pack(anchor='w', padx=14, pady=(12, 2))
+        title_lbl.pack(anchor='w', padx=14, pady=(12, 4))
 
         value_color = THEME_TEXT
         if status == 'danger':
             value_color = THEME_DANGER
         elif status == 'warning':
             value_color = THEME_WARNING
-        value_lbl = tk.Label(card, text=value, font=(THEME_FONT, 24, 'bold'),
+        value_lbl = tk.Label(card, text=value, font=(THEME_FONT, 26, 'bold'),
                              fg=value_color, bg=THEME_CARD)
         value_lbl.pack(anchor='w', padx=14)
 
         if subtext:
             sub_lbl = tk.Label(card, text=subtext, font=(THEME_FONT, 10),
-                               fg=THEME_SUCCESS if status == 'normal' else value_color,
+                               fg=THEME_TEXT_MUTED if status == 'normal' else value_color,
                                bg=THEME_CARD)
-            sub_lbl.pack(anchor='w', padx=14, pady=(2, 12))
+            sub_lbl.pack(anchor='w', padx=14, pady=(4, 14))
         else:
-            tk.Label(card, text='', bg=THEME_CARD).pack(pady=(0, 6))
+            tk.Label(card, text='', bg=THEME_CARD).pack(pady=(0, 8))
         return card
 
     def create_panel(self, parent, title):
@@ -749,9 +749,9 @@ class BarStockManagementSystem:
                           fg=THEME_TEXT_MUTED).pack(side='right')
 
     def _nav_button(self, parent, text, command, active, danger=False):
-        """Create a sidebar navigation button."""
+        """Create a simplified sidebar navigation button."""
         bg = THEME_ACCENT if active else THEME_SIDEBAR
-        fg = '#ffffff' if active else (THEME_DANGER if danger else THEME_TEXT)
+        fg = '#0f1419' if active else (THEME_DANGER if danger else THEME_TEXT)
         hover = THEME_ACCENT_HOVER if active else THEME_BORDER
 
         btn = tk.Label(parent, text=text, font=(THEME_FONT, 12, 'bold' if active else 'normal'),
