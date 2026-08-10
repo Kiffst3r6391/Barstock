@@ -793,17 +793,21 @@ class BarStockManagementSystem:
         neg_stock_count = 0
         if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
             neg_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] < 0]
-            neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-            neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(should_exclude)]
+            if not neg_stock_df.empty and COL_ITEM_ID in neg_stock_df.columns:
+                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
+                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(should_exclude)]
             neg_stock_count = len(neg_stock_df)
 
         # Low stock count (at or below reorder level)
         low_stock_count = 0
-        if COL_REORDER_LEVEL in self.inventory_df.columns and not self.inventory_df.empty:
+        if (COL_REORDER_LEVEL in self.inventory_df.columns
+                and COL_ITEM_ID in self.inventory_df.columns
+                and not self.inventory_df.empty):
             low_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] <= self.inventory_df[COL_REORDER_LEVEL]]
             low_stock_df = low_stock_df[low_stock_df[COL_REORDER_LEVEL] > 0]
-            low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-            low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(should_exclude)]
+            if not low_stock_df.empty and COL_ITEM_ID in low_stock_df.columns:
+                low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
+                low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(should_exclude)]
             low_stock_count = len(low_stock_df)
 
         # Last delivery timestamp
