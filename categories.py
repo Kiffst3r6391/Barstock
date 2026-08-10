@@ -48,6 +48,14 @@ EXCLUDED_ITEMS = {
     'tg_tennents',
     'tb_best',
     'tg_single_serve_wine',
+    'coke_pint',
+    'diet_coke_pint',
+    'lemonade_pint',
+    'coke_half_pint',
+    'diet_coke_half_pint',
+    'lemonade_half_pint',
+    'tennants_shandy_half_pint',
+    'cart_koppa',
 }
 
 # Category mapping based on item_id or item_name patterns
@@ -92,6 +100,7 @@ CATEGORY_MAP = {
     'sours': 'Spirits',
     'southern_comfort': 'Spirits',
     'bowmore': 'Spirits',
+    'glen_scotia': 'Spirits',
     'glenmorangie': 'Spirits',
     'highland_park': 'Spirits',
     'jura_origin': 'Spirits',
@@ -186,6 +195,23 @@ CATEGORY_MAP = {
     'orange_soda': 'Soft Drinks',
     'orange_soda_half': 'Soft Drinks',
     'carton_juice_pint': 'Soft Drinks',
+
+    # Postmix pints
+    'coke_pint': 'Soft Drinks',
+    'diet_coke_pint': 'Soft Drinks',
+    'lemonade_pint': 'Soft Drinks',
+    'coke_half_pint': 'Soft Drinks',
+    'diet_coke_half_pint': 'Soft Drinks',
+    'lemonade_half_pint': 'Soft Drinks',
+    # TG items
+    'tg_tennents': 'Beers',
+    'tg_best': 'Beers',
+    'tb_best': 'Beers',
+    'tg_can': 'Beers',
+    'tg_single_serve_wine': 'Wines',
+    'cart_koppa': 'Ciders',
+    'tennants_shandy_half_pint': 'Beers',
+
     # Spirits (new)
     'margarita': 'Spirits',
     'cointreau': 'Spirits',

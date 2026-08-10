@@ -34,6 +34,7 @@ STOCK_CONVERSIONS = {
     'sours': ('bottle', 20.0, 'measure'),
     'tequila_rose': ('bottle', 20.0, 'measure'),
     'bowmore': ('bottle', 20.0, 'measure'),
+    'glen_scotia': ('bottle', 20.0, 'measure'),
     'glenlivet': ('bottle', 20.0, 'measure'),
     'glenmorangie': ('bottle', 20.0, 'measure'),
     'highland_park': ('bottle', 20.0, 'measure'),
@@ -138,6 +139,21 @@ def format_stock_display(item_id, system_quantity):
         output_plural = f"{output_unit}s"
         return f"{input_qty:.1f} {input_plural} ({system_quantity:.1f} {output_plural})"
     return f"{system_quantity:.2f}"
+
+
+def format_quantity_display(item_id, system_quantity):
+    """Format a quantity in the most natural display unit for the item.
+
+    For converted items this returns the input-unit equivalent (e.g. bottles).
+    For non-converted items it returns the raw system quantity with measure.
+    """
+    conversion = get_conversion(item_id)
+    if conversion:
+        input_unit, factor, _output_unit = conversion
+        input_qty = system_quantity / factor
+        input_plural = {'box': 'boxes', 'carton': 'cartons', 'bottle': 'bottles'}.get(input_unit, f"{input_unit}s")
+        return f"{input_qty:.2f} {input_plural}"
+    return f"{system_quantity:.1f}"
 
 
 def requires_conversion(item_id):

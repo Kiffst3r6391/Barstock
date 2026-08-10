@@ -45,16 +45,58 @@ COL_DIVISION = 'division'
 
 
 def filter_log_by_date(log_df, start_date=None, end_date=None):
-    """Filter transaction log by date range."""
+    """Filter transaction log by date range.
+
+    Sales/complimentary/wastage transactions uploaded from CSV reports store
+    their sales period in the date_range column (e.g. "01/08/2026 - 07/08/2026").
+    When filtering by date, include those rows if their date_range overlaps the
+    selected period; otherwise fall back to the transaction timestamp.
+    """
     if log_df.empty or start_date is None:
         return log_df
     filtered = log_df.copy()
+
     if COL_TIMESTAMP in filtered.columns:
-        filtered[COL_TIMESTAMP] = pd.to_datetime(filtered[COL_TIMESTAMP], errors='coerce')
+        filtered['__timestamp_dt__'] = pd.to_datetime(filtered[COL_TIMESTAMP], errors='coerce')
+        timestamp_mask = pd.Series(True, index=filtered.index)
         if start_date is not None:
-            filtered = filtered[filtered[COL_TIMESTAMP] >= pd.Timestamp(start_date)]
+            timestamp_mask &= filtered['__timestamp_dt__'] >= pd.Timestamp(start_date)
         if end_date is not None:
-            filtered = filtered[filtered[COL_TIMESTAMP] <= pd.Timestamp(end_date)]
+            timestamp_mask &= filtered['__timestamp_dt__'] <= pd.Timestamp(end_date)
+    else:
+        timestamp_mask = pd.Series(True, index=filtered.index)
+
+    if COL_DATE_RANGE in filtered.columns:
+        def _date_range_in_range(date_range_str):
+            if not isinstance(date_range_str, str) or not date_range_str.strip():
+                return None  # signal: fall back to timestamp
+            try:
+                parts = date_range_str.split(' - ')
+                if len(parts) != 2:
+                    return None
+                dr_start = datetime.strptime(parts[0].strip(), '%d/%m/%Y')
+                dr_end = datetime.strptime(parts[1].strip(), '%d/%m/%Y')
+                # For CSV-uploaded periods, require the whole CSV period to fall
+                # inside the selected range. This stops a previous CSV that
+                # overlaps by a single day from being pulled into a report.
+                if start_date is not None and dr_start < start_date:
+                    return False
+                if end_date is not None and dr_end > end_date:
+                    return False
+                return True
+            except Exception:
+                return None
+
+        daterange_decision = filtered[COL_DATE_RANGE].apply(_date_range_in_range)
+        # Rows with a valid date_range are decided by full containment;
+        # rows without one fall back to the timestamp mask.
+        from_period = daterange_decision == True
+        fallback_to_timestamp = daterange_decision.isna()
+        filtered = filtered[from_period | (fallback_to_timestamp & timestamp_mask)]
+    else:
+        filtered = filtered[timestamp_mask]
+
+    filtered = filtered.drop(columns=['__timestamp_dt__'], errors='ignore')
     return filtered
 
 
@@ -85,7 +127,7 @@ def calculate_expected_remaining_series(log_df):
     for child_id, mapping in SALES_TO_PARENT.items():
         if not mapping:
             continue
-        parent_items, factors, _ = mapping
+        parent_items, factors, _ = mapping[:3]
         child_log = log_df[log_df[COL_ITEM_ID].str.lower() == child_id]
         sales_qty = child_log[child_log[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])][COL_QUANTITY].sum()
         comp_qty = child_log[child_log[COL_ACTION] == ACTION_COMPLIMENTARY][COL_QUANTITY].sum()
@@ -661,6 +703,11 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
     Returns list of dicts, one per inventory item.
 
     Args:
+        stocktake_map: Optional dict mapping item_id -> counted quantity (legacy), or
+                       item_id -> dict with 'counted_quantity', 'expected_quantity', 'variance'.
+                       When the richer dict is provided, surplus is computed from the actual
+                       stocktake variance rather than derived period consumption, which avoids
+                       misinterpreting a closing stocktake as opening stock.
         closing_stock_map: Optional dict mapping item_id -> stock quantity at the end of the
                            report period. When provided, overrides live current_stock for
                            historical date-range consistency.
@@ -668,6 +715,20 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
     report_data = []
     if inventory_df.empty:
         return report_data
+
+    # Normalize stocktake_map to info dicts.
+    stocktake_info = {}
+    if stocktake_map:
+        for k, v in stocktake_map.items():
+            if isinstance(v, dict):
+                stocktake_info[k] = v
+            else:
+                # Legacy scalar counted-quantity map
+                stocktake_info[k] = {
+                    'counted_quantity': float(v),
+                    'expected_quantity': 0.0,
+                    'variance': float(v),
+                }
 
     division_mapping = get_division_mapping(os.path.dirname(os.path.abspath(__file__)))
 
@@ -683,12 +744,20 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
         sales_data['total_sales_cost'] = sales_data['total_sales_qty'] * sales_data['avg_cost_price']
         sales_data['sales_gp'] = sales_data['total_sales_value'] - sales_data['total_sales_cost']
 
-        wastage_data = log_df[log_df[COL_ACTION] == ACTION_WASTAGE].groupby(COL_ITEM_ID).agg({
+        # Wastage excludes line-clean entries; those are reported separately.
+        wastage_data = log_df[
+            (log_df[COL_ACTION] == ACTION_WASTAGE) &
+            (log_df[COL_REASON] != 'Line Clean')
+        ].groupby(COL_ITEM_ID).agg({
             COL_QUANTITY: 'sum'
         }).reset_index()
         wastage_data.columns = [COL_ITEM_ID, 'total_wastage_qty']
 
-        line_clean_data = log_df[(log_df[COL_ACTION] == ACTION_WASTAGE) & (log_df[COL_REASON] == 'Line Clean')].groupby(COL_ITEM_ID).agg({
+        # De-duplicate identical line-clean rows logged repeatedly at the same
+        # timestamp (e.g. 5 pints per tap should only count once per event).
+        line_clean_log = log_df[(log_df[COL_ACTION] == ACTION_WASTAGE) & (log_df[COL_REASON] == 'Line Clean')].copy()
+        line_clean_log = line_clean_log.drop_duplicates(subset=[COL_ITEM_ID, COL_TIMESTAMP, COL_QUANTITY])
+        line_clean_data = line_clean_log.groupby(COL_ITEM_ID).agg({
             COL_QUANTITY: 'sum'
         }).reset_index()
         line_clean_data.columns = [COL_ITEM_ID, 'total_line_clean_qty']
@@ -792,18 +861,26 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
         parent_adj_row = parent_adj_data[parent_adj_data[COL_ITEM_ID] == item_id]
         total_parent_adj_qty = parent_adj_row['total_parent_adj_qty'].iloc[0] if not parent_adj_row.empty else 0
 
-        expected_consumption = total_sales_qty + total_parent_adj_qty + total_wastage_qty + total_complimentary_qty + total_open_tab_qty
+        expected_consumption = (total_sales_qty + total_parent_adj_qty + total_wastage_qty +
+                                total_line_clean_qty + total_complimentary_qty + total_open_tab_qty)
 
-        # Use stocktake snapshot as true opening stock when available.
-        # Without a stocktake, opening_stock is derived from unified expected remaining formula.
-        if stocktake_map and item_id in stocktake_map:
-            opening_stock = stocktake_map[item_id]
-            actual_consumption = opening_stock + total_delivery_qty - current_stock
-            consumption_variance = expected_consumption - actual_consumption
-            consumption_variance_pct = (consumption_variance / actual_consumption * 100) if actual_consumption > 0 else 0
-            expected_closing = opening_stock + total_delivery_qty - expected_consumption
-            # Surplus = actual closing - expected closing (in £)
-            surplus_value = (current_stock - expected_closing) * cost_price
+        # Use stocktake snapshot data when available. The stocktake variance
+        # (counted - expected) is the authoritative surplus/shortfall figure and
+        # matches the Stocktake Variance Report. Period consumption metrics are
+        # adjusted so they are consistent with that variance.
+        if stocktake_info and item_id in stocktake_info:
+            st = stocktake_info[item_id]
+            counted_quantity = float(st.get('counted_quantity', 0))
+            expected_quantity = float(st.get('expected_quantity', 0))
+            variance = float(st.get('variance', counted_quantity - expected_quantity))
+            opening_stock = counted_quantity
+            # Adjust actual consumption so the implied variance equals the stocktake variance
+            actual_consumption = expected_consumption - variance
+            consumption_variance = variance
+            consumption_variance_pct = (variance / actual_consumption * 100) if actual_consumption > 0 else 0
+            expected_closing = expected_quantity
+            # Surplus = counted - system expected at stocktake, valued at cost price
+            surplus_value = variance * cost_price
         else:
             # Derive opening stock from unified formula: opening = current - expected_remaining
             opening_stock = current_stock - expected_remaining_series.get(item_id, 0)
@@ -1269,3 +1346,56 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
                 })
 
     return report_data
+
+
+def build_reconciliation_report(
+    inventory_df,
+    log_df,
+    script_dir=None,
+    negative_days=7,
+):
+    """Build data for the inventory reconciliation report.
+
+    Returns a dict with sections:
+      - missing_conversion: items without STOCK_CONVERSIONS entry
+      - missing_category: items without CATEGORY_MAP entry
+      - missing_order_sheet: items not linked on order sheet
+      - order_sheet_orphans: order-sheet rows with None that have live stock > 0
+      - csv_mismatches: items in inventory not in Items.csv, and vice versa
+      - recent_negative: items driven negative in the last N days
+    """
+    from inventory_sync import (
+        find_missing_mappings,
+        find_untracked_items_on_order_sheet,
+        find_items_csv_inventory_mismatches,
+        find_recent_negative_items,
+    )
+
+    report = {
+        'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'missing_conversion': [],
+        'missing_category': [],
+        'missing_order_sheet': [],
+        'order_sheet_orphans': [],
+        'csv_mismatches': {'in_inventory_not_csv': [], 'in_csv_not_inventory': []},
+        'recent_negative': [],
+    }
+
+    if inventory_df.empty:
+        return report
+
+    missing = find_missing_mappings(inventory_df)
+    report['missing_conversion'] = missing['missing_conversion']
+    report['missing_category'] = missing['missing_category']
+    report['missing_order_sheet'] = missing['missing_order_sheet']
+    report['order_sheet_orphans'] = [
+        {'supplier': s, 'category': c, 'display_name': d}
+        for s, c, d in find_untracked_items_on_order_sheet(inventory_df)
+    ]
+
+    if script_dir:
+        report['csv_mismatches'] = find_items_csv_inventory_mismatches(inventory_df, script_dir)
+
+    report['recent_negative'] = find_recent_negative_items(inventory_df, log_df, days=negative_days)
+
+    return report

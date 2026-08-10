@@ -281,7 +281,10 @@ class PDFReport(FPDF):
             combined_total = total_wastage_value + total_line_clean_value
             self.set_font('Arial', 'B', 11)
             self.set_text_color(0, 0, 0)
-            self.cell(0, 8, f"Total Wastage Value (including line clean): £{combined_total:.2f}", 0, 1, 'L')
+            self.cell(0, 8, f"Total Wastage Value (excluding line clean): £{total_wastage_value:.2f}", 0, 1, 'L')
+            if total_line_clean_value > 0:
+                self.cell(0, 8, f"Total Line Clean Value: £{total_line_clean_value:.2f}", 0, 1, 'L')
+            self.cell(0, 8, f"Combined Wastage & Line Clean Value: £{combined_total:.2f}", 0, 1, 'L')
             self.ln(5)
 
         # SECTION 3: Complimentary Summary

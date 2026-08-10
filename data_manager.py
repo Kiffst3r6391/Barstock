@@ -413,6 +413,58 @@ class InventoryDataManager:
             return pd.DataFrame(columns=LOG_COLUMNS)
 
     @staticmethod
+    def load_full_log(inventory_df=None):
+        """Load active and archived transaction log for reporting.
+
+        Includes all transactions except old Stocktake Baseline and Stocktake
+        Adjustment entries from the archive, because the current baseline
+        supersedes them.
+        """
+        try:
+            conn = _get_connection()
+            cursor = conn.cursor()
+
+            rows = []
+
+            if inventory_df is not None and not inventory_df.empty:
+                valid_items = tuple(inventory_df[COL_ITEM_ID].values)
+                if len(valid_items) == 1:
+                    cursor.execute("SELECT * FROM transactions WHERE item_id = ? ORDER BY timestamp", (valid_items[0],))
+                    rows.extend(cursor.fetchall())
+                    cursor.execute(
+                        "SELECT * FROM transaction_archive WHERE item_id = ? AND action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp",
+                        (valid_items[0],)
+                    )
+                else:
+                    cursor.execute(f"SELECT * FROM transactions WHERE item_id IN ({','.join('?' * len(valid_items))}) ORDER BY timestamp", valid_items)
+                    rows.extend(cursor.fetchall())
+                    cursor.execute(
+                        f"SELECT * FROM transaction_archive WHERE item_id IN ({','.join('?' * len(valid_items))}) AND action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp",
+                        valid_items
+                    )
+            else:
+                cursor.execute("SELECT * FROM transactions ORDER BY timestamp")
+                rows.extend(cursor.fetchall())
+                cursor.execute(
+                    "SELECT * FROM transaction_archive WHERE action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp"
+                )
+
+            rows.extend(cursor.fetchall())
+            conn.close()
+            df = _rows_to_dataframe(rows, LOG_COLUMNS)
+
+            # Add missing columns for backward compatibility
+            if COL_DATE_RANGE not in df.columns:
+                df[COL_DATE_RANGE] = ""
+            if COL_REASON not in df.columns:
+                df[COL_REASON] = ""
+
+            return df
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load full transaction log: {e}")
+            return pd.DataFrame(columns=LOG_COLUMNS)
+
+    @staticmethod
     def save_inventory(df):
         """Save inventory DataFrame to SQLite (replaces all rows atomically)."""
         conn = None

@@ -82,7 +82,7 @@ ORDER_SHEET_LAYOUT = [
                 "Whisky",
                 [
                     ("Bowmore", "bowmore"),
-                    ("Glen Scotia", None),
+                    ("Glen Scotia", "glen_scotia"),
                     ("Glenmorangie", "glenmorangie"),
                     ("Highland park", "highland_park"),
                     ("Jura", "jura_origin"),

@@ -200,6 +200,67 @@ class TestSalesUploadSimulation(unittest.TestCase):
         self.assertAlmostEqual(parent_qty, 1.0)
 
 
+class TestFourTupleParentMapping(unittest.TestCase):
+    """Regression test for mappings with an optional 4th visibility element."""
+
+    def setUp(self):
+        self.inventory = pd.DataFrame([
+            {
+                COL_ITEM_ID: 'aperol',
+                COL_ITEM_NAME: 'Aperol',
+                COL_QUANTITY: 20.0,
+                COL_COST_PRICE: 0.80,
+                COL_SELL_PRICE: 2.50,
+                COL_ALLOW_NEGATIVE: False,
+            },
+            {
+                COL_ITEM_ID: 'prosecco_single_serve',
+                COL_ITEM_NAME: 'Prosecco Single Serve',
+                COL_QUANTITY: 30.0,
+                COL_COST_PRICE: 1.20,
+                COL_SELL_PRICE: 4.00,
+                COL_ALLOW_NEGATIVE: False,
+            },
+            {
+                COL_ITEM_ID: 'aperol_spritz',
+                COL_ITEM_NAME: 'Aperol Spritz',
+                COL_QUANTITY: 0.0,
+                COL_COST_PRICE: 2.00,
+                COL_SELL_PRICE: 6.00,
+                COL_ALLOW_NEGATIVE: False,
+            },
+        ])
+
+    def test_four_tuple_mapping_deducts_from_parents(self):
+        """A mapping with a 4th visibility element must still unpack safely."""
+        from unittest.mock import patch
+        from sales_mapping import SALES_TO_PARENT, is_hidden_from_stock_view
+
+        four_tuple_mapping = (['aperol', 'prosecco_single_serve'], [50/35, 1.0], 'Aperol Spritz', True)
+        with patch.dict(SALES_TO_PARENT, {'aperol_spritz': four_tuple_mapping}):
+            self.assertTrue(has_parent_stock('aperol_spritz'))
+            # 4th element True means it should remain visible in stock view
+            self.assertFalse(is_hidden_from_stock_view('aperol_spritz'))
+
+            ok, issues = check_apply_sale_to_parent(
+                'aperol_spritz', 2, self.inventory,
+                COL_ITEM_ID, COL_QUANTITY, COL_ALLOW_NEGATIVE
+            )
+            self.assertTrue(ok)
+            self.assertEqual(issues, [])
+
+            adj = apply_sale_to_parent(
+                'aperol_spritz', 2, self.inventory,
+                COL_ITEM_ID, COL_QUANTITY
+            )
+            self.assertEqual(len(adj), 2)
+
+            aperol_qty = self.inventory.loc[self.inventory[COL_ITEM_ID] == 'aperol', COL_QUANTITY].values[0]
+            prosecco_qty = self.inventory.loc[self.inventory[COL_ITEM_ID] == 'prosecco_single_serve', COL_QUANTITY].values[0]
+            self.assertAlmostEqual(aperol_qty, 20.0 - (100/35))  # 2 * 50/35
+            self.assertAlmostEqual(prosecco_qty, 28.0)
+
+
 class TestCategoryMapping(unittest.TestCase):
     def test_known_items_have_category(self):
         self.assertIsNotNone(get_category('tennents_lager'))

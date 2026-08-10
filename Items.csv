@@ -30,6 +30,7 @@
 "Bowmore","Malt Whisky","BOTTLE","3.25039","99.98","","0","0"
 "Glenlivet","Malt Whisky","BOTTLE","0","0.00","","0","0"
 "Glenmorangie","Malt Whisky","BOTTLE","1.65021","42.06","","0","0"
+"Glen Scotia","Malt Whisky","BOTTLE","1.50000","30.60","","0","0"
 "Highland Park","Malt Whisky","BOTTLE","4.35758","127.57","","0","0"
 "Jura Origin","Malt Whisky","BOTTLE","2.60018","50.38","","0","0"
 "loch lomond","Malt Whisky","BOTTLE","0","0.00","","0","0"
@@ -104,3 +105,16 @@
 "Cointreau","Spirits","BOTTLE","0","0.00","","0","0"
 "Moretti Bottle","Beer - Bottled","BOTTLE","0","0.00","","0","0"
 "Zarapito Malbec","Wine","BOTTLE","0","0.00","","0","0"
+Coke Pint,Post Mix,PINT,0,0.00,,0,0
+Diet Coke Pint,Post Mix,PINT,0,0.00,,0,0
+Lemonade Pint,Post Mix,PINT,0,0.00,,0,0
+Coke Half Pint,Post Mix,PINT,0,0.00,,0,0
+Diet Coke Half Pint,Post Mix,PINT,0,0.00,,0,0
+Lemonade Half Pint,Post Mix,PINT,0,0.00,,0,0
+TG Tennents,Beers - Draught,PINT,0,0.00,,0,0
+TG Best,Beers - Draught,PINT,0,0.00,,0,0
+TB Best,Beers - Draught,PINT,0,0.00,,0,0
+Tennants Shandy Half Pint,Beers - Draught,PINT,0,0.00,,0,0
+TG Can,Beer - Can,CAN,0,0.00,,0,0
+TG Single Serve Wine,Wine,BOTTLE,0,0.00,,0,0
+CART KOPPA,Beer - Bottled,BOTTLE,0,0.00,,0,0

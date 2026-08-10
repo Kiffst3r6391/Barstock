@@ -43,6 +43,22 @@ SALES_TO_PARENT = {
     'pint': None,
     'half_pint': None,
 
+    # POSTMIX FULL PINTS -> deduct 1.0 from respective postmix stock
+    'coke_pint': ('coke_pm', 1.0, 'Coke Pint', True),
+    'diet_coke_pint': ('diet_coke_pm', 1.0, 'Diet Coke Pint', True),
+    'lemonade_pint': ('lemonade', 1.0, 'Lemonade Pint', True),
+
+    # TG (Table/Golf) PREMIUM ITEMS -> deduct from parent stock at 1:1, visible in Manage Stock
+    'tg_tennents': ('tennents_lager', 1.0, 'TG Tennents', True),
+    'tg_best': ('belhaven_best', 1.0, 'TG Best', True),
+    'tb_best': ('belhaven_best', 1.0, 'TB Best', True),
+    'tg_can': ('can', 1.0, 'TG Can', True),
+    'tg_single_serve_wine': ('single_serve_wine', 1.0, 'TG Single Serve Wine', True),
+
+    # CART KOPPARBERG -> deduct from kopparberg stock
+    'cart_koppa': ('kopparberg', 1.0, 'Cart Koppa (Kopparberg)', True),
+
+
     # POSTMIX HALF PINTS -> deduct 0.5 from respective postmix stock
     'coke_half': ('coke_pm', 0.5, 'Coke Half Pint'),
     'coke_half_pint': ('coke_pm', 0.5, 'Coke Half Pint'),
@@ -98,6 +114,12 @@ EPOS_NAME_TO_ITEM_ID = {
     # Tennants Shandy Half Pint (double space in EPOS name)
     'tennants_shandy_half_pint': 'tennants_shandy_half_pint',
 
+    # TG and cart item name normalisation helpers
+    'tg_tennents': 'tg_tennents',
+    'tg_best': 'tg_best',
+    'tb_best': 'tb_best',
+    'cart_koppa': 'cart_koppa',
+
     # Postmix half pints (EPOS name variations)
     'coke': 'coke_pm',
     'diet_coke': 'diet_coke_pm',
@@ -143,9 +165,10 @@ def resolve_epos_item_id(raw_item_id):
 def get_parent_for_sale(item_id):
     """Get parent item(s) that should be affected when this item is sold.
 
-    Returns: tuple of (parent_item_id(s), quantity_factor(s), description)
+    Returns: tuple of (parent_item_id(s), quantity_factor(s), description[, visible_in_stock])
              parent_item_id can be a single ID or list of IDs
              quantity_factor can be a single value or list of values
+             An optional fourth element controls stock-view visibility (True = visible)
              Returns None if no parent mapping exists
     """
     return SALES_TO_PARENT.get(item_id.lower())
@@ -192,7 +215,7 @@ def check_apply_sale_to_parent(item_id, quantity_sold, inventory_df, col_item_id
     if not mapping:
         return True, []
 
-    parent_items, factors, description = mapping
+    parent_items, factors, description = mapping[:3]
     messages = []
 
     def _check_parent(parent_id, factor):
@@ -306,7 +329,7 @@ def get_children_for_parent(parent_id):
     for child_id, mapping in SALES_TO_PARENT.items():
         if not mapping:
             continue
-        parent_items, factors, _ = mapping
+        parent_items, factors, _ = mapping[:3]
         if isinstance(parent_items, list):
             for idx, p_id in enumerate(parent_items):
                 if p_id.lower() == parent_id:

@@ -16,13 +16,18 @@ from fpdf import FPDF
 from categories import get_category, should_exclude, CATEGORY_ORDER, EXCLUDED_ITEMS
 from conversions import (
     get_conversion, convert_to_system, convert_to_input,
-    get_input_label, format_stock_display, requires_conversion
+    get_input_label, format_stock_display, format_quantity_display, requires_conversion
 )
 from sales_mapping import (
     has_parent_stock, get_parent_for_sale, apply_sale_to_parent,
     check_apply_sale_to_parent, normalize_product_name,
     get_affected_parents_description, is_hidden_from_stock_view, get_hidden_items,
     get_effective_cost_price, resolve_epos_item_id
+)
+from inventory_sync import (
+    find_missing_mappings, has_sync_issues, format_sync_report,
+    append_item_to_items_csv, find_items_csv_inventory_mismatches,
+    find_untracked_items_on_order_sheet, find_recent_negative_items,
 )
 from actions import (
     ACTION_SALES, ACTION_SALES_ONE_UNIT, ACTION_DELIVERY,
@@ -349,6 +354,19 @@ class BarStockManagementSystem:
         except Exception:
             pass
 
+        # Sync check: warn if any inventory item lacks conversion/category/order-sheet mapping
+        try:
+            missing = find_missing_mappings(self.inventory_df)
+            if has_sync_issues(missing):
+                report = format_sync_report(missing)
+                self.root.after(500, lambda: messagebox.showwarning(
+                    "Inventory Setup Check",
+                    "Some tracked items are not fully configured:\n\n" + report +
+                    "\n\nPlease add the missing rules to conversions.py, categories.py, or the order sheet."
+                ))
+        except Exception as e:
+            print(f"Startup sync check failed: {e}")
+
         self.create_widgets()
 
     def setup_theme(self):
@@ -644,6 +662,7 @@ class BarStockManagementSystem:
                           font=(THEME_FONT, 9, 'bold'), fg=THEME_TEXT_MUTED).pack(anchor='w', pady=(0, 8))
         self._nav_button(tools_frame, "Reports", self.generate_reports, False)
         self._nav_button(tools_frame, "Transactions", self.view_transaction_log, False)
+        self._nav_button(tools_frame, "Delivery History", self.view_delivery_history, False)
         self._nav_button(tools_frame, "Settings", self.open_settings, False)
         self._nav_button(tools_frame, "Restore Backup", self.restore_from_backup_menu, False)
         self._nav_button(tools_frame, "Init from Items.csv", self.initialize_stock_from_items_csv, False)
@@ -715,6 +734,7 @@ class BarStockManagementSystem:
             ("Sales Trends", self.generate_sales_analytics),
             ("Surplus / Variance", self.generate_surplus_report),
             ("Transaction Log", self.view_transaction_log),
+            ("Delivery History", self.view_delivery_history),
         ]
         for i, (text, command) in enumerate(report_actions):
             self.tile_button(reports_grid, text, command).grid(
@@ -1295,6 +1315,22 @@ class BarStockManagementSystem:
             self.inventory_df = pd.concat([self.inventory_df, new_item], ignore_index=True)
 
             if InventoryDataManager.save_inventory(self.inventory_df):
+                # Keep master Items.csv in sync so new items survive database rebuilds
+                try:
+                    script_dir = get_script_directory()
+                    total_value = float(quantity) * float(cost_price)
+                    append_item_to_items_csv(
+                        script_dir=script_dir,
+                        item_id=item_id,
+                        item_name=item_name,
+                        division=division,
+                        measure=measure,
+                        quantity=input_quantity,
+                        total_value=total_value,
+                    )
+                except Exception as csv_err:
+                    print(f"Could not update Items.csv: {csv_err}")
+
                 self.load_stock_into_tree()
                 self.update_dashboard_stats()
                 top.destroy()
@@ -3401,6 +3437,15 @@ class BarStockManagementSystem:
                                    bg=bg_color, fg='black', width=12, anchor='center')
                 var_lbl.pack(side=tk.LEFT, padx=(4, 0), pady=4)
 
+                # Unit hint for converted items
+                if requires_conversion(item_id):
+                    unit_hint = tk.Label(row_frame, text=f"Enter {input_unit}s",
+                                         font=('Arial', 8), bg=bg_color, fg='gray', width=12, anchor='center')
+                else:
+                    unit_hint = tk.Label(row_frame, text=f"Enter {input_unit}s",
+                                         font=('Arial', 8), bg=bg_color, fg='gray', width=12, anchor='center')
+                unit_hint.pack(side=tk.LEFT, padx=(4, 0), pady=4)
+
                 def make_update(var_lbl, exp_sys, conv_factor, ent):
                     def update_variance(*args):
                         val = ent.get().strip()
@@ -3537,6 +3582,20 @@ class BarStockManagementSystem:
             if not counted_items:
                 messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
                 return
+
+            # Unit warning: if any converted item count is suspiciously small, confirm unit
+            suspicious = []
+            for item in counted_items:
+                if requires_conversion(item['item_id']) and item['input_value'] < 0.5:
+                    suspicious.append(f"{item['item_id']}: {item['input_value']:.2f} {item['input_unit']}s")
+            if suspicious:
+                warn_msg = (
+                    "The following counts are very small for items that are normally counted in bottles/boxes/barrels:\n\n" +
+                    "\n".join(suspicious) +
+                    "\n\nPlease confirm you entered the counts in the correct input unit (not measures/pints)."
+                )
+                if not messagebox.askyesno("Unit Check", warn_msg + "\n\nDo you want to continue anyway?"):
+                    return
 
             # Confirm with user
             note = note_entry.get().strip()
@@ -3996,6 +4055,7 @@ class BarStockManagementSystem:
             ("Price History Report", self.generate_price_history_report),
             ("Transaction Log", self.view_transaction_log),
             ("Delivery History", self.view_delivery_history),
+            ("Reconciliation Report", self.generate_reconciliation_report),
         ]
 
         for text, command in buttons:
@@ -4641,6 +4701,74 @@ class BarStockManagementSystem:
         btn_frame = tk.Frame(self.main_menu)
         btn_frame.pack(pady=10)
 
+        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+    def generate_reconciliation_report(self):
+        """Generate and display the inventory reconciliation report."""
+        self.clear_main_menu()
+
+        header_frame = tk.Frame(self.main_menu, height=60)
+        header_frame.pack(fill='x', pady=(0, 10))
+        header_frame.pack_propagate(False)
+
+        tk.Label(header_frame, text="Reconciliation Report",
+                font=('Arial', 16, 'bold')).pack(expand=True)
+
+        frame = tk.Frame(self.main_menu)
+        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
+
+        try:
+            self.refresh_data()
+
+            if self.inventory_df.empty:
+                tk.Label(self.main_menu, text="No inventory data available.").pack(pady=20)
+                btn_frame = tk.Frame(self.main_menu)
+                btn_frame.pack(pady=10)
+                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                return
+
+            from reports import build_reconciliation_report
+            script_dir = get_script_directory()
+            report = build_reconciliation_report(self.inventory_df, self.log_df, script_dir=script_dir)
+
+            # Summary text area at top
+            summary_lines = []
+            sections = [
+                ("Missing conversion rules", report['missing_conversion'], lambda x: f"{x['item_name']} ({x['item_id']})"),
+                ("Missing category mapping", report['missing_category'], lambda x: f"{x['item_name']} ({x['item_id']})"),
+                ("Not on order sheet", report['missing_order_sheet'], lambda x: f"{x['item_name']} ({x['item_id']})"),
+                ("Order-sheet orphans with stock", report['order_sheet_orphans'], lambda x: f"{x['display_name']} ({x['supplier']} / {x['category']})"),
+                ("In inventory but not Items.csv", report['csv_mismatches']['in_inventory_not_csv'], lambda x: str(x)),
+                ("In Items.csv but not inventory", report['csv_mismatches']['in_csv_not_inventory'], lambda x: str(x)),
+                ("Recently negative items", report['recent_negative'], lambda x: f"{x['item_name']} ({x['item_id']}): {x['current_qty']:.1f}"),
+            ]
+
+            for title, items, fmt in sections:
+                if items:
+                    summary_lines.append(f"{title} ({len(items)}):")
+                    for item in items[:5]:
+                        summary_lines.append(f"  - {fmt(item)}")
+                    if len(items) > 5:
+                        summary_lines.append(f"  ... and {len(items) - 5} more")
+                    summary_lines.append("")
+
+            if not summary_lines:
+                summary_lines.append("No issues found. Inventory is fully in sync.")
+
+            summary_text = tk.Text(frame, wrap=tk.WORD, height=16, font=('Arial', 10), bg='white', fg='black')
+            summary_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            summary_text.insert(tk.END, f"Generated: {report['generated_at']}\n\n" + "\n".join(summary_lines))
+            summary_text.config(state=tk.DISABLED)
+
+            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=summary_text.yview)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            summary_text.configure(yscrollcommand=scrollbar.set)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {e}")
+
+        btn_frame = tk.Frame(self.main_menu)
+        btn_frame.pack(pady=10)
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
 
     def generate_price_history_report(self):
@@ -5394,10 +5522,21 @@ class BarStockManagementSystem:
                 messagebox.showwarning("No Data", "No inventory data available to generate report.")
                 return
 
+            # Load full transaction history (active + archive) so the report can
+            # show sales/complimentary/wastage/deliveries from before a baseline
+            # reset while still using the current inventory state.
+            full_log_df = InventoryDataManager.load_full_log(self.inventory_df)
+
             # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Comprehensive PDF Report - Date Range")
-            if filtered_log is None:
+            dialog = DateRangeDialog(self.root, title="Comprehensive PDF Report - Date Range")
+            if dialog.result is None:
                 return
+            if dialog.result == 'ALL_TIME':
+                filtered_log = full_log_df.copy()
+                start_date, end_date = None, None
+            else:
+                start_date, end_date = dialog.result
+                filtered_log = filter_log_by_date(full_log_df, start_date, end_date)
 
             # Load latest stocktake data for meaningful variance calculation
             stocktake_rows = get_stocktake_history(limit=1000)
@@ -5407,21 +5546,61 @@ class BarStockManagementSystem:
                 st_df = pd.DataFrame([dict(row) for row in stocktake_rows])
                 st_df = st_df.sort_values('timestamp', ascending=False)
                 st_df = st_df.drop_duplicates(subset='item_id', keep='first')
-                stocktake_map = dict(zip(st_df['item_id'], st_df['counted_quantity']))
+                stocktake_map = {
+                    row['item_id']: {
+                        'counted_quantity': row['counted_quantity'],
+                        'expected_quantity': row['expected_quantity'],
+                        'variance': row['variance'],
+                    }
+                    for _, row in st_df.iterrows()
+                }
                 from reports import build_stocktake_variance_report
-                stocktake_data = build_stocktake_variance_report(self.inventory_df, self.log_df, st_df)
+                stocktake_data = build_stocktake_variance_report(self.inventory_df, full_log_df, st_df)
 
-            # Compute historical closing stock at end_date for date-range consistency
+            # Compute historical closing stock at end_date for date-range consistency.
+            # If a stocktake exists on or before the end date, use its counted quantities
+            # as the authoritative closing stock. This avoids misclassifying CSV-uploaded
+            # rows (timestamped after upload but belonging to an earlier period) as
+            # post-period transactions.
             closing_stock_map = None
             if end_date is not None:
-                from reports import calculate_expected_remaining_series
-                after_end_mask = pd.to_datetime(self.log_df[COL_TIMESTAMP], errors='coerce') > pd.Timestamp(end_date)
-                after_end_log = self.log_df[after_end_mask].copy()
-                expected_after_end = calculate_expected_remaining_series(after_end_log)
+                end_ts = pd.Timestamp(end_date)
                 closing_stock_map = {}
-                for _, row in self.inventory_df.iterrows():
-                    item_id = row[COL_ITEM_ID]
-                    closing_stock_map[item_id] = row[COL_QUANTITY] - expected_after_end.get(item_id, 0)
+
+                if stocktake_rows:
+                    # Find the latest stocktake on or before the report end date
+                    st_ts = pd.to_datetime(st_df['timestamp'], errors='coerce')
+                    valid_st = st_df[st_ts <= end_ts + pd.Timedelta(days=1)]
+                    if not valid_st.empty:
+                        latest_st = valid_st.sort_values('timestamp', ascending=False).drop_duplicates(subset='item_id', keep='first')
+                        st_closing_map = dict(zip(latest_st['item_id'], latest_st['counted_quantity']))
+                        for _, row in self.inventory_df.iterrows():
+                            item_id = row[COL_ITEM_ID]
+                            closing_stock_map[item_id] = st_closing_map.get(item_id, row[COL_QUANTITY])
+
+                if not closing_stock_map:
+                    from reports import calculate_expected_remaining_series
+                    # Filter out CSV-uploaded rows whose sales period is actually inside
+                    # the selected range, so their upload timestamp doesn't fake a post-period
+                    # transaction.
+                    def _is_after_period(row):
+                        period = row.get('date_range')
+                        if isinstance(period, str) and ' - ' in period:
+                            try:
+                                parts = period.split(' - ')
+                                p_end = datetime.strptime(parts[1].strip(), '%d/%m/%Y').replace(hour=23, minute=59, second=59)
+                                return p_end > end_date
+                            except Exception:
+                                pass
+                        ts = pd.to_datetime(row.get('timestamp'), errors='coerce')
+                        return pd.notna(ts) and ts > end_ts
+
+                    after_end_mask = full_log_df.apply(_is_after_period, axis=1)
+                    after_end_log = full_log_df[after_end_mask].copy()
+                    expected_after_end = calculate_expected_remaining_series(after_end_log)
+                    for _, row in self.inventory_df.iterrows():
+                        item_id = row[COL_ITEM_ID]
+                        closing_stock_map[item_id] = row[COL_QUANTITY] - expected_after_end.get(item_id, 0)
 
             report_data = build_comprehensive_report_data(
                 self.inventory_df, filtered_log,
@@ -5834,7 +6013,7 @@ class BarStockManagementSystem:
             for _, row in sales_df.iterrows():
                 try:
                     product_name = str(row['Product']).strip()
-                    if not product_name or product_name.lower() == 'nan':
+                    if not product_name or product_name.lower() == 'nan' or product_name.lower() == 'total':
                         continue
                     try:
                         quantity = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
@@ -5877,6 +6056,15 @@ class BarStockManagementSystem:
                     current_qty = item_row[COL_QUANTITY]
                     projected = current_qty - quantity
 
+                    # Use the CSV's own gross total (after discount, incl. VAT) for revenue.
+                    # This matches the EPOS 'Totals' column the user expects.
+                    csv_total = row.get('Totals')
+                    try:
+                        csv_revenue = float(csv_total) if pd.notna(csv_total) else None
+                    except Exception:
+                        csv_revenue = None
+                    line_revenue = csv_revenue if csv_revenue is not None and csv_revenue >= 0 else quantity * sell_price
+
                     preview_items.append({
                         'item_id': item_id,
                         'name': item_row[COL_ITEM_NAME],
@@ -5885,13 +6073,14 @@ class BarStockManagementSystem:
                         'projected': projected,
                         'cost': cost_price,
                         'sell': sell_price,
-                        'revenue': quantity * sell_price,
+                        'csv_revenue': csv_revenue,
+                        'revenue': line_revenue,
                         'cost_total': quantity * cost_price,
                         'member_qty': member_qty,
                         'non_member_qty': non_member_qty,
                         'has_parent': has_parent_stock(item_id)
                     })
-                    total_revenue += quantity * sell_price
+                    total_revenue += line_revenue
                     total_cost += quantity * cost_price
 
                 except Exception as item_error:
@@ -5901,15 +6090,42 @@ class BarStockManagementSystem:
                 messagebox.showwarning("No Transactions", "No valid transactions found in the CSV file.")
                 return
 
-            # Negative stock warning
-            negative_count = sum(1 for p in preview_items if p['projected'] < 0 and not p['has_parent'])
-            pct_negative = (negative_count / len(preview_items)) * 100
-            if pct_negative > 10:
+            # Negative stock guard: block unless allow_negative is True
+            blocking_negative = []
+            warning_negative = []
+            for p in preview_items:
+                if p['projected'] < 0 and not p['has_parent']:
+                    allow_neg = bool(self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == p['item_id'], COL_ALLOW_NEGATIVE].values[0])
+                    if allow_neg:
+                        warning_negative.append(p)
+                    else:
+                        blocking_negative.append(p)
+
+            if blocking_negative:
+                lines = []
+                for p in blocking_negative:
+                    current_display = format_quantity_display(p['item_id'], p['current'])
+                    projected_display = format_quantity_display(p['item_id'], p['projected'])
+                    lines.append(f"{p['name']}: {current_display} → {projected_display} after {p['qty']:.1f} sales")
+                messagebox.showerror(
+                    "Upload Blocked: Negative Stock",
+                    "This upload would drive the following items negative:\n\n" +
+                    "\n".join(lines) +
+                    "\n\nTo allow negative stock for an item, edit it and enable 'Allow Negative Stock'."
+                )
+                return
+
+            if warning_negative:
+                lines = []
+                for p in warning_negative:
+                    current_display = format_quantity_display(p['item_id'], p['current'])
+                    projected_display = format_quantity_display(p['item_id'], p['projected'])
+                    lines.append(f"{p['name']}: {current_display} → {projected_display}")
                 if not messagebox.askyesno(
-                    "WARNING: High Negative Stock",
-                    f"This upload would cause {negative_count} items ({pct_negative:.0f}%) to go negative.\n\n"
-                    "This usually means these sales are already reflected in your stock counts.\n\n"
-                    "Are you sure you want to continue?"
+                    "WARNING: Negative Stock",
+                    "This upload would drive the following items negative (they are set to allow negative stock):\n\n" +
+                    "\n".join(lines) +
+                    "\n\nAre you sure you want to continue?"
                 ):
                     return
 
@@ -5951,15 +6167,15 @@ class BarStockManagementSystem:
 
             tree = ttk.Treeview(tree_frame, columns=('name', 'qty', 'current', 'projected', 'revenue'), show='headings', height=15)
             tree.heading('name', text='Item')
-            tree.heading('qty', text='Qty')
+            tree.heading('qty', text='Qty Sold')
             tree.heading('current', text='Current Stock')
             tree.heading('projected', text='After Upload')
             tree.heading('revenue', text='Revenue')
-            tree.column('name', width=250)
-            tree.column('qty', width=80, anchor='center')
-            tree.column('current', width=100, anchor='center')
-            tree.column('projected', width=100, anchor='center')
-            tree.column('revenue', width=100, anchor='e')
+            tree.column('name', width=220)
+            tree.column('qty', width=100, anchor='center')
+            tree.column('current', width=110, anchor='center')
+            tree.column('projected', width=110, anchor='center')
+            tree.column('revenue', width=90, anchor='e')
             tree.pack(side=tk.LEFT, fill='both', expand=True)
 
             sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
@@ -5968,8 +6184,11 @@ class BarStockManagementSystem:
 
             for p in preview_items:
                 tag = 'negative' if p['projected'] < 0 and not p['has_parent'] else ''
-                tree.insert('', tk.END, values=(p['name'], f"{p['qty']:.1f}", f"{p['current']:.1f}",
-                                               f"{p['projected']:.1f}", f"£{p['revenue']:.2f}"), tags=(tag,))
+                current_display = format_quantity_display(p['item_id'], p['current'])
+                projected_display = format_quantity_display(p['item_id'], p['projected'])
+                qty_display = format_quantity_display(p['item_id'], p['qty'])
+                tree.insert('', tk.END, values=(p['name'], qty_display, current_display,
+                                               projected_display, f"£{p['revenue']:.2f}"), tags=(tag,))
             tree.tag_configure('negative', foreground='red', font=('Arial', 9, 'bold'))
 
             def confirm_upload():
@@ -6025,7 +6244,13 @@ class BarStockManagementSystem:
                 else:
                     self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
 
-                new_log_entry = pd.DataFrame([[item_id, ACTION_SALES, quantity, timestamp, cost_price, sell_price, "", date_range_str, "", member_qty, non_member_qty]],
+                # Store the CSV's actual gross line revenue as the effective sell price,
+                # so reports match the source CSV 'Totals' column.
+                effective_sell_price = p.get('csv_revenue', quantity * sell_price) / quantity if quantity > 0 else sell_price
+                if not (effective_sell_price > 0 and p.get('csv_revenue') is not None):
+                    effective_sell_price = sell_price
+
+                new_log_entry = pd.DataFrame([[item_id, ACTION_SALES, quantity, timestamp, cost_price, effective_sell_price, "", date_range_str, "", member_qty, non_member_qty]],
                                               columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON, COL_MEMBER_QTY, COL_NON_MEMBER_QTY])
                 self.log_df = pd.concat([self.log_df, new_log_entry], ignore_index=True)
 
@@ -6112,9 +6337,7 @@ class BarStockManagementSystem:
             for _, row in comp_df.iterrows():
                 try:
                     product_name = str(row['Product']).strip()
-                    if not product_name or product_name.lower() == 'nan':
-                        continue
-                    if product_name.lower() == 'total':
+                    if not product_name or product_name.lower() == 'nan' or product_name.lower() == 'total':
                         continue
 
                     try:
