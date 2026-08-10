@@ -354,16 +354,13 @@ class BarStockManagementSystem:
         except Exception:
             pass
 
-        # Sync check: warn if any inventory item lacks conversion/category/order-sheet mapping
+        # Sync check: collect any missing conversion/category/order-sheet mappings
+        # so they can be shown in a non-blocking dashboard banner instead of a modal dialog.
+        self.startup_sync_report = None
         try:
             missing = find_missing_mappings(self.inventory_df)
             if has_sync_issues(missing):
-                report = format_sync_report(missing)
-                self.root.after(500, lambda: messagebox.showwarning(
-                    "Inventory Setup Check",
-                    "Some tracked items are not fully configured:\n\n" + report +
-                    "\n\nPlease add the missing rules to conversions.py, categories.py, or the order sheet."
-                ))
+                self.startup_sync_report = format_sync_report(missing)
         except Exception as e:
             print(f"Startup sync check failed: {e}")
 
@@ -686,6 +683,9 @@ class BarStockManagementSystem:
                           font=(THEME_FONT, 24, 'bold')).pack(side='left')
         self.tile_button(header, "+ Add Delivery", self.add_delivery).pack(side='right')
 
+        # Sync/setup banner (non-blocking, shown only when there are real issues)
+        self._render_sync_alert(self.dashboard_area)
+
         # Alert banners
         self.update_critical_stock_alert(self.dashboard_area)
         self.update_variance_alert(self.dashboard_area)
@@ -774,6 +774,41 @@ class BarStockManagementSystem:
         btn.bind('<Leave>', on_leave)
         btn.bind('<Button-1>', on_click)
         return btn
+
+    def _render_sync_alert(self, parent=None):
+        """Show a non-blocking setup/sync banner if issues were detected at startup."""
+        if parent is None:
+            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+                return
+            parent = self.dashboard_area
+
+        if not hasattr(self, 'startup_sync_report') or not self.startup_sync_report:
+            return
+
+        banner = tk.Frame(parent, bg='#3d2e1f', bd=1, relief='solid',
+                          highlightbackground=THEME_ACCENT, highlightthickness=1)
+        banner.pack(fill='x', pady=(0, 14), padx=2)
+
+        tk.Label(banner, text='⚠ Inventory Setup Check',
+                 font=(THEME_FONT, 11, 'bold'), fg=THEME_WARNING, bg='#3d2e1f',
+                 anchor='w').pack(fill='x', padx=12, pady=(10, 2))
+
+        text = tk.Label(banner,
+                        text='Some tracked items are missing category, conversion, or order-sheet rules.',
+                        font=(THEME_FONT, 10), fg=THEME_TEXT, bg='#3d2e1f',
+                        anchor='w', justify='left', wraplength=700)
+        text.pack(fill='x', padx=12, pady=(0, 4))
+
+        detail = tk.Label(banner, text=self.startup_sync_report,
+                          font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#3d2e1f',
+                          anchor='w', justify='left', wraplength=700)
+        detail.pack(fill='x', padx=12, pady=(0, 4))
+
+        def dismiss():
+            self.startup_sync_report = None
+            banner.destroy()
+
+        self.styled_button(banner, 'Dismiss', dismiss, width=12, variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
 
     def update_dashboard_stats(self, parent=None):
         """Render simplified dashboard summary cards."""

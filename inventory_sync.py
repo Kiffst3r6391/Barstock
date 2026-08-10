@@ -14,8 +14,9 @@ from typing import Dict, List, Tuple, Any, Optional
 import pandas as pd
 
 from conversions import STOCK_CONVERSIONS
-from categories import CATEGORY_MAP
+from categories import CATEGORY_MAP, should_exclude
 from order_sheet_layout import get_order_sheet_layout
+from sales_mapping import SALES_TO_PARENT, is_hidden_from_stock_view
 
 COL_ITEM_ID = 'item_id'
 COL_ITEM_NAME = 'item_name'
@@ -74,9 +75,10 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
     """Check every inventory item for missing configuration.
 
     Returns a dict with keys:
-      - 'missing_conversion': items not in STOCK_CONVERSIONS
+      - 'missing_conversion': parent stock items whose stored measure differs
+        from the delivery input unit and are not in STOCK_CONVERSIONS
       - 'missing_category': items not in CATEGORY_MAP
-      - 'missing_order_sheet': items not linked in order sheet layout
+      - 'missing_order_sheet': items not linked on the printable order sheet
     Each value is a list of dicts with item_id, item_name, quantity.
     """
     if inventory_df.empty:
@@ -99,10 +101,23 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
             'quantity': float(row.get(COL_QUANTITY, 0)),
             'measure': str(row.get(COL_MEASURE, '')),
         }
-        if item_lower not in conversion_ids:
+        has_sales_parent = item_lower in SALES_TO_PARENT and SALES_TO_PARENT[item_lower] is not None
+        is_hidden_or_excluded = is_hidden_from_stock_view(item_lower) or should_exclude(item_lower)
+
+        # Only flag conversion issues for items that are independently stocked
+        # (not child items that deduct from a parent, not hidden/excluded).
+        if (not has_sales_parent
+                and not is_hidden_or_excluded
+                and not _is_conversion_excluded(item_lower)
+                and item_lower not in conversion_ids
+                and _looks_like_needs_conversion(info['measure'])):
             missing_conversion.append(info)
-        if item_lower not in category_ids:
+
+        # Category: child items generally don't need their own category mapping
+        # because their parent provides the category.
+        if item_lower not in category_ids and not has_sales_parent and not is_hidden_or_excluded:
             missing_category.append(info)
+
         if item_lower not in order_sheet_ids:
             missing_order_sheet.append(info)
 
@@ -113,13 +128,40 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
     }
 
 
+def _looks_like_needs_conversion(measure: str) -> bool:
+    """Return True if the stored measure suggests deliveries use a different unit.
+
+    Measures like PINT, HALF PINT, 35ML, SERVE are system units that usually
+    come from a conversion. Bottle/can/carton/pack/unit are normally input units
+    and don't need a separate conversion.
+    """
+    m = measure.strip().upper()
+    # Empty measure is ambiguous; don't flag it as a conversion issue.
+    if not m:
+        return False
+    return m in {'PINT', 'HALF PINT', '35ML', 'SERVE', 'CUP'}
+
+
+# Items that are stored in a converted system unit but intentionally have no
+# STOCK_CONVERSIONS entry because they are counted/disposed differently.
+_CONVERSION_EXCLUDED_ITEM_IDS = {
+    'guinness_0_0',   # Guinness micro draught 0% - counted in pints, no barrel conversion
+    'guinness_can',     # Guinness surger cans - counted in pints, no case conversion
+}
+
+
+def _is_conversion_excluded(item_id: str) -> bool:
+    """Return True for items that don't need a delivery conversion rule."""
+    return item_id.lower().strip() in _CONVERSION_EXCLUDED_ITEM_IDS
+
+
 def format_sync_report(missing: Dict[str, List[Dict[str, Any]]]) -> str:
     """Format missing-mapping results as a human-readable string."""
     lines = []
     if missing['missing_conversion']:
-        lines.append("Missing bottle/box conversion (deliveries won't convert to measures):")
+        lines.append("Missing bottle/barrel/box conversion (deliveries won't convert to measures/pints):")
         for info in missing['missing_conversion']:
-            lines.append(f"  - {info['item_name']} ({info['item_id']})")
+            lines.append(f"  - {info['item_name']} ({info['item_id']}) - stored as {info.get('measure', '')}")
     if missing['missing_category']:
         lines.append("Missing category mapping:")
         for info in missing['missing_category']:

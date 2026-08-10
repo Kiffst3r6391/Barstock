@@ -65,6 +65,9 @@ STOCK_CONVERSIONS = {
     'port': ('bottle', 20.0, 'measure'),
     'cointreau': ('bottle', 20.0, 'measure'),
 
+    # SOFT DRINKS - delivered in bottles, counted in measures
+    'cordial': ('bottle', 20.0, 'measure'),
+
     # DRAUGHT BEERS - 1 barrel = 88 pints
     'tennents_lager': ('barrel', 88.0, 'pint'),
     'belhaven_best': ('barrel', 88.0, 'pint'),

@@ -32,7 +32,7 @@ class TestFindMissingMappings(unittest.TestCase):
     def setUp(self):
         self.inventory = pd.DataFrame([
             ['glen_scotia', 'Glen Scotia', 30.0, '35ml', 'Spirits'],
-            ['unknown_item', 'Unknown Item', 10.0, 'BOTTLE', 'Spirits'],
+            ['unknown_item', 'Unknown Item', 10.0, 'PINT', 'Spirits'],
             ['tennents_lager', 'Tennents Lager', 100.0, 'PINT', 'Beers'],
         ], columns=[COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_MEASURE, COL_CATEGORY])
 
