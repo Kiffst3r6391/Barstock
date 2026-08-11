@@ -77,6 +77,27 @@ STOCK_CONVERSIONS = {
 }
 
 
+from datetime import datetime
+
+# User-facing date format used throughout the UI.
+DATE_FORMAT_DISPLAY = '%d-%m-%Y'
+# Legacy display format kept for parsing older date_range strings.
+DATE_FORMAT_DISPLAY_LEGACY = '%d/%m/%Y'
+
+
+def parse_display_date(date_str):
+    """Parse a user-facing date string (DD-MM-YYYY or legacy DD/MM/YYYY).
+
+    Returns a datetime object, or raises ValueError if neither format matches.
+    """
+    for fmt in (DATE_FORMAT_DISPLAY, DATE_FORMAT_DISPLAY_LEGACY):
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid date format: {date_str!r}")
+
+
 def get_conversion(item_id):
     """Get conversion details for an item.
 

@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from collections import defaultdict
 from fpdf import FPDF
-from conversions import convert_to_input, requires_conversion, get_input_label
+from conversions import convert_to_input, requires_conversion, get_input_label, DATE_FORMAT_DISPLAY
 
 
 def _pdf_safe(text, max_len=None):
@@ -68,7 +68,7 @@ class PDFReport(FPDF):
         self.cell(0, 10, 'Prestonfield Golf Club - Bar Stock Report', 0, 1, 'C')
         self.set_font('Arial', '', 10)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 5, f'Generated: {datetime.now().strftime("%d %B %Y at %H:%M")}', 0, 1, 'C')
+        self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
         self.ln(5)
         self.set_draw_color(200, 200, 200)
         self.line(10, self.get_y(), 200, self.get_y())
@@ -712,7 +712,7 @@ class PriceHistoryPDF(FPDF):
         self.cell(0, 10, 'Prestonfield Golf Club - Price History Report', 0, 1, 'C')
         self.set_font('Arial', '', 10)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 5, f'Generated: {datetime.now().strftime("%d %B %Y at %H:%M")}', 0, 1, 'C')
+        self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
@@ -777,7 +777,7 @@ class StockOrderSheetPDF(FPDF):
         self.cell(0, 10, 'Prestonfield Golf Club - Stock Order Sheet', 0, 1, 'C')
         self.set_font('Arial', '', 10)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 5, f'Generated: {datetime.now().strftime("%d %B %Y at %H:%M")}', 0, 1, 'C')
+        self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):

@@ -22,6 +22,19 @@ from categories import get_category, should_exclude, CATEGORY_ORDER
 from sales_mapping import is_hidden_from_stock_view
 from supplier_mapping import get_supplier, get_supplier_order
 from order_sheet_layout import get_order_sheet_layout
+from conversions import parse_display_date, DATE_FORMAT_DISPLAY
+
+
+def _format_delivery_date(timestamp_str):
+    """Format an ISO timestamp/date string as DD-MM-YYYY for display."""
+    if not isinstance(timestamp_str, str) or not timestamp_str.strip():
+        return ''
+    date_part = timestamp_str[:10]
+    try:
+        return datetime.strptime(date_part, '%Y-%m-%d').strftime(DATE_FORMAT_DISPLAY)
+    except ValueError:
+        return date_part
+
 
 # Column constants
 COL_ITEM_ID = 'item_id'
@@ -74,8 +87,8 @@ def filter_log_by_date(log_df, start_date=None, end_date=None):
                 parts = date_range_str.split(' - ')
                 if len(parts) != 2:
                     return None
-                dr_start = datetime.strptime(parts[0].strip(), '%d/%m/%Y')
-                dr_end = datetime.strptime(parts[1].strip(), '%d/%m/%Y')
+                dr_start = parse_display_date(parts[0].strip())
+                dr_end = parse_display_date(parts[1].strip())
                 # For CSV-uploaded periods, require the whole CSV period to fall
                 # inside the selected range. This stops a previous CSV that
                 # overlaps by a single day from being pulled into a report.
@@ -1006,7 +1019,7 @@ def build_reorder_report_data(inventory_df, log_df):
                 item_id = row[COL_ITEM_ID]
                 if item_id not in last_delivery:
                     last_delivery[item_id] = {
-                        'date': row[COL_TIMESTAMP][:10] if pd.notna(row[COL_TIMESTAMP]) else '',
+                        'date': _format_delivery_date(row[COL_TIMESTAMP]) if pd.notna(row[COL_TIMESTAMP]) else '',
                         'supplier': str(row.get(COL_SUPPLIER, ''))
                     }
 
@@ -1067,7 +1080,7 @@ def build_stock_order_sheet_data(inventory_df, log_df):
                 item_id = row[COL_ITEM_ID]
                 if item_id not in last_delivery:
                     last_delivery[item_id] = {
-                        'date': row[COL_TIMESTAMP][:10] if pd.notna(row[COL_TIMESTAMP]) else '',
+                        'date': _format_delivery_date(row[COL_TIMESTAMP]) if pd.notna(row[COL_TIMESTAMP]) else '',
                         'supplier': str(row.get(COL_SUPPLIER, ''))
                     }
 
@@ -1372,7 +1385,7 @@ def build_reconciliation_report(
     )
 
     report = {
-        'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'generated_at': datetime.now().strftime(f'{DATE_FORMAT_DISPLAY} %H:%M:%S'),
         'missing_conversion': [],
         'missing_category': [],
         'missing_order_sheet': [],

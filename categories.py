@@ -5,6 +5,7 @@ EXCLUDED_ITEMS = {
     'coffee_machine',
     'caffee_machine',
     'tea',
+    'specialist_tea',
     'tonic',
     'soda_water',
     'dash',
@@ -56,6 +57,13 @@ EXCLUDED_ITEMS = {
     'lemonade_half_pint',
     'tennants_shandy_half_pint',
     'cart_koppa',
+}
+
+# Items excluded from the physical stock count sheet but still tracked in sales uploads.
+SALES_INCLUDED_EXCLUDED_ITEMS = {
+    'tea',
+    'barista_coffee',
+    'specialist_tea',
 }
 
 # Category mapping based on item_id or item_name patterns
@@ -199,6 +207,7 @@ CATEGORY_MAP = {
     # Hot Drinks
     'tea': 'Hot Drinks',
     'barista_coffee': 'Hot Drinks',
+    'specialist_tea': 'Hot Drinks',
     'coffee_machine': 'Equipment',
     'cart_roll_tea_coffee': 'Hot Drinks',
     # Soft Drinks (new)

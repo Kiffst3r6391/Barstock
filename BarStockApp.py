@@ -13,10 +13,11 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
 from fpdf import FPDF
-from categories import get_category, should_exclude, CATEGORY_ORDER, EXCLUDED_ITEMS
+from categories import get_category, should_exclude, CATEGORY_ORDER, EXCLUDED_ITEMS, SALES_INCLUDED_EXCLUDED_ITEMS
 from conversions import (
     get_conversion, convert_to_system, convert_to_input,
-    get_input_label, format_stock_display, format_quantity_display, requires_conversion
+    get_input_label, format_stock_display, format_quantity_display, requires_conversion,
+    DATE_FORMAT_DISPLAY, DATE_FORMAT_DISPLAY_LEGACY, parse_display_date,
 )
 from sales_mapping import (
     has_parent_stock, get_parent_for_sale, apply_sale_to_parent,
@@ -210,7 +211,7 @@ class DateRangeDialog:
             # Start calendar
             start_frame = tk.LabelFrame(calendars_frame, text="Start Date", font=('Arial', 9, 'bold'))
             start_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
-            self.start_cal = Calendar(start_frame, selectmode='day', date_pattern='y-mm-dd', font=('Arial', 16),
+            self.start_cal = Calendar(start_frame, selectmode='day', date_pattern='dd-mm-y', font=('Arial', 16),
                                        background='#2b2b2b', normalbackground='#2b2b2b', weekendbackground='#333333',
                                        othermonthbackground='#1e1e1e', othermonthwebackground='#262626',
                                        foreground='white', normalforeground='white', weekendforeground='white',
@@ -221,7 +222,7 @@ class DateRangeDialog:
             # End calendar
             end_frame = tk.LabelFrame(calendars_frame, text="End Date", font=('Arial', 9, 'bold'))
             end_frame.pack(side='left', fill='both', expand=True, padx=(10, 0))
-            self.end_cal = Calendar(end_frame, selectmode='day', date_pattern='y-mm-dd', font=('Arial', 16),
+            self.end_cal = Calendar(end_frame, selectmode='day', date_pattern='dd-mm-y', font=('Arial', 16),
                                      background='#2b2b2b', normalbackground='#2b2b2b', weekendbackground='#333333',
                                      othermonthbackground='#1e1e1e', othermonthwebackground='#262626',
                                      foreground='white', normalforeground='white', weekendforeground='white',
@@ -245,12 +246,12 @@ class DateRangeDialog:
             tk.Label(date_frame, text="Start:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
             self.start_var = tk.StringVar()
             tk.Entry(date_frame, textvariable=self.start_var, width=15).grid(row=0, column=1, padx=5, pady=5)
-            tk.Label(date_frame, text="YYYY-MM-DD").grid(row=0, column=2, padx=5, pady=5, sticky='w')
+            tk.Label(date_frame, text="DD-MM-YYYY").grid(row=0, column=2, padx=5, pady=5, sticky='w')
 
             tk.Label(date_frame, text="End:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
             self.end_var = tk.StringVar()
             tk.Entry(date_frame, textvariable=self.end_var, width=15).grid(row=1, column=1, padx=5, pady=5)
-            tk.Label(date_frame, text="YYYY-MM-DD").grid(row=1, column=2, padx=5, pady=5, sticky='w')
+            tk.Label(date_frame, text="DD-MM-YYYY").grid(row=1, column=2, padx=5, pady=5, sticky='w')
 
         # Buttons
         btn_frame = tk.Frame(frame)
@@ -276,8 +277,8 @@ class DateRangeDialog:
             self.end_cal.selection_set(end)
             self._update_dates_label()
         else:
-            self.start_var.set(start.strftime('%Y-%m-%d'))
-            self.end_var.set(end.strftime('%Y-%m-%d'))
+            self.start_var.set(start.strftime(DATE_FORMAT_DISPLAY))
+            self.end_var.set(end.strftime(DATE_FORMAT_DISPLAY))
 
     def _restore_theme(self):
         """Restore original ttk theme before closing dialog."""
@@ -292,8 +293,8 @@ class DateRangeDialog:
             start_str = self.start_var.get().strip()
             end_str = self.end_var.get().strip()
         try:
-            start_date = datetime.strptime(start_str, '%Y-%m-%d') if start_str else None
-            end_date = datetime.strptime(end_str, '%Y-%m-%d') if end_str else None
+            start_date = parse_display_date(start_str) if start_str else None
+            end_date = parse_display_date(end_str) if end_str else None
             if end_date:
                 end_date = end_date.replace(hour=23, minute=59, second=59)
             self.result = (start_date, end_date)
@@ -380,6 +381,9 @@ class BarStockManagementSystem:
         style.configure('CardSub.TLabel', background=THEME_CARD, foreground=THEME_SUCCESS, font=(THEME_FONT, 10))
         style.configure('Treeview', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD, rowheight=24)
         style.configure('Treeview.Heading', background=THEME_SIDEBAR, foreground=THEME_TEXT, font=(THEME_FONT, 11, 'bold'))
+        style.configure('TCombobox', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD, arrowcolor=THEME_ACCENT)
+        style.configure('TEntry', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD)
+        style.configure('TScrollbar', background=THEME_SIDEBAR, troughcolor=THEME_BG, bordercolor=THEME_BORDER)
 
     def themed_frame(self, parent=None, bg=None, **kwargs):
         """Create a Frame with theme background."""
@@ -394,9 +398,9 @@ class BarStockManagementSystem:
         )
 
     def styled_button(self, parent, text, command, width=22, variant='primary', **kwargs):
-        """Create a theme-styled button."""
+        """Create a theme-styled button matching the concept palette."""
         if variant == 'primary':
-            bg, fg, hover = THEME_ACCENT, '#ffffff', THEME_ACCENT_HOVER
+            bg, fg, hover = THEME_ACCENT, '#0f1419', THEME_ACCENT_HOVER
         elif variant == 'danger':
             bg, fg, hover = THEME_DANGER, '#ffffff', '#dc2626'
         elif variant == 'ghost':
@@ -492,10 +496,11 @@ class BarStockManagementSystem:
 
     def create_widgets(self):
         """Create and arrange all UI widgets in the application window."""
-        self.main_menu = tk.Frame(self.root)
-        self.main_menu.pack(fill="both", expand=True)
+        # Shell container holds the top bar, tabs, and the scrollable content area.
+        self.shell_container = tk.Frame(self.root, bg=THEME_BG)
+        self.shell_container.pack(fill="both", expand=True)
 
-        self.create_main_menu()
+        self.show_dashboard()
 
     def get_member_discount_pct(self):
         """Get configured member discount percentage (default 10)."""
@@ -533,7 +538,7 @@ class BarStockManagementSystem:
         # Parse current date from the variable
         current_text = date_var.get().strip()
         try:
-            current_date = datetime.strptime(current_text, "%d/%m/%Y")
+            current_date = parse_display_date(current_text)
         except ValueError:
             current_date = datetime.now()
 
@@ -572,7 +577,7 @@ class BarStockManagementSystem:
                         btn.grid(row=r, column=c, padx=2, pady=2)
 
         def select_date(y, m, d):
-            date_var.set(f"{d:02d}/{m:02d}/{y}")
+            date_var.set(f"{d:02d}-{m:02d}-{y}")
             top.destroy()
 
         def prev_month():
@@ -613,151 +618,118 @@ class BarStockManagementSystem:
 
         tk.Button(top, text="Today", command=select_today).pack(pady=5)
 
-    def create_main_menu(self):
-        """Create the modern dark dashboard with sidebar navigation."""
-        # Clear existing widgets
-        for widget in self.main_menu.winfo_children():
+    def _create_app_shell(self, active_tab):
+        """Build the top title bar, tab navigation, and content area."""
+        for widget in self.shell_container.winfo_children():
             widget.destroy()
 
-        # Root container with sidebar + main area
-        container = tk.Frame(self.main_menu, bg=THEME_BG)
-        container.pack(fill='both', expand=True)
+        self.shell_container.configure(bg=THEME_BG)
 
-        # Sidebar
-        sidebar = self.themed_frame(container, bg=THEME_SIDEBAR, width=220)
-        sidebar.pack(side='left', fill='y')
-        sidebar.pack_propagate(False)
+        # Top title bar
+        topbar = tk.Frame(self.shell_container, bg=THEME_BG, height=56)
+        topbar.pack(fill='x', padx=20, pady=(16, 0))
+        topbar.pack_propagate(False)
 
-        logo_frame = self.themed_frame(sidebar, bg=THEME_SIDEBAR, height=70)
-        logo_frame.pack(fill='x', padx=18, pady=(24, 8))
-        logo_frame.pack_propagate(False)
-        self.themed_label(logo_frame, "Prestonfield GC",
-                          font=(THEME_FONT, 17, 'bold'), fg=THEME_TEXT).pack(anchor='w')
-        self.themed_label(logo_frame, "Bar Stock Management",
-                          font=(THEME_FONT, 10), fg=THEME_TEXT_MUTED).pack(anchor='w')
+        title_frame = tk.Frame(topbar, bg=THEME_BG)
+        title_frame.pack(side='left', fill='y')
+        tk.Label(title_frame, text="Prestonfield GC",
+                 font=(THEME_FONT, 16, 'bold'), fg=THEME_TEXT, bg=THEME_BG).pack(anchor='w')
+        tk.Label(title_frame, text="Bar Stock Management",
+                 font=(THEME_FONT, 10), fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(anchor='w')
 
-        # Navigation groups
-        nav = [
-            ("Dashboard", self.create_main_menu, True),
-            ("Manage Stock", self.manage_initial_stock, False),
-            ("Add Delivery", self.add_delivery, False),
-            ("Add Sales", self.add_sales, False),
-            ("Add Wastage", self.add_wastage, False),
-            ("Add Complimentary", self.add_complimentary, False),
-            ("Open Tabs", self.open_tabs_menu, False),
-            ("Full Stocktake", self.full_stock_take, False),
-            ("Line Clean", self.line_clean, False),
+        self.styled_button(topbar, "+ Add Delivery", self.show_deliveries,
+                           width=16, variant='primary').pack(side='right', pady=8)
+
+        # Tab bar
+        tab_frame = tk.Frame(self.shell_container, bg=THEME_BG)
+        tab_frame.pack(fill='x', padx=20, pady=(16, 0))
+
+        tabs = [
+            ("Dashboard", self.show_dashboard),
+            ("Deliveries", self.show_deliveries),
+            ("Stocktake", self.show_stocktake),
+            ("Sales Upload", self.show_sales_upload),
+            ("Reports", self.show_reports),
+            ("More", self.show_more),
         ]
-        nav_frame = self.themed_frame(sidebar, bg=THEME_SIDEBAR)
-        nav_frame.pack(fill='x', padx=12, pady=10)
-        for text, command, active in nav:
-            self._nav_button(nav_frame, text, command, active)
+        for text, command in tabs:
+            self._tab_button(tab_frame, text, command, active=(text == active_tab))
 
-        tools_frame = self.themed_frame(sidebar, bg=THEME_SIDEBAR)
-        tools_frame.pack(fill='x', padx=12, pady=(20, 10))
-        self.themed_label(tools_frame, "TOOLS",
-                          font=(THEME_FONT, 9, 'bold'), fg=THEME_TEXT_MUTED).pack(anchor='w', pady=(0, 8))
-        self._nav_button(tools_frame, "Reports", self.generate_reports, False)
-        self._nav_button(tools_frame, "Transactions", self.view_transaction_log, False)
-        self._nav_button(tools_frame, "Delivery History", self.view_delivery_history, False)
-        self._nav_button(tools_frame, "Settings", self.open_settings, False)
-        self._nav_button(tools_frame, "Restore Backup", self.restore_from_backup_menu, False)
-        self._nav_button(tools_frame, "Init from Items.csv", self.initialize_stock_from_items_csv, False)
-        self._nav_button(tools_frame, "Reset System", self.reset_system, False, danger=True)
+        # Scrollable content area
+        content_outer = tk.Frame(self.shell_container, bg=THEME_BG)
+        content_outer.pack(fill='both', expand=True, padx=20, pady=(16, 20))
+        content_outer.grid_rowconfigure(0, weight=1)
+        content_outer.grid_columnconfigure(0, weight=1)
 
-        # System actions at bottom of sidebar
-        system_frame = self.themed_frame(sidebar, bg=THEME_SIDEBAR)
-        system_frame.pack(fill='x', padx=12, pady=(20, 10), side='bottom')
-        self.themed_label(system_frame, "SYSTEM",
-                          font=(THEME_FONT, 9, 'bold'), fg=THEME_TEXT_MUTED).pack(anchor='w', pady=(0, 8))
-        self._nav_button(system_frame, "Exit System", self.on_exit, False, danger=True)
+        canvas = tk.Canvas(content_outer, bg=THEME_BG, highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky='nsew')
 
-        # Main content area
-        self.dashboard_area = self.themed_frame(container)
-        self.dashboard_area.pack(side='left', fill='both', expand=True, padx=24, pady=24)
+        scrollbar = ttk.Scrollbar(content_outer, orient='vertical', command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-        # Header with primary action
-        header = self.themed_frame(self.dashboard_area)
-        header.pack(fill='x', pady=(0, 20))
-        self.themed_label(header, "Dashboard",
-                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
-        self.tile_button(header, "+ Add Delivery", self.add_delivery).pack(side='right')
+        self.main_menu = tk.Frame(canvas, bg=THEME_BG)
+        canvas_window = canvas.create_window((0, 0), window=self.main_menu, anchor='nw')
 
-        # Sync/setup banner (non-blocking, shown only when there are real issues)
-        self._render_sync_alert(self.dashboard_area)
+        def _configure_canvas(event):
+            canvas.itemconfig(canvas_window, width=event.width)
 
-        # Alert banners
-        self.update_critical_stock_alert(self.dashboard_area)
-        self.update_variance_alert(self.dashboard_area)
-        self.update_open_tab_alert(self.dashboard_area)
+        def _configure_frame(event):
+            canvas.configure(scrollregion=canvas.bbox('all'))
 
-        # Dashboard cards
-        self.update_dashboard_stats(self.dashboard_area)
+        canvas.bind('<Configure>', _configure_canvas)
+        self.main_menu.bind('<Configure>', _configure_frame)
 
-        # Upload banner
-        self._render_upload_banner(self.dashboard_area)
+        # Universal mouse wheel scrolling for the content canvas and any nested scrollable widgets
+        def _on_mousewheel(event):
+            delta = event.delta
+            if delta == 0:
+                return 'break'
+            if abs(delta) >= 120:
+                steps = int(-delta / 120)
+            else:
+                steps = -1 if delta > 0 else 1
+            canvas.yview_scroll(steps, 'units')
+            return 'break'
 
-        # Items needing attention
-        self._render_attention_table(self.dashboard_area)
+        def _on_mousewheel_linux(event, direction):
+            canvas.yview_scroll(direction, 'units')
+            return 'break'
 
-        # Quick actions panel
-        quick_panel = self.create_panel(self.dashboard_area, "Quick Actions")
-        quick_grid = self.themed_frame(quick_panel, bg=THEME_PANEL)
-        quick_grid.pack(fill='x', padx=14, pady=(0, 14))
-        quick_grid.grid_columnconfigure(0, weight=1)
-        quick_grid.grid_columnconfigure(1, weight=1)
-        quick_grid.grid_columnconfigure(2, weight=1)
-        quick_actions = [
-            ("Manage Stock", self.manage_initial_stock),
-            ("Add Sales", self.add_sales),
-            ("Add Wastage", self.add_wastage),
-            ("Open Tabs", self.open_tabs_menu),
-            ("Full Stocktake", self.full_stock_take),
-            ("Line Clean", self.line_clean),
-        ]
-        for i, (text, command) in enumerate(quick_actions):
-            self.tile_button(quick_grid, text, command).grid(
-                row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew'
-            )
+        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        canvas.bind_all('<Button-4>', lambda e: _on_mousewheel_linux(e, -1))
+        canvas.bind_all('<Button-5>', lambda e: _on_mousewheel_linux(e, 1))
 
-        # Report shortcuts panel
-        reports_panel = self.create_panel(self.dashboard_area, "Report Shortcuts")
-        reports_grid = self.themed_frame(reports_panel, bg=THEME_PANEL)
-        reports_grid.pack(fill='x', padx=14, pady=(0, 14))
-        reports_grid.grid_columnconfigure(0, weight=1)
-        reports_grid.grid_columnconfigure(1, weight=1)
-        reports_grid.grid_columnconfigure(2, weight=1)
-        report_actions = [
-            ("Gross Profit", self.generate_gp_report),
-            ("Division Report", self.generate_division_report),
-            ("Reorder Suggestions", self.generate_reorder_report),
-            ("Sales Trends", self.generate_sales_analytics),
-            ("Surplus / Variance", self.generate_surplus_report),
-            ("Transaction Log", self.view_transaction_log),
-            ("Delivery History", self.view_delivery_history),
-        ]
-        for i, (text, command) in enumerate(report_actions):
-            self.tile_button(reports_grid, text, command).grid(
-                row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew'
-            )
+        # Store helper so tab-specific scrollable widgets can reuse the same scrolling logic
+        self._shell_canvas = canvas
 
-        # Footer
-        footer = self.themed_frame(self.dashboard_area)
-        footer.pack(fill='x', pady=(20, 0))
-        self.themed_label(footer, "Created by Chris Armstrong",
-                          font=(THEME_FONT, 9, 'italic'),
-                          fg=THEME_TEXT_MUTED).pack(side='right')
+    def _bind_treeview_mousewheel(self, tree):
+        """Make a Treeview scroll with the mouse wheel on macOS and Linux."""
+        def _tree_wheel(event):
+            delta = event.delta
+            if delta == 0:
+                return 'break'
+            if abs(delta) >= 120:
+                steps = int(-delta / 120)
+            else:
+                steps = -1 if delta > 0 else 1
+            tree.yview_scroll(steps, 'units')
+            return 'break'
 
-    def _nav_button(self, parent, text, command, active, danger=False):
-        """Create a simplified sidebar navigation button."""
-        bg = THEME_ACCENT if active else THEME_SIDEBAR
-        fg = '#0f1419' if active else (THEME_DANGER if danger else THEME_TEXT)
+        tree.bind('<MouseWheel>', _tree_wheel)
+        tree.bind('<Button-4>', lambda e: (tree.yview_scroll(-1, 'units'), 'break')[-1])
+        tree.bind('<Button-5>', lambda e: (tree.yview_scroll(1, 'units'), 'break')[-1])
+
+    def _tab_button(self, parent, text, command, active=False):
+        """Create a top-tab navigation button."""
+        bg = THEME_ACCENT if active else THEME_CARD
+        fg = '#0f1419' if active else THEME_TEXT
         hover = THEME_ACCENT_HOVER if active else THEME_BORDER
 
-        btn = tk.Label(parent, text=text, font=(THEME_FONT, 12, 'bold' if active else 'normal'),
-                       bg=bg, fg=fg, cursor='hand2', anchor='w',
-                       padx=12, pady=8)
-        btn.pack(fill='x', pady=3)
+        btn = tk.Label(parent, text=text, font=(THEME_FONT, 11, 'bold' if active else 'normal'),
+                       bg=bg, fg=fg, cursor='hand2', anchor='center',
+                       padx=16, pady=8)
+        btn.pack(side='left', padx=(0, 8))
 
         def on_enter(event):
             if not active:
@@ -775,19 +747,303 @@ class BarStockManagementSystem:
         btn.bind('<Button-1>', on_click)
         return btn
 
+    def _section_title(self, parent, text):
+        """Create a muted uppercase section title."""
+        return tk.Label(parent, text=text.upper(), font=(THEME_FONT, 9, 'bold'),
+                        fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w')
+
+    def _pill(self, parent, text, variant='ok'):
+        """Create a status pill."""
+        colors = {
+            'ok': ('rgba(90,158,110,0.15)', THEME_SUCCESS),
+            'warn': ('rgba(201,154,70,0.15)', THEME_WARNING),
+            'danger': ('rgba(201,93,93,0.15)', THEME_DANGER),
+        }
+        bg, fg = colors.get(variant, colors['ok'])
+        # Tkinter doesn't support rgba, so use a close solid colour
+        if variant == 'ok':
+            bg = '#1e3a28'
+        elif variant == 'warn':
+            bg = '#3d2e1f'
+        else:
+            bg = '#3d2020'
+        pill = tk.Label(parent, text=text, font=(THEME_FONT, 8, 'bold'),
+                        fg=fg, bg=bg, padx=8, pady=2)
+        return pill
+
+    def _card(self, parent, title=None):
+        """Create a concept-style card frame."""
+        card = tk.Frame(parent, bg=THEME_CARD, bd=1, relief='solid',
+                        highlightbackground=THEME_BORDER, highlightthickness=1)
+        if title:
+            tk.Label(card, text=title, font=(THEME_FONT, 12, 'bold'),
+                     fg=THEME_ACCENT, bg=THEME_CARD, anchor='w').pack(
+                fill='x', padx=14, pady=(12, 8))
+        return card
+
+    def _form_row(self, parent):
+        """Create a two-column form row frame."""
+        row = tk.Frame(parent, bg=THEME_CARD)
+        row.pack(fill='x', padx=14, pady=6)
+        row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=1)
+        return row
+
+    def _data_table(self, parent, columns, rows, row_height=28):
+        """Create a simple themed data table using a Treeview."""
+        tree = ttk.Treeview(parent, columns=columns, show='headings', height=min(max(4, len(rows)), 12))
+        tree.tag_configure('danger', foreground=THEME_DANGER)
+        tree.tag_configure('warning', foreground=THEME_WARNING)
+        tree.tag_configure('success', foreground=THEME_SUCCESS)
+
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, anchor='w', width=120)
+
+        for row_data in rows:
+            tags = row_data.get('tags', ())
+            values = row_data['values']
+            tree.insert('', 'end', values=values, tags=tags)
+
+        self._bind_treeview_mousewheel(tree)
+        return tree
+
+    def _apply_legacy_theme(self, parent=None):
+        """Recolour a legacy screen so it matches the dark copper/navy concept.
+
+        Preserves status colours (red/green/amber) and converts the common
+        light-grey/white legacy backgrounds to the dark theme palette.
+        """
+        if parent is None:
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
+                return
+            parent = self.main_menu
+
+        DARK_BG_MAP = {
+            '#ffffff': THEME_BG, 'white': THEME_BG,
+            '#f0f0f0': THEME_CARD, '#e0e0e0': THEME_CARD,
+            '#d0d0d0': THEME_PANEL,
+            '#333333': THEME_PANEL, '#2c2c2c': THEME_PANEL,
+            'systemwindowbackgroundcolor': THEME_BG,
+            'systemWindowBackgroundColor': THEME_BG,
+            '': THEME_BG,
+        }
+        FG_MAP = {
+            'black': THEME_TEXT, '#000000': THEME_TEXT,
+            'white': THEME_TEXT, '#ffffff': THEME_TEXT,
+            'systemtextcolor': THEME_TEXT,
+            'gray': THEME_TEXT_MUTED, 'grey': THEME_TEXT_MUTED, '#808080': THEME_TEXT_MUTED,
+            'red': THEME_DANGER, '#ff0000': THEME_DANGER, '#ff4444': THEME_DANGER,
+            'green': THEME_SUCCESS, '#00ff00': THEME_SUCCESS, '#44cc44': THEME_SUCCESS,
+            '#cc6600': THEME_WARNING,
+        }
+
+        def _theme_widget(w, depth=0):
+            if depth > 30:
+                return
+            try:
+                wtype = w.winfo_class()
+                if wtype == 'Frame':
+                    bg = w.cget('bg')
+                    if bg.lower() in DARK_BG_MAP:
+                        w.configure(bg=DARK_BG_MAP[bg.lower()])
+                    else:
+                        # Fallback: any light-ish default becomes page bg
+                        try:
+                            w.configure(bg=THEME_BG)
+                        except Exception:
+                            pass
+                elif wtype == 'LabelFrame':
+                    bg = w.cget('bg')
+                    if bg.lower() in DARK_BG_MAP:
+                        w.configure(bg=DARK_BG_MAP[bg.lower()])
+                    else:
+                        try:
+                            w.configure(bg=THEME_CARD)
+                        except Exception:
+                            pass
+                    try:
+                        w.configure(fg=THEME_ACCENT)
+                    except Exception:
+                        pass
+                elif wtype == 'Label':
+                    bg = w.cget('bg')
+                    if bg.lower() in DARK_BG_MAP:
+                        w.configure(bg=DARK_BG_MAP[bg.lower()])
+                    elif bg.lower() in ('systemwindowbackgroundcolor', 'systemdialogbackgroundcolor'):
+                        w.configure(bg=THEME_BG)
+                    fg = w.cget('fg')
+                    if fg.lower() in FG_MAP:
+                        w.configure(fg=FG_MAP[fg.lower()])
+                    elif fg.lower() in ('systemtextcolor', 'black'):
+                        w.configure(fg=THEME_TEXT)
+                elif wtype == 'Button':
+                    w.configure(
+                        bg=THEME_ACCENT, fg='#0f1419',
+                        activebackground=THEME_ACCENT_HOVER, activeforeground='#0f1419',
+                        relief='flat', font=(THEME_FONT, 11),
+                        padx=10, pady=6,
+                        highlightbackground=THEME_ACCENT, highlightcolor=THEME_ACCENT
+                    )
+                elif wtype == 'Entry':
+                    w.configure(
+                        bg=THEME_CARD, fg=THEME_TEXT,
+                        insertbackground=THEME_TEXT, highlightbackground=THEME_BORDER
+                    )
+                elif wtype == 'Canvas':
+                    bg = w.cget('bg')
+                    if bg.lower() in DARK_BG_MAP:
+                        w.configure(bg=DARK_BG_MAP[bg.lower()])
+                    elif bg.lower() in ('systemwindowbackgroundcolor',):
+                        w.configure(bg=THEME_BG)
+            except Exception:
+                pass
+
+            try:
+                for child in w.winfo_children():
+                    _theme_widget(child, depth + 1)
+            except Exception:
+                pass
+
+        _theme_widget(parent)
+
+    def show_dashboard(self):
+        """Render the simplified dashboard."""
+        self._create_app_shell('Dashboard')
+
+        # Header
+        header = self.themed_frame(self.main_menu)
+        header.pack(fill='x', pady=(0, 20))
+        self.themed_label(header, "Dashboard",
+                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
+
+        # Sync/setup banner (non-blocking, shown only when there are real issues)
+        self._render_sync_alert(self.main_menu)
+
+        # Stat cards
+        self.update_dashboard_stats(self.main_menu)
+
+        # Snapshot details
+        self._render_dashboard_snapshot(self.main_menu)
+
+        # Items needing attention
+        self._section_title(self.main_menu, "Items needing attention").pack(fill='x', pady=(20, 10))
+        self._render_attention_table(self.main_menu)
+
+        # Footer
+        footer = self.themed_frame(self.main_menu)
+        footer.pack(fill='x', pady=(20, 0))
+        self.themed_label(footer, "Created by Chris Armstrong",
+                          font=(THEME_FONT, 9, 'italic'),
+                          fg=THEME_TEXT_MUTED).pack(side='right')
+
+    def show_deliveries(self):
+        """Show the Deliveries tab by wrapping the existing delivery flow."""
+        self._create_app_shell('Deliveries')
+        self.add_delivery()
+
+    def show_stocktake(self):
+        """Show the Stocktake tab by wrapping the existing stocktake flow."""
+        self._create_app_shell('Stocktake')
+        self.full_stock_take()
+
+    def show_sales_upload(self):
+        """Show the Sales Upload tab by wrapping the existing sales flow."""
+        self._create_app_shell('Sales Upload')
+        self.add_sales()
+
+    def show_reports(self):
+        """Show the Reports hub."""
+        self._create_app_shell('Reports')
+        self._render_reports_hub()
+
+    def show_more(self):
+        """Show secondary actions that don't fit the primary tabs."""
+        self._create_app_shell('More')
+        self._render_more_menu()
+
+    def _render_more_menu(self):
+        """Render the grid of secondary actions."""
+        header = self.themed_frame(self.main_menu)
+        header.pack(fill='x', pady=(0, 20))
+        self.themed_label(header, "More actions",
+                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
+
+        actions = [
+            ("Manage Stock", self.manage_initial_stock),
+            ("Add Wastage", self.add_wastage),
+            ("Add Complimentary", self.add_complimentary),
+            ("Open Tabs", self.open_tabs_menu),
+            ("Line Clean", self.line_clean),
+            ("Transactions", self.view_transaction_log),
+            ("Delivery History", self.view_delivery_history),
+            ("Settings", self.open_settings),
+            ("Restore Backup", self.restore_from_backup_menu),
+            ("Init from Items.csv", self.initialize_stock_from_items_csv),
+            ("Reset System", self.reset_system),
+            ("Exit System", self.on_exit),
+        ]
+
+        grid = self.themed_frame(self.main_menu)
+        grid.pack(fill='x')
+        for i in range(3):
+            grid.grid_columnconfigure(i, weight=1)
+
+        for i, (text, command) in enumerate(actions):
+            tile = self.tile_button(grid, text, command)
+            tile.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew')
+
+    def _render_reports_hub(self):
+        """Render the reports hub with report cards."""
+        header = self.themed_frame(self.main_menu)
+        header.pack(fill='x', pady=(0, 20))
+        self.themed_label(header, "Reports",
+                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
+
+        reports = [
+            ("Gross Profit", "Profit margins by item", self.generate_gp_report),
+            ("Division Report", "Stock value by division", self.generate_division_report),
+            ("Reorder Suggestions", "Items below reorder level", self.generate_reorder_report),
+            ("Sales Trends", "Sales over time", self.generate_sales_analytics),
+            ("Surplus / Variance", "Stock discrepancies", self.generate_surplus_report),
+            ("Transaction Log", "All transactions", self.view_transaction_log),
+            ("Delivery History", "Past deliveries", self.view_delivery_history),
+            ("Reconciliation", "Stock vs transactions", self.generate_reconciliation_report),
+        ]
+
+        grid = self.themed_frame(self.main_menu)
+        grid.pack(fill='x')
+        for i in range(3):
+            grid.grid_columnconfigure(i, weight=1)
+
+        for i, (title, desc, command) in enumerate(reports):
+            card = self._card(grid)
+            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky='nsew')
+            tk.Label(card, text=title, font=(THEME_FONT, 13, 'bold'),
+                     fg=THEME_TEXT, bg=THEME_CARD, anchor='w').pack(fill='x', padx=14, pady=(12, 4))
+            tk.Label(card, text=desc, font=(THEME_FONT, 10),
+                     fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x', padx=14, pady=(0, 10))
+            self.styled_button(card, "Open", command, width=12, variant='primary').pack(anchor='w', padx=14, pady=(0, 12))
+
     def _render_sync_alert(self, parent=None):
         """Show a non-blocking setup/sync banner if issues were detected at startup."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
 
         if not hasattr(self, 'startup_sync_report') or not self.startup_sync_report:
             return
 
+        # Trim huge order-sheet-only reports so the banner isn't overwhelming
+        report_text = self.startup_sync_report.strip()
+        lines = report_text.splitlines()
+        if len(lines) > 12:
+            report_text = "\n".join(lines[:12]) + f"\n... and {len(lines) - 12} more items"
+
         banner = tk.Frame(parent, bg='#3d2e1f', bd=1, relief='solid',
                           highlightbackground=THEME_ACCENT, highlightthickness=1)
-        banner.pack(fill='x', pady=(0, 14), padx=2)
+        banner.pack(fill='x', pady=(0, 18), padx=2)
 
         tk.Label(banner, text='⚠ Inventory Setup Check',
                  font=(THEME_FONT, 11, 'bold'), fg=THEME_WARNING, bg='#3d2e1f',
@@ -799,7 +1055,7 @@ class BarStockManagementSystem:
                         anchor='w', justify='left', wraplength=700)
         text.pack(fill='x', padx=12, pady=(0, 4))
 
-        detail = tk.Label(banner, text=self.startup_sync_report,
+        detail = tk.Label(banner, text=report_text,
                           font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#3d2e1f',
                           anchor='w', justify='left', wraplength=700)
         detail.pack(fill='x', padx=12, pady=(0, 4))
@@ -813,9 +1069,9 @@ class BarStockManagementSystem:
     def update_dashboard_stats(self, parent=None):
         """Render simplified dashboard summary cards."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'stats_frame'):
             self.stats_frame.destroy()
 
@@ -852,7 +1108,7 @@ class BarStockManagementSystem:
             if not deliveries.empty and COL_TIMESTAMP in deliveries.columns:
                 try:
                     latest = deliveries[COL_TIMESTAMP].max()
-                    last_delivery = latest.split()[0]
+                    last_delivery = datetime.strptime(latest.split()[0], '%Y-%m-%d').strftime(DATE_FORMAT_DISPLAY)
                 except Exception:
                     last_delivery = "Unknown"
 
@@ -863,7 +1119,7 @@ class BarStockManagementSystem:
             backups = sorted(glob.glob(os.path.join(DATA_DIR, 'backups', 'barstock_*.db')), key=os.path.getmtime, reverse=True)
             if backups:
                 mtime = os.path.getmtime(backups[0])
-                latest_backup = datetime.fromtimestamp(mtime).strftime('%d/%m/%Y')
+                latest_backup = datetime.fromtimestamp(mtime).strftime(DATE_FORMAT_DISPLAY)
         except Exception:
             latest_backup = "Unknown"
 
@@ -881,12 +1137,158 @@ class BarStockManagementSystem:
         self.create_card(self.stats_frame, "Latest Backup", latest_backup,
                          "Auto-backup on open" if latest_backup != "None" else "Not yet backed up")
 
+    def _compute_dashboard_snapshot(self):
+        """Return dict of snapshot values for the dashboard details panel."""
+        result = {
+            'period_sales': 0.0,
+            'period_label': 'No sales data',
+            'stock_holding': 0.0,
+            'recent_sales_uploads': [],
+            'recent_deliveries': [],
+        }
+
+        # Stock holding value at cost price
+        if not self.inventory_df.empty:
+            qty = pd.to_numeric(self.inventory_df.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+            cost = pd.to_numeric(self.inventory_df.get(COL_COST_PRICE, 0), errors='coerce').fillna(0)
+            result['stock_holding'] = (qty * cost).sum()
+
+        if self.log_df.empty or COL_ACTION not in self.log_df.columns:
+            return result
+
+        log = self.log_df.copy()
+        log['_ts'] = pd.to_datetime(log[COL_TIMESTAMP], errors='coerce')
+
+        # Determine period start: latest baseline reset, otherwise earliest sales transaction
+        baseline_ts = None
+        baseline_rows = log[log[COL_ACTION] == ACTION_STOCKTAKE_BASELINE]
+        if not baseline_rows.empty:
+            baseline_ts = baseline_rows['_ts'].max()
+        sales_rows = log[log[COL_ACTION] == ACTION_SALES]
+        if baseline_ts is None and not sales_rows.empty:
+            baseline_ts = sales_rows['_ts'].min()
+
+        period_sales = 0.0
+        if not sales_rows.empty and baseline_ts is not None:
+            period_sales_rows = sales_rows[sales_rows['_ts'] >= baseline_ts]
+            qty = pd.to_numeric(period_sales_rows.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+            price = pd.to_numeric(period_sales_rows.get(COL_SELL_PRICE, 0), errors='coerce').fillna(0)
+            period_sales = (qty * price).sum()
+            if baseline_rows.empty:
+                result['period_label'] = 'All recorded sales'
+            else:
+                result['period_label'] = f"Since {baseline_ts.strftime(DATE_FORMAT_DISPLAY)}"
+
+        result['period_sales'] = period_sales
+
+        # Recent sales uploads (grouped by date_range)
+        uploads = sales_rows[sales_rows.get(COL_DATE_RANGE, '').astype(str).str.strip() != '']
+        if not uploads.empty:
+            grouped = uploads.groupby(COL_DATE_RANGE).agg({'_ts': 'min', COL_QUANTITY: 'sum'}).reset_index()
+            grouped = grouped.sort_values('_ts', ascending=False).head(3)
+            for _, row in grouped.iterrows():
+                period_raw = str(row[COL_DATE_RANGE])
+                period_fmt = self._format_period_display(period_raw)
+                result['recent_sales_uploads'].append({
+                    'period': period_fmt,
+                    'qty': float(row[COL_QUANTITY]),
+                })
+
+        # Recent deliveries (grouped by timestamp + supplier)
+        deliveries = log[log[COL_ACTION] == ACTION_DELIVERY].copy()
+        if not deliveries.empty:
+            deliveries[COL_SUPPLIER] = deliveries.get(COL_SUPPLIER, '').fillna('')
+            grouped = deliveries.groupby([COL_TIMESTAMP, COL_SUPPLIER]).size().reset_index(name='count')
+            grouped['_ts_dt'] = pd.to_datetime(grouped[COL_TIMESTAMP], errors='coerce')
+            grouped = grouped.sort_values('_ts_dt', ascending=False).head(3)
+            for _, row in grouped.iterrows():
+                ts = row['_ts_dt']
+                ts_str = ts.strftime(DATE_FORMAT_DISPLAY) if pd.notna(ts) else self._format_date_display(str(row[COL_TIMESTAMP])[:10])
+                result['recent_deliveries'].append({
+                    'date': ts_str,
+                    'supplier': str(row[COL_SUPPLIER]) or '-',
+                })
+
+        return result
+
+    def _format_period_display(self, period_raw):
+        """Convert a raw period string to DD-MM-YYYY display format if possible."""
+        if not period_raw:
+            return period_raw
+        # Match common patterns: 03/08/2026 - 09/08/2026, 24-05-2026 - 24-05-2026, 2026-08-03 - 2026-08-09
+        for sep in (' - ', ' – ', ' to '):
+            if sep in period_raw:
+                parts = period_raw.split(sep)
+                if len(parts) == 2:
+                    return f"{self._format_date_display(parts[0].strip())}{sep}{self._format_date_display(parts[1].strip())}"
+                break
+        return self._format_date_display(period_raw)
+
+    def _format_date_display(self, date_str):
+        """Convert any ISO/legacy display date string to DD-MM-YYYY."""
+        if not date_str:
+            return date_str
+        try:
+            dt = parse_display_date(date_str)
+            return dt.strftime(DATE_FORMAT_DISPLAY)
+        except Exception:
+            return date_str
+
+    def _render_dashboard_snapshot(self, parent=None):
+        """Render snapshot details panel: period sales, stock holding, recent uploads/deliveries."""
+        if parent is None:
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
+                return
+            parent = self.main_menu
+        if hasattr(self, 'snapshot_frame'):
+            self.snapshot_frame.destroy()
+
+        self.snapshot_frame = self.themed_frame(parent)
+        self.snapshot_frame.pack(fill='x', pady=(0, 18))
+
+        snap = self._compute_dashboard_snapshot()
+
+        # Summary cards row
+        cards_frame = self.themed_frame(self.snapshot_frame)
+        cards_frame.pack(fill='x', pady=(0, 14))
+
+        self.create_card(cards_frame, "Period Sales", f"£{snap['period_sales']:,.2f}",
+                         snap['period_label'])
+        self.create_card(cards_frame, "Stock Holding", f"£{snap['stock_holding']:,.2f}",
+                         "At cost price")
+        recent_uploads_text = "\n".join(
+            [f"{u['period']}" for u in snap['recent_sales_uploads']]
+        ) or "No recent uploads"
+        self.create_card(cards_frame, "Last 3 Sales Uploads", f"{len(snap['recent_sales_uploads'])}",
+                         recent_uploads_text)
+        recent_deliveries_text = "\n".join(
+            [f"{d['date']} — {d['supplier']}" for d in snap['recent_deliveries']]
+        ) or "No recent deliveries"
+        self.create_card(cards_frame, "Last 3 Deliveries", f"{len(snap['recent_deliveries'])}",
+                         recent_deliveries_text)
+
+        # Exit System card (clickable)
+        exit_card = tk.Frame(cards_frame, bg=THEME_CARD, bd=1, relief='solid',
+                             highlightbackground=THEME_BORDER, highlightthickness=1,
+                             cursor='hand2')
+        exit_card.pack(side='left', fill='both', expand=True, padx=8, pady=5)
+        tk.Label(exit_card, text="EXIT SYSTEM", font=(THEME_FONT, 9, 'bold'),
+                 fg=THEME_DANGER, bg=THEME_CARD).pack(anchor='w', padx=14, pady=(12, 4))
+        tk.Label(exit_card, text="Save & Exit", font=(THEME_FONT, 26, 'bold'),
+                 fg=THEME_DANGER, bg=THEME_CARD).pack(anchor='w', padx=14)
+        tk.Label(exit_card, text="Safely close BarStock", font=(THEME_FONT, 10),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD).pack(anchor='w', padx=14, pady=(4, 14))
+        exit_card.bind('<Button-1>', lambda e: self.on_exit())
+        for child in exit_card.winfo_children():
+            child.bind('<Button-1>', lambda e: self.on_exit())
+
+
     def _render_attention_table(self, parent=None):
         """Show a simple table of items that need action: negative, low, or discrepancy."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'attention_frame'):
             self.attention_frame.destroy()
 
@@ -944,6 +1346,7 @@ class BarStockManagementSystem:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.pack(side=tk.LEFT, fill='both', expand=True)
+        self._bind_treeview_mousewheel(tree)
 
         for item in attention:
             current_text = f"{item['qty']:.1f} {item['measure']}s" if item['measure'] else f"{item['qty']:.1f}"
@@ -965,9 +1368,9 @@ class BarStockManagementSystem:
     def update_critical_stock_alert(self, parent=None):
         """Display a dark-themed red alert banner if any stock item is below -10."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'critical_alert_frame'):
             self.critical_alert_frame.destroy()
 
@@ -993,9 +1396,9 @@ class BarStockManagementSystem:
     def update_variance_alert(self, parent=None):
         """Display a dark-themed yellow warning banner for unexplained stock variance."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'variance_alert_frame'):
             self.variance_alert_frame.destroy()
 
@@ -1049,9 +1452,9 @@ class BarStockManagementSystem:
     def update_open_tab_alert(self, parent=None):
         """Display a dark-themed red alert banner for stale open tabs."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'open_tab_alert_frame'):
             self.open_tab_alert_frame.destroy()
 
@@ -1095,9 +1498,9 @@ class BarStockManagementSystem:
     def _render_upload_banner(self, parent=None):
         """Render dark-themed upload history banner."""
         if parent is None:
-            if not hasattr(self, 'dashboard_area') or not self.dashboard_area.winfo_exists():
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
-            parent = self.dashboard_area
+            parent = self.main_menu
         if hasattr(self, 'upload_banner_frame'):
             self.upload_banner_frame.destroy()
 
@@ -1279,6 +1682,7 @@ class BarStockManagementSystem:
         scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.stock_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.stock_tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(self.stock_tree)
 
         # Double-click to update item
         self.stock_tree.bind('<Double-1>', lambda event: self.on_stock_tree_double_click(event))
@@ -1292,7 +1696,9 @@ class BarStockManagementSystem:
         tk.Button(btn_frame, text="Add Item", command=self.add_stock_item).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Update Item", command=self.update_stock_item).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Delete Item", command=self.delete_stock_item).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Back", command=self.create_main_menu).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Back", command=self.show_dashboard).pack(side=tk.LEFT, padx=5)
+
+        self._apply_legacy_theme()
 
     def sort_treeview(self, tree, col, reverse):
         """Sort treeview contents when a column header is clicked."""
@@ -1772,22 +2178,25 @@ class BarStockManagementSystem:
         self.clear_main_menu()
 
         # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
+        header_frame = self.themed_frame(self.main_menu, height=60)
+        header_frame.pack(fill='x', pady=(0, 20))
         header_frame.pack_propagate(False)
+        self.themed_label(header_frame, "Add Delivery", font=(THEME_FONT, 24, 'bold')).pack(side='left')
 
-        tk.Label(header_frame, text="Add Delivery", font=('Arial', 16, 'bold')).pack(expand=True)
+        # Supplier card
+        supplier_card = self._card(self.main_menu, title="Supplier")
+        supplier_card.pack(fill='x', padx=20, pady=(0, 20))
 
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, padx=20)
-
-        # Supplier selection
-        tk.Label(frame, text="Supplier:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
+        row = self._form_row(supplier_card)
+        field_frame = tk.Frame(row, bg=THEME_CARD)
+        field_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
+        tk.Label(field_frame, text="Supplier", font=(THEME_FONT, 10, 'bold'),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
         supplier_var = tk.StringVar(value="Booker")
-        supplier_dropdown = ttk.Combobox(frame, textvariable=supplier_var,
+        supplier_dropdown = ttk.Combobox(field_frame, textvariable=supplier_var,
                                           values=["Booker", "Tennents", "Belhaven"],
                                           width=40, state="readonly")
-        supplier_dropdown.grid(row=0, column=1, padx=5, pady=8)
+        supplier_dropdown.pack(fill='x', pady=(4, 0))
         supplier_dropdown.set("Select supplier...")
 
         def proceed_with_delivery():
@@ -1795,20 +2204,24 @@ class BarStockManagementSystem:
             if selected_supplier == "Select supplier...":
                 messagebox.showerror("Error", "Please select a supplier.")
                 return
-            # Store supplier and proceed to multi-item delivery
             self.current_delivery_supplier = selected_supplier
             self.process_delivery_multi_item()
 
-        # Recent Deliveries
-        history_frame = tk.LabelFrame(self.main_menu, text="Recent Deliveries", font=('Arial', 10, 'bold'))
-        history_frame.pack(fill='x', padx=20, pady=(10, 0))
+        btn_frame = self.themed_frame(self.main_menu)
+        btn_frame.pack(fill='x', padx=20, pady=(10, 0))
+        self.styled_button(btn_frame, "Proceed", proceed_with_delivery, width=16, variant='primary').pack(side='left', padx=(0, 10))
+        self.styled_button(btn_frame, "Back", self.show_dashboard, width=16, variant='ghost').pack(side='left')
+
+        # Recent deliveries
+        self._section_title(self.main_menu, "Recent Deliveries").pack(fill='x', padx=20, pady=(20, 10))
+        history_card = self._card(self.main_menu, title="Recent Deliveries")
+        history_card.pack(fill='x', padx=20, pady=(0, 20))
 
         try:
             self.refresh_data()
             if not self.log_df.empty:
                 delivery_log = self.log_df[self.log_df[COL_ACTION] == ACTION_DELIVERY].copy()
                 if not delivery_log.empty:
-                    # Group by timestamp (first 16 chars for minute-level) and supplier
                     delivery_log['ts_group'] = delivery_log[COL_TIMESTAMP].str[:16]
                     grouped = delivery_log.groupby(['ts_group', COL_SUPPLIER]).agg({
                         COL_ITEM_ID: 'nunique',
@@ -1817,79 +2230,85 @@ class BarStockManagementSystem:
                     grouped.columns = ['timestamp', 'supplier', 'items', 'total_qty']
                     grouped = grouped.sort_values('timestamp', ascending=False).head(10)
 
-                    history_container = tk.Frame(history_frame)
+                    history_container = tk.Frame(history_card, bg=THEME_CARD)
                     history_container.pack(fill='x', padx=10, pady=5)
-
-                    for _, row in grouped.iterrows():
-                        ts = row['timestamp'] if pd.notna(row['timestamp']) else 'N/A'
-                        supplier = row['supplier'] if pd.notna(row['supplier']) else 'Unknown'
-                        items = int(row['items'])
-                        total_qty = row['total_qty']
-                        tk.Label(history_container,
-                                 text=f"  {ts}  — {supplier}: {items} items, +{total_qty:.1f} units",
-                                 font=('Arial', 9), anchor='w').pack(fill='x', padx=5)
+                    for _, entry in grouped.iterrows():
+                        ts = entry['timestamp'] if pd.notna(entry['timestamp']) else 'N/A'
+                        supplier = entry['supplier'] if pd.notna(entry['supplier']) else 'Unknown'
+                        items = int(entry['items'])
+                        total_qty = entry['total_qty']
+                        self.themed_label(history_container,
+                                          f"{ts} — {supplier}: {items} items, +{total_qty:.1f} units",
+                                          font=(THEME_FONT, 10), fg=THEME_TEXT).pack(fill='x', padx=5, pady=1)
                 else:
-                    tk.Label(history_frame, text="  No deliveries yet", font=('Arial', 9), fg='gray').pack(padx=5, pady=5)
+                    self.themed_label(history_card, "No deliveries yet", font=(THEME_FONT, 9),
+                                      fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
             else:
-                tk.Label(history_frame, text="  No deliveries yet", font=('Arial', 9), fg='gray').pack(padx=5, pady=5)
+                self.themed_label(history_card, "No deliveries yet", font=(THEME_FONT, 9),
+                                  fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
         except Exception:
-            tk.Label(history_frame, text="  Unable to load recent deliveries", font=('Arial', 9), fg='gray').pack(padx=5, pady=5)
+            self.themed_label(history_card, "Unable to load recent deliveries", font=(THEME_FONT, 9),
+                              fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
 
-        # Buttons
-        btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=1, column=0, columnspan=2, pady=20)
-
-        tk.Button(btn_frame, text="Proceed", command=proceed_with_delivery, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Back", command=self.create_main_menu, width=15).pack(side=tk.LEFT, padx=10)
-
-        # Force redraw so ttk.Combobox is visible immediately on macOS
         self.root.update_idletasks()
+        self._apply_legacy_theme()
 
     def process_delivery_multi_item(self):
         """Process a delivery with multiple items."""
         self.clear_main_menu()
 
         # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
+        header_frame = self.themed_frame(self.main_menu, height=60)
+        header_frame.pack(fill='x', pady=(0, 20))
         header_frame.pack_propagate(False)
-
         supplier_name = getattr(self, 'current_delivery_supplier', 'Unknown')
-        tk.Label(header_frame, text=f"Add Delivery - {supplier_name}", font=('Arial', 16, 'bold')).pack(expand=True)
+        self.themed_label(header_frame, f"Add Delivery - {supplier_name}", font=(THEME_FONT, 24, 'bold')).pack(side='left')
 
-        # Delivery date
-        date_frame = tk.Frame(header_frame)
-        date_frame.pack(pady=5)
-        tk.Label(date_frame, text="Delivery Date:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
-        delivery_date_var = tk.StringVar(value=datetime.now().strftime("%d/%m/%Y"))
-        delivery_date_entry = tk.Entry(date_frame, textvariable=delivery_date_var, width=12, font=('Arial', 10))
-        delivery_date_entry.pack(side=tk.LEFT, padx=5)
-        tk.Button(date_frame, text="📅", command=lambda: self.show_calendar(delivery_date_var, self.root), font=('Arial', 10)).pack(side=tk.LEFT, padx=2)
-
-        # Main container
-        main_frame = tk.Frame(self.main_menu)
-        main_frame.pack(pady=10, padx=20, fill='both', expand=True)
-
-        # Left side - Item entry
-        entry_frame = tk.LabelFrame(main_frame, text="Add Items to Delivery", font=('Arial', 10, 'bold'))
-        entry_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=(0, 10))
-
-        # Item selection
-        tk.Label(entry_frame, text="Item:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
-
-        # Create list of items for dropdown
         self.refresh_data()
         full_item_list = [f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}" for _, row in self.inventory_df.iterrows()]
-
         if not full_item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
-            self.create_main_menu()
+            self.show_dashboard()
             return
 
-        # Search bar to filter items
+        # Delivery details card
+        details_card = self._card(self.main_menu, title="Delivery Details")
+        details_card.pack(fill='x', padx=20, pady=(0, 20))
+
+        details_row = self._form_row(details_card)
+        sup_frame = tk.Frame(details_row, bg=THEME_CARD)
+        sup_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
+        tk.Label(sup_frame, text="Supplier", font=(THEME_FONT, 10, 'bold'),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
+        tk.Label(sup_frame, text=supplier_name, font=(THEME_FONT, 12),
+                 fg=THEME_TEXT, bg=THEME_CARD, anchor='w').pack(fill='x', pady=(4, 0))
+
+        date_frame = tk.Frame(details_row, bg=THEME_CARD)
+        date_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
+        tk.Label(date_frame, text="Delivery Date", font=(THEME_FONT, 10, 'bold'),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
+        date_entry_frame = tk.Frame(date_frame, bg=THEME_CARD)
+        date_entry_frame.pack(fill='x', pady=(4, 0))
+        delivery_date_var = tk.StringVar(value=datetime.now().strftime(DATE_FORMAT_DISPLAY))
+        delivery_date_entry = tk.Entry(date_entry_frame, textvariable=delivery_date_var,
+                                       width=12, font=(THEME_FONT, 12))
+        delivery_date_entry.pack(side='left')
+        self.styled_button(date_entry_frame, "📅",
+                           lambda: self.show_calendar(delivery_date_var, self.root),
+                           width=3, variant='secondary').pack(side='left', padx=(6, 0))
+
+        # Add item card
+        item_card = self._card(self.main_menu, title="Add Item")
+        item_card.pack(fill='x', padx=20, pady=(0, 20))
+
+        search_frame = tk.Frame(item_card, bg=THEME_CARD)
+        search_frame.pack(fill='x', padx=14, pady=(8, 6))
+        tk.Label(search_frame, text="Search", font=(THEME_FONT, 10, 'bold'),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
         search_var = tk.StringVar()
-        search_entry = tk.Entry(entry_frame, textvariable=search_var, width=15, bg='#2c2c2c', fg='white')
-        search_entry.grid(row=0, column=1, padx=(5, 0), pady=8, sticky="w")
+        search_entry = tk.Entry(search_frame, textvariable=search_var, width=15,
+                                font=(THEME_FONT, 12))
+        search_entry.pack(fill='x', pady=(4, 0))
         search_entry.insert(0, "Type to search...")
         search_entry.config(fg='gray')
 
@@ -1915,47 +2334,52 @@ class BarStockManagementSystem:
         search_entry.bind('<FocusOut>', on_search_focus_out)
         search_var.trace_add('write', on_search_change)
 
+        item_frame = tk.Frame(item_card, bg=THEME_CARD)
+        item_frame.pack(fill='x', padx=14, pady=6)
+        tk.Label(item_frame, text="Item", font=(THEME_FONT, 10, 'bold'),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
         item_var = tk.StringVar()
-        item_dropdown = ttk.Combobox(entry_frame, textvariable=item_var, values=full_item_list, width=35, state="readonly")
-        item_dropdown.grid(row=1, column=0, columnspan=2, padx=5, pady=8)
+        item_dropdown = ttk.Combobox(item_frame, textvariable=item_var,
+                                       values=full_item_list, width=35, state="readonly")
+        item_dropdown.pack(fill='x', pady=(4, 0))
         item_dropdown.set("Select an item...")
 
-        # Quantity entry (label updated dynamically based on selected item)
-        qty_label = tk.Label(entry_frame, text="Quantity:")
-        qty_label.grid(row=2, column=0, padx=5, pady=8, sticky="e")
-        entry_quantity = tk.Entry(entry_frame, width=15)
-        entry_quantity.grid(row=2, column=1, padx=5, pady=8, sticky="w")
+        qty_cost_row = self._form_row(item_card)
+        qty_frame = tk.Frame(qty_cost_row, bg=THEME_CARD)
+        qty_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
+        qty_label = tk.Label(qty_frame, text="Quantity", font=(THEME_FONT, 10, 'bold'),
+                             fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
+        qty_label.pack(fill='x')
+        entry_quantity = tk.Entry(qty_frame, width=15, font=(THEME_FONT, 12))
+        entry_quantity.pack(fill='x', pady=(4, 0))
+        stock_label = tk.Label(qty_frame, text="Current stock: -", font=(THEME_FONT, 9),
+                               fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
+        stock_label.pack(fill='x', pady=(2, 0))
 
-        # Cost Price entry
-        cost_label = tk.Label(entry_frame, text="Cost Price (£):")
-        cost_label.grid(row=3, column=0, padx=5, pady=8, sticky="e")
-        entry_cost_price = tk.Entry(entry_frame, width=15)
-        entry_cost_price.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-
-        # GP% label
-        gp_label = tk.Label(entry_frame, text="GP: -", font=('Arial', 9, 'bold'))
-        gp_label.grid(row=4, column=1, padx=5, pady=2, sticky="w")
-
-        # Current stock label
-        stock_label = tk.Label(entry_frame, text="Current stock: -", font=('Arial', 9), fg='gray')
-        stock_label.grid(row=5, column=1, padx=5, pady=2, sticky="w")
-
-        # Conversion info label
-        conversion_label = tk.Label(entry_frame, text="", font=('Arial', 9), fg='gray')
-        conversion_label.grid(row=7, column=1, padx=5, pady=0, sticky="w")
+        cost_frame = tk.Frame(qty_cost_row, bg=THEME_CARD)
+        cost_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
+        cost_label = tk.Label(cost_frame, text="Cost Price (£)", font=(THEME_FONT, 10, 'bold'),
+                              fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
+        cost_label.pack(fill='x')
+        entry_cost_price = tk.Entry(cost_frame, width=15, font=(THEME_FONT, 12))
+        entry_cost_price.pack(fill='x', pady=(4, 0))
+        gp_label = tk.Label(cost_frame, text="GP: -", font=(THEME_FONT, 9, 'bold'),
+                            fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
+        gp_label.pack(fill='x', pady=(2, 0))
+        conversion_label = tk.Label(cost_frame, text="", font=(THEME_FONT, 9),
+                                    fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
+        conversion_label.pack(fill='x', pady=(0, 0))
 
         # Track currently selected item for conversion
         selected_item_id = [None]
         selected_sell_price = [0.0]
         selected_factor = [1.0]
         selected_has_conversion = [False]
-        last_delivery_cost_per_unit = [0.0]  # Per-unit cost for deviation warning
+        last_delivery_cost_per_unit = [0.0]
 
         def update_gp_label(event=None):
-            """Recalculate GP% when cost price changes."""
             try:
                 cost = float(entry_cost_price.get().strip())
-                # Convert pack cost to per-unit cost for GP calculation
                 if selected_has_conversion[0] and selected_factor[0] > 0:
                     cost = cost / selected_factor[0]
                 sell = selected_sell_price[0]
@@ -1964,22 +2388,19 @@ class BarStockManagementSystem:
                     color = '#ff4444' if gp_pct < 60 else '#44cc44'
                     gp_label.config(text=f"GP: {gp_pct:.1f}%", fg=color)
                 else:
-                    gp_label.config(text="GP: -", fg='gray')
+                    gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
             except:
-                gp_label.config(text="GP: -", fg='gray')
+                gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
 
         def on_cost_change(event=None):
-            """Warn if cost price deviates >10% from last delivery cost."""
             if last_delivery_cost_per_unit[0] <= 0:
                 return
             try:
                 entered_cost = float(entry_cost_price.get().strip())
                 if selected_has_conversion[0] and selected_factor[0] > 0:
-                    # User enters pack cost; compare to per-unit cost * factor
                     comparison_cost = last_delivery_cost_per_unit[0] * selected_factor[0]
                     label = "pack"
                 else:
-                    # User enters per-unit cost directly
                     comparison_cost = last_delivery_cost_per_unit[0]
                     label = "per-unit"
                 deviation = abs(entered_cost - comparison_cost) / comparison_cost
@@ -1993,19 +2414,17 @@ class BarStockManagementSystem:
         entry_cost_price.bind('<FocusOut>', on_cost_change)
 
         def on_item_select(event=None):
-            """Update stock label and quantity label when item is selected."""
             selected = item_var.get()
             if selected and selected != "Select an item...":
                 item_id = selected.split(" - ")[0]
                 selected_item_id[0] = item_id
                 try:
-                    from conversions import requires_conversion, convert_to_input, get_input_label, format_stock_display, get_conversion
+                    from conversions import requires_conversion, get_input_label, format_stock_display, get_conversion
                     qty = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY].values[0]
                     cost_price = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_COST_PRICE].values[0]
                     sell_price = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_SELL_PRICE].values[0]
                     selected_sell_price[0] = sell_price
 
-                    # Look up most recent delivery cost for this item
                     item_deliveries = self.log_df[(self.log_df[COL_ITEM_ID] == item_id) & (self.log_df[COL_ACTION] == ACTION_DELIVERY)]
                     if not item_deliveries.empty:
                         recent = item_deliveries.sort_values(COL_TIMESTAMP, ascending=False).iloc[0]
@@ -2022,10 +2441,9 @@ class BarStockManagementSystem:
                         stock_label.config(text=f"Current stock: {display}")
                         qty_label.config(text=f"Quantity ({input_unit}s):")
                         conversion_label.config(text=f"1 {input_unit} = {factor} {output_unit}s")
-                        # Show pack cost
                         selected_factor[0] = factor
                         selected_has_conversion[0] = True
-                        cost_label.config(text=f"Pack Cost Price (£):")
+                        cost_label.config(text="Pack Cost Price (£):")
                         entry_cost_price.delete(0, tk.END)
                         entry_cost_price.insert(0, f"{last_delivery_cost_per_unit[0] * factor:.2f}")
                     else:
@@ -2042,7 +2460,7 @@ class BarStockManagementSystem:
                     stock_label.config(text="Current stock: -")
                     qty_label.config(text="Quantity:")
                     conversion_label.config(text="")
-                    gp_label.config(text="GP: -", fg='gray')
+                    gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
                     entry_cost_price.delete(0, tk.END)
             else:
                 selected_item_id[0] = None
@@ -2053,47 +2471,14 @@ class BarStockManagementSystem:
                 stock_label.config(text="Current stock: -")
                 qty_label.config(text="Quantity:")
                 conversion_label.config(text="")
-                gp_label.config(text="GP: -", fg='gray')
+                gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
                 entry_cost_price.delete(0, tk.END)
 
         item_dropdown.bind("<<ComboboxSelected>>", on_item_select)
 
-        # List to store delivery items
         delivery_items = []
 
-        # Right side - Items list
-        list_frame = tk.LabelFrame(main_frame, text="Items in this Delivery", font=('Arial', 10, 'bold'))
-        list_frame.pack(side=tk.RIGHT, fill='both', expand=True)
-
-        # Treeview for items
-        columns = ('item_id', 'item_name', 'quantity', 'new_stock', 'cost_price')
-        items_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
-        items_tree.heading('item_id', text='Item ID')
-        items_tree.heading('item_name', text='Name')
-        items_tree.heading('quantity', text='Qty Added')
-        items_tree.heading('new_stock', text='New Stock Level')
-        items_tree.heading('cost_price', text='Cost Price')
-        items_tree.column('item_id', width=80)
-        items_tree.column('item_name', width=120)
-        items_tree.column('quantity', width=70)
-        items_tree.column('new_stock', width=90)
-        items_tree.column('cost_price', width=80)
-        items_tree.pack(fill='both', expand=True, padx=5, pady=5)
-
-        # Scrollbar for treeview
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        items_tree.configure(yscrollcommand=scrollbar.set)
-
-        # Total delivery cost at cost
-        total_frame = tk.Frame(list_frame)
-        total_frame.pack(fill='x', padx=5, pady=(0, 8))
-        tk.Label(total_frame, text="Total Delivery Cost:", font=('Arial', 14, 'bold'), fg='white').pack(side=tk.LEFT)
-        total_cost_label = tk.Label(total_frame, text="£0.00", font=('Arial', 14, 'bold'), fg='white')
-        total_cost_label.pack(side=tk.RIGHT)
-
         def add_item_to_delivery():
-            """Add an item to the delivery list."""
             selected = item_var.get()
             if selected == "Select an item..." or not selected:
                 messagebox.showerror("Error", "Please select an item.")
@@ -2106,7 +2491,6 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", "Quantity is required.")
                 return
 
-            # Validate quantity
             try:
                 input_quantity = float(quantity_str)
                 if input_quantity <= 0:
@@ -2116,8 +2500,7 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", "Quantity must be a valid number.")
                 return
 
-            # Convert input quantity to system units if needed (e.g. bottles -> measures)
-            from conversions import requires_conversion, convert_to_system, get_conversion, get_input_label, format_stock_display
+            from conversions import requires_conversion, convert_to_system, get_conversion, get_input_label
             if requires_conversion(item_id):
                 quantity = convert_to_system(item_id, input_quantity)
                 conversion = get_conversion(item_id)
@@ -2128,7 +2511,6 @@ class BarStockManagementSystem:
                 quantity = input_quantity
                 conversion_msg = ""
 
-            # Get cost price (entered as pack cost if conversion applies)
             cost_price_str = entry_cost_price.get().strip()
             if not cost_price_str:
                 messagebox.showerror("Error", "Cost price is required.")
@@ -2142,8 +2524,6 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", "Cost price must be a valid number.")
                 return
 
-            # Convert pack cost to per-unit cost for storage
-            from conversions import requires_conversion, get_conversion
             conv_factor = 1.0
             if requires_conversion(item_id):
                 conv = get_conversion(item_id)
@@ -2151,23 +2531,19 @@ class BarStockManagementSystem:
                     conv_factor = conv[1]
             cost_price = pack_cost / conv_factor if conv_factor > 0 else pack_cost
 
-            # Get item details
             item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
             item_name = item_row[COL_ITEM_NAME]
             current_qty = item_row[COL_QUANTITY]
             new_qty = current_qty + quantity
             sell_price = item_row[COL_SELL_PRICE]
 
-            # GP warning (using per-unit cost)
             gp_pct = ((sell_price - cost_price) / sell_price * 100) if sell_price > 0 else 0
             if gp_pct < 60:
                 if not messagebox.askyesno("Low GP Warning", f"The GP for {item_name} is {gp_pct:.1f}% (below 60%).\nAre you sure you want to add this item?"):
                     return
 
-            # Line total cost = cost entered × quantity entered by user
             line_total_cost = pack_cost * input_quantity
 
-            # Check if item already in delivery
             for i, (existing_id, _, existing_qty, _, existing_price, existing_line_total) in enumerate(delivery_items):
                 if existing_id == item_id:
                     new_total_qty = existing_qty + quantity
@@ -2176,38 +2552,31 @@ class BarStockManagementSystem:
                     if messagebox.askyesno("Item Already Added", f"'{item_name}' is already in this delivery.\nDo you want to add {quantity:.1f} more to the existing {existing_qty:.1f}?{conversion_msg}"):
                         delivery_items[i] = (item_id, item_name, new_total_qty, new_new_qty, cost_price, new_total_line_cost)
                         refresh_items_list()
-                        # Clear inputs
                         item_dropdown.set("Select an item...")
                         entry_quantity.delete(0, tk.END)
                         entry_cost_price.delete(0, tk.END)
-                        gp_label.config(text="GP: -", fg='gray')
+                        gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
                         stock_label.config(text="Current stock: -")
                         conversion_label.config(text="")
                     return
 
-            # Add to delivery items (include line total cost for total)
             delivery_items.append((item_id, item_name, quantity, new_qty, cost_price, line_total_cost))
-
-            # Refresh treeview and total cost
             refresh_items_list()
 
-            # Clear inputs
             item_dropdown.set("Select an item...")
             entry_quantity.delete(0, tk.END)
             entry_cost_price.delete(0, tk.END)
-            gp_label.config(text="GP: -", fg='gray')
+            gp_label.config(text="GP: -", fg=THEME_TEXT_MUTED)
             stock_label.config(text="Current stock: -")
             conversion_label.config(text="")
 
         def refresh_items_list():
-            """Refresh the items treeview and total cost."""
             from conversions import requires_conversion, format_stock_display, get_conversion
             for item in items_tree.get_children():
                 items_tree.delete(item)
             total_cost = 0.0
             for item_id, item_name, quantity, new_qty, cost_price, line_total_cost in delivery_items:
                 new_qty_display = format_stock_display(item_id, new_qty) if requires_conversion(item_id) else f"{new_qty:.1f}"
-                # Show pack cost if applicable
                 display_cost = cost_price
                 if requires_conversion(item_id):
                     conv = get_conversion(item_id)
@@ -2218,7 +2587,6 @@ class BarStockManagementSystem:
             total_cost_label.config(text=f"£{total_cost:.2f}")
 
         def remove_selected_item():
-            """Remove the selected item from the delivery."""
             selected = items_tree.selection()
             if not selected:
                 messagebox.showerror("Error", "Please select an item to remove.")
@@ -2227,7 +2595,6 @@ class BarStockManagementSystem:
             item_values = items_tree.item(selected[0], 'values')
             item_id = item_values[0]
 
-            # Remove from delivery_items
             for i, (del_id, _, _, _, _, _) in enumerate(delivery_items):
                 if del_id == item_id:
                     delivery_items.pop(i)
@@ -2237,20 +2604,18 @@ class BarStockManagementSystem:
             refresh_items_list()
 
         def save_delivery():
-            """Save all items in the delivery."""
             if not delivery_items:
                 messagebox.showerror("Error", "No items to save. Please add at least one item.")
                 return
 
             try:
-                # Reload inventory to ensure we have latest data
                 self.refresh_data()
 
                 delivery_date = delivery_date_var.get().strip()
                 try:
-                    parsed_date = datetime.strptime(delivery_date, "%d/%m/%Y")
+                    parsed_date = parse_display_date(delivery_date)
                 except ValueError:
-                    messagebox.showerror("Error", "Invalid date format. Use DD/MM/YYYY.")
+                    messagebox.showerror("Error", "Invalid date format. Use DD-MM-YYYY.")
                     return
 
                 timestamp = f"{parsed_date.strftime('%Y-%m-%d')} {datetime.now().strftime('%H:%M:%S')}"
@@ -2259,21 +2624,17 @@ class BarStockManagementSystem:
                 log_entries = []
 
                 for item_id, item_name, quantity, _, cost_price, pack_cost in delivery_items:
-                    # Update inventory quantity and cost price
                     self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] += quantity
                     self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_COST_PRICE] = cost_price
 
                     sell_price = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_SELL_PRICE].values[0]
 
-                    # Create log entry
                     log_entries.append([item_id, ACTION_DELIVERY, quantity, timestamp, cost_price, sell_price, supplier, "", ""])
 
-                # Add all log entries
                 if log_entries:
                     new_log_df = pd.DataFrame(log_entries, columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON])
                     self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
 
-                # Save both files
                 if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
                     from conversions import requires_conversion, get_conversion
                     success_msg = f"Delivery from {supplier} saved successfully!\n\n"
@@ -2293,12 +2654,11 @@ class BarStockManagementSystem:
 
                     messagebox.showinfo("Success", success_msg)
 
-                    # Clear supplier
                     if hasattr(self, 'current_delivery_supplier'):
                         delattr(self, 'current_delivery_supplier')
 
                     self.update_dashboard_stats()
-                    self.create_main_menu()
+                    self.show_dashboard()
                 else:
                     messagebox.showerror("Error", "Failed to save delivery. Data may be inconsistent.")
 
@@ -2306,68 +2666,95 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", f"Delivery failed: {e}")
 
         def cancel_delivery():
-            """Cancel the delivery and return to main menu."""
             if delivery_items:
                 if not messagebox.askyesno("Cancel Delivery", f"You have {len(delivery_items)} items in this delivery.\nAre you sure you want to cancel?"):
                     return
 
             if hasattr(self, 'current_delivery_supplier'):
                 delattr(self, 'current_delivery_supplier')
-            self.create_main_menu()
+            self.show_dashboard()
 
-        # Buttons for entry frame
-        btn_frame = tk.Frame(entry_frame)
-        btn_frame.grid(row=8, column=0, columnspan=2, pady=15)
+        # Add/remove item buttons
+        add_remove_frame = self.themed_frame(item_card, bg=THEME_CARD)
+        add_remove_frame.pack(fill='x', padx=14, pady=(8, 12))
+        self.styled_button(add_remove_frame, "Add to Delivery", add_item_to_delivery,
+                           width=18, variant='primary').pack(side='left', padx=(0, 10))
+        self.styled_button(add_remove_frame, "Remove Selected", remove_selected_item,
+                           width=18, variant='ghost').pack(side='left')
 
-        tk.Button(btn_frame, text="Add to Delivery", command=add_item_to_delivery, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Remove Selected", command=remove_selected_item, width=15).pack(side=tk.LEFT, padx=5)
+        # Items in this delivery card
+        list_card = self._card(self.main_menu, title="Items in this Delivery")
+        list_card.pack(fill='both', expand=True, padx=20, pady=(0, 20))
 
-        # Bottom buttons
-        bottom_frame = tk.Frame(self.main_menu)
-        bottom_frame.pack(fill='x', padx=20, pady=20)
+        columns = ('item_id', 'item_name', 'quantity', 'new_stock', 'cost_price')
+        items_tree = ttk.Treeview(list_card, columns=columns, show='headings', height=10)
+        items_tree.heading('item_id', text='Item ID')
+        items_tree.heading('item_name', text='Name')
+        items_tree.heading('quantity', text='Qty Added')
+        items_tree.heading('new_stock', text='New Stock Level')
+        items_tree.heading('cost_price', text='Cost Price')
+        items_tree.column('item_id', width=80)
+        items_tree.column('item_name', width=120)
+        items_tree.column('quantity', width=70)
+        items_tree.column('new_stock', width=90)
+        items_tree.column('cost_price', width=80)
+        items_tree.pack(fill='both', expand=True, padx=14, pady=5)
 
-        tk.Button(bottom_frame, text="Save Delivery", command=save_delivery, width=20).pack(side=tk.LEFT, padx=5)
-        tk.Button(bottom_frame, text="Cancel", command=cancel_delivery, width=15).pack(side=tk.LEFT, padx=20)
+        scrollbar = ttk.Scrollbar(list_card, orient=tk.VERTICAL, command=items_tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        items_tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(items_tree)
 
-        # Force redraw so ttk.Combobox is visible immediately on macOS
+        total_frame = self.themed_frame(list_card, bg=THEME_CARD)
+        total_frame.pack(fill='x', padx=14, pady=(0, 10))
+        tk.Label(total_frame, text="Total Delivery Cost:", font=(THEME_FONT, 14, 'bold'),
+                 fg=THEME_TEXT, bg=THEME_CARD).pack(side='left')
+        total_cost_label = tk.Label(total_frame, text="£0.00", font=(THEME_FONT, 14, 'bold'),
+                                    fg=THEME_TEXT, bg=THEME_CARD)
+        total_cost_label.pack(side='right')
+
+        # Bottom actions
+        bottom_frame = self.themed_frame(self.main_menu)
+        bottom_frame.pack(fill='x', padx=20, pady=(0, 20))
+        self.styled_button(bottom_frame, "Save Delivery", save_delivery,
+                           width=18, variant='primary').pack(side='left', padx=(0, 10))
+        self.styled_button(bottom_frame, "Cancel", cancel_delivery,
+                           width=16, variant='ghost').pack(side='left')
+
         self.root.update_idletasks()
+        self._apply_legacy_theme()
 
     def add_sales(self):
         """Add sales with option to upload weekly report."""
         self.clear_main_menu()
 
         # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
+        header_frame = self.themed_frame(self.main_menu, height=60)
+        header_frame.pack(fill='x', pady=(0, 20))
         header_frame.pack_propagate(False)
+        self.themed_label(header_frame, "Add Sales", font=(THEME_FONT, 24, 'bold')).pack(side='left')
 
-        tk.Label(header_frame, text="Add Sales", font=('Arial', 16, 'bold')).pack(expand=True)
+        # Upload card
+        upload_card = self._card(self.main_menu, title="Upload Weekly Sales Report")
+        upload_card.pack(fill='x', padx=20, pady=(0, 20))
 
-        # Main frame
-        main_frame = tk.Frame(self.main_menu)
-        main_frame.pack(pady=10, padx=20, fill='both', expand=True)
+        self.themed_label(upload_card,
+                          "Upload CSV file with sales data to auto-populate transactions.",
+                          font=(THEME_FONT, 11), fg=THEME_TEXT, wraplength=700).pack(anchor='w', padx=14, pady=(8, 0))
+        self.themed_label(upload_card,
+                          "Expected format: Rank, Product, Member Qty, Member Sales, Non Member Qty, Non Member Sales, Qty, Sales",
+                          font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, wraplength=700).pack(anchor='w', padx=14, pady=(4, 8))
+        self.styled_button(upload_card, "Select Sales Report CSV", self.upload_sales_report,
+                           width=26, variant='primary').pack(anchor='w', padx=14, pady=(0, 12))
 
-        # Upload Sales Report Section
-        upload_frame = tk.LabelFrame(main_frame, text="Upload Weekly Sales Report", font=('Arial', 10, 'bold'))
-        upload_frame.pack(fill='x', pady=10)
+        # Recent uploads
+        self._section_title(self.main_menu, "Recent Uploads").pack(fill='x', padx=20, pady=(10, 10))
+        history_card = self._card(self.main_menu, title="Recent Uploads")
+        history_card.pack(fill='x', padx=20, pady=(0, 20))
 
-        tk.Label(upload_frame, text="Upload CSV file with sales data to auto-populate transactions.",
-                wraplength=500, justify='left').pack(pady=5)
-        tk.Label(upload_frame, text="Expected format: Rank, Product, Member Qty, Member Sales, Non Member Qty, Non Member Sales, Qty, Sales",
-                wraplength=500, justify='left', font=('Arial', 8)).pack(pady=2)
-
-        btn_frame = tk.Frame(upload_frame)
-        btn_frame.pack(pady=10)
-
-        tk.Button(btn_frame, text="Select Sales Report CSV", command=self.upload_sales_report, width=25).pack()
-
-        # Upload history
-        history_frame = tk.LabelFrame(upload_frame, text="Recent Uploads", font=('Arial', 9, 'bold'))
-        history_frame.pack(fill='x', padx=10, pady=5)
         if not self.log_df.empty and 'date_range' in self.log_df.columns:
             sales_uploads = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES]
             if not sales_uploads.empty:
-                # Aggregate per upload batch
                 has_member = COL_MEMBER_QTY in sales_uploads.columns
                 agg = {'quantity': 'sum', 'cost_price': 'count'}
                 if has_member:
@@ -2380,44 +2767,51 @@ class BarStockManagementSystem:
                 ).reset_index(drop=True)
                 recent = upload_batches.sort_values('timestamp', ascending=False).head(10)
                 if not recent.empty:
-                    for _, row in recent.iterrows():
-                        date_range = row['date_range'] if pd.notna(row['date_range']) else 'N/A'
-                        ts = row['timestamp'][:16] if pd.notna(row['timestamp']) else 'N/A'
-                        qty = row['total_qty']
-                        rev = row['total_revenue']
+                    for _, entry in recent.iterrows():
+                        date_range = entry['date_range'] if pd.notna(entry['date_range']) else 'N/A'
+                        ts = entry['timestamp'][:16] if pd.notna(entry['timestamp']) else 'N/A'
+                        qty = entry['total_qty']
+                        rev = entry['total_revenue']
 
-                        line1 = f"{date_range}  (uploaded {ts}, {int(row['items'])} items)"
+                        line1 = f"{date_range}  (uploaded {ts}, {int(entry['items'])} items)"
                         line2_parts = [f"Qty: {qty:.1f}", f"Revenue: £{rev:.2f}"]
                         if has_member:
-                            mem_qty = row.get(COL_MEMBER_QTY, 0)
-                            non_mem_qty = row.get(COL_NON_MEMBER_QTY, 0)
+                            mem_qty = entry.get(COL_MEMBER_QTY, 0)
+                            non_mem_qty = entry.get(COL_NON_MEMBER_QTY, 0)
                             if mem_qty > 0 or non_mem_qty > 0:
                                 line2_parts.append(f"Member: {mem_qty:.1f}  Non-Member: {non_mem_qty:.1f}")
                         line2 = "  " + "  |  ".join(line2_parts)
 
-                        tk.Label(history_frame, text=line1, font=('Arial', 9, 'bold'), anchor='w').pack(fill='x', padx=5)
-                        tk.Label(history_frame, text=line2, font=('Arial', 8), anchor='w', fg='gray').pack(fill='x', padx=5)
+                        row_frame = self.themed_frame(history_card, bg=THEME_CARD)
+                        row_frame.pack(fill='x', padx=14, pady=4)
+                        self.themed_label(row_frame, line1, font=(THEME_FONT, 10, 'bold'), fg=THEME_TEXT).pack(anchor='w')
+                        self.themed_label(row_frame, line2, font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED).pack(anchor='w')
                 else:
-                    tk.Label(history_frame, text="  No uploads yet", font=('Arial', 9), fg='gray').pack(padx=5, pady=2)
+                    self.themed_label(history_card, "No uploads yet", font=(THEME_FONT, 9),
+                                      fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
             else:
-                tk.Label(history_frame, text="  No uploads yet", font=('Arial', 9), fg='gray').pack(padx=5, pady=2)
+                self.themed_label(history_card, "No uploads yet", font=(THEME_FONT, 9),
+                                  fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
         else:
-            tk.Label(history_frame, text="  No uploads yet", font=('Arial', 9), fg='gray').pack(padx=5, pady=2)
+            self.themed_label(history_card, "No uploads yet", font=(THEME_FONT, 9),
+                              fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
 
-        # Manual Entry Section
-        manual_frame = tk.LabelFrame(main_frame, text="Manual Entry", font=('Arial', 10, 'bold'))
-        manual_frame.pack(fill='both', expand=True, pady=10)
+        # Manual entry card
+        manual_card = self._card(self.main_menu, title="Manual Entry")
+        manual_card.pack(fill='x', padx=20, pady=(0, 20))
 
-        tk.Label(manual_frame, text="Or add individual sales transaction:",
-                wraplength=500, justify='left').pack(pady=5)
-
-        tk.Button(manual_frame, text="Add Single Sale", command=lambda: self.process_transaction(ACTION_SALES), width=25).pack(pady=10)
+        self.themed_label(manual_card, "Or add individual sales transaction:",
+                          font=(THEME_FONT, 11), fg=THEME_TEXT).pack(anchor='w', padx=14, pady=(8, 0))
+        self.styled_button(manual_card, "Add Single Sale",
+                           lambda: self.process_transaction(ACTION_SALES),
+                           width=26, variant='secondary').pack(anchor='w', padx=14, pady=(8, 12))
 
         # Back button
-        back_frame = tk.Frame(self.main_menu)
-        back_frame.pack(fill='x', padx=20, pady=20)
+        back_frame = self.themed_frame(self.main_menu)
+        back_frame.pack(fill='x', padx=20, pady=(0, 20))
+        self.styled_button(back_frame, "Back", self.show_dashboard, width=20, variant='ghost').pack(side='left')
 
-        tk.Button(back_frame, text="Back", command=self.create_main_menu, width=25).pack()
+        self._apply_legacy_theme()
 
     def add_wastage(self):
         """Add wastage transactions (multi-item like delivery)."""
@@ -2441,7 +2835,7 @@ class BarStockManagementSystem:
 
         tk.Button(btn_frame, text="Create New Tab", command=self.create_open_tab_dialog, width=25).pack(pady=5)
         tk.Button(btn_frame, text="View / Close Tabs", command=self.view_open_tabs, width=25).pack(pady=5)
-        tk.Button(btn_frame, text="Back", command=self.create_main_menu, width=25).pack(pady=5)
+        tk.Button(btn_frame, text="Back", command=self.show_dashboard, width=25).pack(pady=5)
 
     def create_open_tab_dialog(self):
         """Dialog to create a new open tab (multi-item, customer name)."""
@@ -2469,7 +2863,7 @@ class BarStockManagementSystem:
         full_item_list = [f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}" for _, row in self.inventory_df.iterrows()]
         if not full_item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
-            self.create_main_menu()
+            self.show_dashboard()
             return
 
         tk.Label(entry_frame, text="Search:").grid(row=1, column=0, padx=5, pady=8, sticky="e")
@@ -2565,6 +2959,7 @@ class BarStockManagementSystem:
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         items_tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(items_tree)
 
         def add_item():
             selected = item_var.get()
@@ -2741,6 +3136,7 @@ class BarStockManagementSystem:
         scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=tabs_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         tabs_tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(tabs_tree)
 
         # Populate tree
         for tab_id, group in tab_groups:
@@ -2858,7 +3254,7 @@ class BarStockManagementSystem:
 
         if not full_item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
-            self.create_main_menu()
+            self.show_dashboard()
             return
 
         search_var = tk.StringVar()
@@ -2980,6 +3376,7 @@ class BarStockManagementSystem:
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         items_tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(items_tree)
 
         def add_item():
             selected = item_var.get()
@@ -3091,7 +3488,7 @@ class BarStockManagementSystem:
                     msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty, _ in transaction_items])
                     messagebox.showinfo("Success", msg)
                     self.update_dashboard_stats()
-                    self.create_main_menu()
+                    self.show_dashboard()
                 else:
                     messagebox.showerror("Error", "Failed to save. Data may be inconsistent.")
             except Exception as e:
@@ -3109,7 +3506,7 @@ class BarStockManagementSystem:
         tk.Button(bottom_frame, text="Save All", command=save_all, width=15).pack(side=tk.LEFT, padx=10)
         if action == ACTION_COMPLIMENTARY:
             tk.Button(bottom_frame, text="Upload CSV", command=self.upload_complimentary_report, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(bottom_frame, text="Back", command=self.create_main_menu, width=15).pack(side=tk.LEFT, padx=10)
+        tk.Button(bottom_frame, text="Back", command=self.show_dashboard, width=15).pack(side=tk.LEFT, padx=10)
 
         self.root.update_idletasks()
 
@@ -3204,6 +3601,8 @@ class BarStockManagementSystem:
         else:
             messagebox.showerror("Error", "Failed to save line clean data. Please try again.")
 
+        self._apply_legacy_theme()
+
     def process_transaction(self, action):
         """Process a transaction of the specified type."""
         self.clear_main_menu()
@@ -3227,7 +3626,7 @@ class BarStockManagementSystem:
 
         if not item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
-            self.create_main_menu()
+            self.show_dashboard()
             return
 
         item_var = tk.StringVar()
@@ -3400,7 +3799,7 @@ class BarStockManagementSystem:
 
                     messagebox.showinfo("Success", success_msg)
                     self.update_dashboard_stats()
-                    self.create_main_menu()
+                    self.show_dashboard()
                 else:
                     messagebox.showerror("Error", "Failed to save transaction. Data may be inconsistent.")
 
@@ -3411,7 +3810,7 @@ class BarStockManagementSystem:
         btn_frame.grid(row=3, column=0, columnspan=2, pady=20)
 
         tk.Button(btn_frame, text="Save Transaction", command=save_transaction, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Back", command=self.create_main_menu, width=15).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="Back", command=self.show_dashboard, width=15).pack(side=tk.LEFT, padx=10)
 
         # Force redraw so ttk.Combobox is visible immediately on macOS
         self.root.update_idletasks()
@@ -3425,104 +3824,226 @@ class BarStockManagementSystem:
         self.clear_main_menu()
 
         # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
+        header_frame = self.themed_frame(self.main_menu, height=60)
         header_frame.pack(fill='x', pady=(0, 10))
         header_frame.pack_propagate(False)
-
-        tk.Label(header_frame, text="Full Stocktake", font=('Arial', 16, 'bold')).pack(expand=True)
+        self.themed_label(header_frame, "Stocktake",
+                          font=(THEME_FONT, 20, 'bold')).pack(expand=True)
 
         self.refresh_data()
 
         if self.inventory_df.empty:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
-            self.create_main_menu()
+            self.show_dashboard()
             return
 
-        # Compact top controls frame (note + search on one row)
-        controls_frame = tk.Frame(self.main_menu, bg='#333333')
-        controls_frame.pack(fill='x', padx=10, pady=5)
+        # Controls card
+        controls_card = self._card(self.main_menu, title='Controls')
+        controls_card.pack(fill='x', padx=0, pady=(0, 10))
 
-        tk.Label(controls_frame, text="Note:", font=('Arial', 10, 'bold'), bg='#333333', fg='white').pack(side=tk.LEFT, padx=5)
-        note_entry = tk.Entry(controls_frame, width=25, bg='white', fg='black')
-        note_entry.pack(side=tk.LEFT, padx=5)
+        controls_row = self._form_row(controls_card)
 
-        tk.Button(controls_frame, text="Download PDF Sheet", command=self.download_stock_count_sheet,
-                  width=16, font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(15, 5))
+        note_col = self.themed_frame(controls_row, bg=THEME_CARD)
+        note_col.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
+        self.themed_label(note_col, "Note", font=(THEME_FONT, 10), bg=THEME_CARD).pack(anchor='w')
+        note_entry = tk.Entry(note_col, width=30, bg=THEME_CARD, fg=THEME_TEXT,
+                              insertbackground=THEME_TEXT, relief='solid', bd=1,
+                              highlightbackground=THEME_BORDER, highlightcolor=THEME_ACCENT)
+        note_entry.pack(fill='x')
 
-        tk.Label(controls_frame, text="Search:", font=('Arial', 10, 'bold'), bg='#333333', fg='white').pack(side=tk.LEFT, padx=(20, 5))
-        search_entry = tk.Entry(controls_frame, width=20, bg='white', fg='black')
-        search_entry.pack(side=tk.LEFT, padx=5)
+        search_col = self.themed_frame(controls_row, bg=THEME_CARD)
+        search_col.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
+        self.themed_label(search_col, "Search", font=(THEME_FONT, 10), bg=THEME_CARD).pack(anchor='w')
+        search_entry = tk.Entry(search_col, width=30, bg=THEME_CARD, fg=THEME_TEXT,
+                                insertbackground=THEME_TEXT, relief='solid', bd=1,
+                                highlightbackground=THEME_BORDER, highlightcolor=THEME_ACCENT)
+        search_entry.pack(fill='x')
 
-        # Table container
-        table_container = tk.Frame(self.main_menu, bg='#d0d0d0', bd=2, relief='solid')
-        table_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+        self.styled_button(controls_card, "Download PDF Sheet", self.download_stock_count_sheet,
+                           width=20, variant='secondary').pack(anchor='w', padx=14, pady=(0, 12))
 
-        # Column header
-        header_bg = '#d0d0d0'
-        col_config = [
-            ("Item", 35, 'w'),
-            ("Expected", 12, 'center'),
-            ("Counted", 12, 'center'),
-            ("Variance", 12, 'center')
-        ]
-        header_frame = tk.Frame(table_container, bg=header_bg)
-        header_frame.pack(fill='x')
-        for text, width, anchor in col_config:
-            tk.Label(header_frame, text=text, font=('Arial', 10, 'bold'),
-                     bg=header_bg, fg='black', width=width, anchor=anchor).pack(side=tk.LEFT, padx=(4, 0), pady=4)
+        # Items card
+        items_card = self._card(self.main_menu, title='Items')
+        items_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # Scrollable body
-        canvas = tk.Canvas(table_container, bg='#d0d0d0', highlightthickness=0)
-        scrollbar = ttk.Scrollbar(table_container, orient="vertical", command=canvas.yview)
-        scroll_frame = tk.Frame(canvas, bg='white')
+        tree_frame = self.themed_frame(items_card, bg=THEME_CARD)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
-        def on_canvas_configure(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-            canvas.coords(canvas_window, event.width / 2, 0)
-        canvas.bind("<Configure>", on_canvas_configure)
+        columns = ('item_name', 'expected', 'counted', 'variance', 'unit')
+        tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
+        tree.heading('item_name', text='ITEM')
+        tree.heading('expected', text='EXPECTED')
+        tree.heading('counted', text='COUNTED')
+        tree.heading('variance', text='VARIANCE')
+        tree.heading('unit', text='UNIT')
 
-        scroll_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="n")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        tree.column('item_name', width=220, anchor='w')
+        tree.column('expected', width=100, anchor='center')
+        tree.column('counted', width=100, anchor='center')
+        tree.column('variance', width=100, anchor='center')
+        tree.column('unit', width=120, anchor='center')
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree.tag_configure('success', foreground=THEME_SUCCESS)
+        tree.tag_configure('danger', foreground=THEME_DANGER)
+        tree.tag_configure('warning', foreground=THEME_WARNING)
+        tree.tag_configure('muted', foreground=THEME_TEXT_MUTED)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(tree)
 
-        # Mouse wheel scrolling
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        # Inline count editor, positioned over the Counted cell of the selected row
+        count_editor = tk.Entry(tree_frame, width=10, justify='center', font=(THEME_FONT, 11),
+                                bg=THEME_CARD, fg=THEME_TEXT, insertbackground=THEME_TEXT,
+                                relief='solid', bd=1,
+                                highlightbackground=THEME_ACCENT, highlightcolor=THEME_ACCENT)
 
-        # Row styling
-        row_bg_even = '#ffffff'
-        row_bg_odd = '#f0f0f0'
-
-        # Store widgets for saving
         item_entries = []
-        expected_system = {}  # item_id -> expected quantity in system units
+        counts = {}
+        iid_map = {}
+
+        def variance_info(counted_input, expected_system, factor):
+            if counted_input < 0:
+                return "Invalid", "danger"
+            counted_system = counted_input * factor
+            variance = counted_system - expected_system
+            if variance > 0:
+                return f"{variance:+.1f}", "success"
+            elif variance < 0:
+                return f"{variance:+.1f}", "danger"
+            else:
+                return "0.0", "muted"
+
+        def update_row(iid, text):
+            item_id = iid_map.get(iid)
+            if item_id is None:
+                return
+            entry = next((e for e in item_entries if e['iid'] == iid), None)
+            if entry is None:
+                return
+            counts[item_id] = text
+            if text.strip() == "":
+                tree.set(iid, 'counted', "—")
+                tree.set(iid, 'variance', "-")
+                tree.item(iid, tags=('muted',))
+                return
+            try:
+                counted_input = float(text)
+                var_text, var_tag = variance_info(counted_input, entry['expected_system'], entry['factor'])
+                tree.set(iid, 'counted', text)
+                tree.set(iid, 'variance', var_text)
+                tree.item(iid, tags=(var_tag,))
+            except ValueError:
+                tree.set(iid, 'counted', text)
+                tree.set(iid, 'variance', "Invalid")
+                tree.item(iid, tags=('danger',))
+
+        def place_editor():
+            selection = tree.selection()
+            if not selection:
+                count_editor.place_forget()
+                return
+            iid = selection[0]
+
+            def _do():
+                bbox = tree.bbox(iid, column='#3')
+                if bbox:
+                    count_editor.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
+                else:
+                    count_editor.place_forget()
+
+            tree.after_idle(_do)
+
+        def update_editor(iid=None, focus=False):
+            if iid is None:
+                selection = tree.selection()
+                if not selection:
+                    count_editor.place_forget()
+                    return
+                iid = selection[0]
+            if not tree.exists(iid):
+                count_editor.place_forget()
+                return
+            item_id = iid_map.get(iid)
+            count_editor.delete(0, tk.END)
+            if item_id is not None:
+                count_editor.insert(0, counts.get(item_id, ""))
+            place_editor()
+            if focus:
+                count_editor.focus_set()
+                count_editor.select_range(0, tk.END)
+
+        def move_editor(delta):
+            if not item_entries:
+                count_editor.place_forget()
+                return "break"
+            selection = tree.selection()
+            current_iid = selection[0] if selection else None
+            idx = next((i for i, e in enumerate(item_entries) if e['iid'] == current_iid), -1)
+            new_idx = idx + delta
+            if 0 <= new_idx < len(item_entries):
+                iid = item_entries[new_idx]['iid']
+                tree.selection_set(iid)
+                tree.see(iid)
+                update_editor(iid, focus=True)
+            elif new_idx >= len(item_entries):
+                save_btn.focus_set()
+            return "break"
+
+        def on_tree_select(event=None):
+            update_editor(focus=True)
+
+        def on_editor_change(event=None):
+            selection = tree.selection()
+            if not selection:
+                return
+            update_row(selection[0], count_editor.get())
+
+        def on_mousewheel(event):
+            delta = event.delta
+            if delta == 0:
+                return 'break'
+            if abs(delta) >= 120:
+                steps = int(-delta / 120)
+            else:
+                steps = -1 if delta > 0 else 1
+            tree.yview_scroll(steps, 'units')
+            place_editor()
+            return 'break'
+
+        def bind_mousewheel(widget):
+            widget.bind('<MouseWheel>', on_mousewheel)
+            widget.bind('<Button-4>', lambda e: (tree.yview_scroll(-1, 'units'), place_editor(), 'break')[-1])
+            widget.bind('<Button-5>', lambda e: (tree.yview_scroll(1, 'units'), place_editor(), 'break')[-1])
+
+        tree.bind('<<TreeviewSelect>>', on_tree_select)
+        tree.bind('<Configure>', lambda e: place_editor())
+        for widget in (tree, tree_frame, items_card, controls_card, self.main_menu):
+            bind_mousewheel(widget)
+        count_editor.bind('<KeyRelease>', on_editor_change)
+        count_editor.bind('<Tab>', lambda e: move_editor(1))
+        count_editor.bind('<Shift-Tab>', lambda e: move_editor(-1))
+        count_editor.bind('<Return>', lambda e: move_editor(1))
+        count_editor.bind('<Down>', lambda e: move_editor(1))
+        count_editor.bind('<Up>', lambda e: move_editor(-1))
+        count_editor.bind('<MouseWheel>', on_mousewheel)
 
         def build_table():
-            # Clear existing rows
-            for widget in scroll_frame.winfo_children():
-                widget.destroy()
+            tree.delete(*tree.get_children())
             item_entries.clear()
-
+            iid_map.clear()
             search_text = search_entry.get().strip().lower()
 
-            row_idx = 0
             for _, row in self.inventory_df.iterrows():
                 item_id = row[COL_ITEM_ID]
                 item_name = row[COL_ITEM_NAME]
                 current_stock = row[COL_QUANTITY]
 
-                # Skip excluded/hidden items
                 if is_hidden_from_stock_view(item_id):
                     continue
 
-                # Apply search filter
                 if search_text and search_text not in item_name.lower() and search_text not in item_id.lower():
                     continue
 
@@ -3535,107 +4056,43 @@ class BarStockManagementSystem:
                     expected_text = f"{current_stock:.1f} {row[COL_MEASURE]}s"
                     factor = 1
                     input_unit = row[COL_MEASURE]
-                    expected_input = current_stock
 
-                expected_system[item_id] = current_stock
-                bg_color = row_bg_even if row_idx % 2 == 0 else row_bg_odd
-
-                # Row container
-                row_frame = tk.Frame(scroll_frame, bg=bg_color, bd=1, relief='solid')
-                row_frame.pack(fill='x')
-
-                # Item name
-                tk.Label(row_frame, text=item_name[:35], font=('Arial', 10),
-                         bg=bg_color, fg='black', width=35, anchor='w').pack(side=tk.LEFT, padx=(6, 0), pady=4)
-
-                # Expected
-                tk.Label(row_frame, text=expected_text, font=('Arial', 10),
-                         bg=bg_color, fg='black', width=12, anchor='center').pack(side=tk.LEFT, padx=(4, 0), pady=4)
-
-                # Counted entry
-                count_entry = tk.Entry(row_frame, font=('Arial', 10), width=12, justify='center',
-                                       relief='solid', bd=1, bg='white', fg='black')
-                count_entry.pack(side=tk.LEFT, padx=(4, 0), pady=4)
-
-                # Variance
-                var_lbl = tk.Label(row_frame, text="-", font=('Arial', 10, 'bold'),
-                                   bg=bg_color, fg='black', width=12, anchor='center')
-                var_lbl.pack(side=tk.LEFT, padx=(4, 0), pady=4)
-
-                # Unit hint for converted items
-                if requires_conversion(item_id):
-                    unit_hint = tk.Label(row_frame, text=f"Enter {input_unit}s",
-                                         font=('Arial', 8), bg=bg_color, fg='gray', width=12, anchor='center')
+                count_val = counts.get(item_id, "")
+                if count_val == "":
+                    var_text, var_tag = "-", "muted"
                 else:
-                    unit_hint = tk.Label(row_frame, text=f"Enter {input_unit}s",
-                                         font=('Arial', 8), bg=bg_color, fg='gray', width=12, anchor='center')
-                unit_hint.pack(side=tk.LEFT, padx=(4, 0), pady=4)
+                    try:
+                        var_text, var_tag = variance_info(float(count_val), current_stock, factor)
+                    except ValueError:
+                        var_text, var_tag = "Invalid", "danger"
 
-                def make_update(var_lbl, exp_sys, conv_factor, ent):
-                    def update_variance(*args):
-                        val = ent.get().strip()
-                        if not val:
-                            var_lbl.config(text="-", fg='black')
-                            return
-                        try:
-                            counted_input = float(val)
-                            if counted_input < 0:
-                                var_lbl.config(text="Invalid", fg='red')
-                                return
-                            counted_system = counted_input * conv_factor if conv_factor != 1 else counted_input
-                            variance = counted_system - exp_sys
-                            var_text = f"{variance:+.1f}"
-                            if variance > 0:
-                                var_lbl.config(text=var_text, fg='green')
-                            elif variance < 0:
-                                var_lbl.config(text=var_text, fg='red')
-                            else:
-                                var_lbl.config(text="0.0", fg='black')
-                        except ValueError:
-                            var_lbl.config(text="Invalid", fg='red')
-                    return update_variance
-
-                update_fn = make_update(var_lbl, current_stock, factor if requires_conversion(item_id) else 1, count_entry)
-                count_entry.bind("<KeyRelease>", update_fn)
-
+                unit_text = f"Enter {input_unit}s"
+                iid = tree.insert('', tk.END, values=(
+                    item_name[:35], expected_text,
+                    "—" if count_val == "" else count_val,
+                    var_text, unit_text), tags=(var_tag,))
                 item_entries.append({
+                    'iid': iid,
                     'item_id': item_id,
-                    'entry': count_entry,
-                    'var_label': var_lbl,
                     'expected_system': current_stock,
-                    'factor': factor if requires_conversion(item_id) else 1,
-                    'input_unit': input_unit
+                    'factor': factor,
+                    'input_unit': input_unit,
                 })
-                row_idx += 1
+                iid_map[iid] = item_id
 
-            # Tab/Enter navigation
-            for i, item in enumerate(item_entries):
-                def make_tab_handler(next_entry):
-                    def on_tab(event):
-                        next_entry.focus_set()
-                        next_entry.select_range(0, tk.END)
-                        return "break"
-                    return on_tab
-                if i < len(item_entries) - 1:
-                    item['entry'].bind("<Return>", make_tab_handler(item_entries[i + 1]['entry']))
-                    item['entry'].bind("<Tab>", make_tab_handler(item_entries[i + 1]['entry']))
-                else:
-                    def on_last_tab(event):
-                        save_btn.focus_set()
-                        return "break"
-                    item['entry'].bind("<Return>", on_last_tab)
-                    item['entry'].bind("<Tab>", on_last_tab)
-
-            scroll_frame.update_idletasks()
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.yview_moveto(0)
+            tree.yview_moveto(0)
+            if item_entries:
+                tree.selection_set(item_entries[0]['iid'])
+                update_editor(item_entries[0]['iid'], focus=False)
+            else:
+                count_editor.place_forget()
 
         build_table()
-        canvas.yview_moveto(0)
-        search_entry.bind("<KeyRelease>", lambda e: build_table())
+        if item_entries:
+            update_editor(item_entries[0]['iid'], focus=True)
+        search_entry.bind('<KeyRelease>', lambda e: build_table())
 
         def save_stocktake():
-            # Pre-stocktake backup
             from data_manager import create_backup
             backup_path = create_backup('before_stocktake')
             if backup_path:
@@ -3648,7 +4105,7 @@ class BarStockManagementSystem:
             errors = 0
 
             for item in item_entries:
-                val = item['entry'].get().strip()
+                val = counts.get(item['item_id'], '').strip()
                 if not val:
                     skipped += 1
                     continue
@@ -3675,19 +4132,18 @@ class BarStockManagementSystem:
                 if errors > 0:
                     msg += f"\nErrors: {errors} items"
                 messagebox.showinfo("Success", msg)
-                self.create_main_menu()
+                self.show_dashboard()
             else:
                 if errors > 0:
                     messagebox.showwarning("No Valid Entries", f"No valid counted quantities entered.\nErrors: {errors} items")
                 else:
                     messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
 
-        def set_baseline_from_stocktake():
-            """Save stocktake and reset baseline: archive old transactions, log baselines."""
-            # Collect counted items first
+        def collect_counted_items():
+            """Return a list of valid counted items from the table."""
             counted_items = []
             for item in item_entries:
-                val = item['entry'].get().strip()
+                val = counts.get(item['item_id'], '').strip()
                 if not val:
                     continue
                 try:
@@ -3703,12 +4159,10 @@ class BarStockManagementSystem:
                     })
                 except ValueError:
                     continue
+            return counted_items
 
-            if not counted_items:
-                messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
-                return
-
-            # Unit warning: if any converted item count is suspiciously small, confirm unit
+        def confirm_unit_warning(counted_items):
+            """Return False if user cancels because of suspicious units."""
             suspicious = []
             for item in counted_items:
                 if requires_conversion(item['item_id']) and item['input_value'] < 0.5:
@@ -3720,12 +4174,57 @@ class BarStockManagementSystem:
                     "\n\nPlease confirm you entered the counts in the correct input unit (not measures/pints)."
                 )
                 if not messagebox.askyesno("Unit Check", warn_msg + "\n\nDo you want to continue anyway?"):
-                    return
+                    return False
+            return True
 
-            # Confirm with user
+        def save_and_set_baseline():
+            """Save stocktake, keep counts in memory, then immediately set as new baseline."""
+            from data_manager import create_backup
+            backup_path = create_backup('before_baseline_reset')
+            if backup_path:
+                print(f"Pre-baseline backup created: {backup_path}")
+
             note = note_entry.get().strip()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            confirm_msg = (
+
+            # Step 1: save stocktake snapshot
+            recorded = 0
+            skipped = 0
+            errors = 0
+            for item in item_entries:
+                val = counts.get(item['item_id'], '').strip()
+                if not val:
+                    skipped += 1
+                    continue
+                try:
+                    counted_input = float(val)
+                    if counted_input < 0:
+                        errors += 1
+                        continue
+                    counted_system = counted_input * item['factor']
+                    variance = counted_system - item['expected_system']
+                    success = record_stocktake(
+                        item['item_id'], counted_system, item['expected_system'],
+                        variance, timestamp, note
+                    )
+                    if success:
+                        recorded += 1
+                    else:
+                        errors += 1
+                except ValueError:
+                    errors += 1
+
+            # Step 2: set baseline from same counts
+            counted_items = collect_counted_items()
+            if not counted_items:
+                messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
+                return
+
+            if not confirm_unit_warning(counted_items):
+                return
+
+            if not messagebox.askyesno(
+                "Confirm Baseline Reset",
                 f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} items).\n\n"
                 f"This will:\n"
                 f"  1. Save the stocktake snapshot\n"
@@ -3735,34 +4234,15 @@ class BarStockManagementSystem:
                 f"Old transactions will be preserved in an archive table for audit purposes.\n\n"
                 f"Reports from now on will only consider transactions from today onward.\n\n"
                 f"Are you sure you want to proceed?"
-            )
-            if not messagebox.askyesno("Confirm Baseline Reset", confirm_msg):
+            ):
                 return
 
-            # Step 1: Pre-reset backup
-            from data_manager import create_backup
-            backup_path = create_backup('before_baseline_reset')
-            if backup_path:
-                print(f"Pre-baseline backup created: {backup_path}")
-
-            # Step 2: Save stocktake normally
-            saved_count = 0
-            for item in counted_items:
-                success = record_stocktake(
-                    item['item_id'], item['counted_system'], 0,
-                    item['counted_system'], timestamp, note + " (Baseline)"
-                )
-                if success:
-                    saved_count += 1
-
-            # Step 3: Archive old transactions
             from data_manager import archive_transactions_before_date, add_baseline_reset
             archived_count = archive_transactions_before_date(timestamp)
             if archived_count < 0:
                 messagebox.showerror("Error", "Failed to archive transactions. Baseline reset aborted.")
                 return
 
-            # Step 4: Log baseline transactions
             baseline_logged = 0
             try:
                 with AtomicTransaction() as txn:
@@ -3779,7 +4259,84 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", f"Failed to log baseline transactions: {e}")
                 return
 
-            # Step 5: Record the reset event
+            add_baseline_reset(timestamp, len(counted_items), archived_count, note)
+
+            msg = (
+                f"Stocktake saved and baseline reset complete!\n\n"
+                f"Stocktake recorded: {recorded} items\n"
+                f"Skipped (blank): {skipped} items\n"
+                f"Transactions archived: {archived_count}\n"
+                f"Baseline entries logged: {baseline_logged}\n\n"
+                f"From now on, all reports will calculate expected stock\n"
+                f"using only transactions from {timestamp} onward."
+            )
+            if errors > 0:
+                msg += f"\nErrors: {errors} items"
+            messagebox.showinfo("Save & Baseline Complete", msg)
+            self.show_dashboard()
+
+        def set_baseline_from_stocktake():
+            """Save stocktake and reset baseline: archive old transactions, log baselines."""
+            counted_items = collect_counted_items()
+            if not counted_items:
+                messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
+                return
+
+            if not confirm_unit_warning(counted_items):
+                return
+
+            note = note_entry.get().strip()
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if not messagebox.askyesno(
+                "Confirm Baseline Reset",
+                f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} items).\n\n"
+                f"This will:\n"
+                f"  1. Save the stocktake snapshot\n"
+                f"  2. Archive ALL transactions before {timestamp}\n"
+                f"  3. Set inventory to your counted quantities\n"
+                f"  4. Log ACTION_STOCKTAKE_BASELINE transactions as the new starting point\n\n"
+                f"Old transactions will be preserved in an archive table for audit purposes.\n\n"
+                f"Reports from now on will only consider transactions from today onward.\n\n"
+                f"Are you sure you want to proceed?"
+            ):
+                return
+
+            from data_manager import create_backup
+            backup_path = create_backup('before_baseline_reset')
+            if backup_path:
+                print(f"Pre-baseline backup created: {backup_path}")
+
+            saved_count = 0
+            for item in counted_items:
+                success = record_stocktake(
+                    item['item_id'], item['counted_system'], 0,
+                    item['counted_system'], timestamp, note + " (Baseline)"
+                )
+                if success:
+                    saved_count += 1
+
+            from data_manager import archive_transactions_before_date, add_baseline_reset
+            archived_count = archive_transactions_before_date(timestamp)
+            if archived_count < 0:
+                messagebox.showerror("Error", "Failed to archive transactions. Baseline reset aborted.")
+                return
+
+            baseline_logged = 0
+            try:
+                with AtomicTransaction() as txn:
+                    for item in counted_items:
+                        txn.log_transaction(
+                            item_id=item['item_id'],
+                            action=ACTION_STOCKTAKE_BASELINE,
+                            quantity=item['counted_system'],
+                            timestamp=timestamp,
+                            reason=f"Baseline from physical count: {item['input_value']:.1f} {item['input_unit']}s"
+                        )
+                        baseline_logged += 1
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to log baseline transactions: {e}")
+                return
+
             add_baseline_reset(timestamp, saved_count, archived_count, note)
 
             msg = (
@@ -3791,22 +4348,26 @@ class BarStockManagementSystem:
                 f"using only transactions from {timestamp} onward."
             )
             messagebox.showinfo("Baseline Reset Complete", msg)
-            self.create_main_menu()
+            self.show_dashboard()
 
         def back():
-            canvas.unbind_all("<MouseWheel>")
-            self.create_main_menu()
+            tree.unbind('<MouseWheel>')
+            count_editor.place_forget()
+            self.show_dashboard()
 
-        # Buttons at bottom
-        btn_frame = tk.Frame(self.main_menu, bg='#333333')
-        btn_frame.pack(pady=10, fill='x')
+        # Bottom actions
+        actions_frame = self.themed_frame(self.main_menu)
+        actions_frame.pack(fill='x', pady=(0, 10))
 
-        save_btn = tk.Button(btn_frame, text="Save Stocktake", command=save_stocktake, width=18, font=('Arial', 10, 'bold'))
-        save_btn.pack(side=tk.LEFT, padx=10)
-        baseline_btn = tk.Button(btn_frame, text="Set as New Baseline", command=set_baseline_from_stocktake, width=20, font=('Arial', 10, 'bold'), fg='#cc6600')
-        baseline_btn.pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Back", command=back, width=15, font=('Arial', 10)).pack(side=tk.LEFT, padx=10)
+        save_btn = self.styled_button(actions_frame, "Save Stocktake", save_stocktake, width=18, variant='primary')
+        save_btn.pack(side=tk.LEFT, padx=(0, 10))
+        baseline_btn = self.styled_button(actions_frame, "Set as New Baseline", set_baseline_from_stocktake, width=22, variant='secondary')
+        baseline_btn.pack(side=tk.LEFT, padx=(0, 10))
+        save_baseline_btn = self.styled_button(actions_frame, "Save & Set Baseline", save_and_set_baseline, width=22, variant='primary')
+        save_baseline_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.styled_button(actions_frame, "Back", back, width=12, variant='ghost').pack(side=tk.LEFT)
 
+        self._apply_legacy_theme()
     def download_stock_count_sheet(self):
         """Generate and download a printable stock count sheet PDF."""
         try:
@@ -3913,6 +4474,7 @@ class BarStockManagementSystem:
         del_scroll = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=del_tree.yview)
         del_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         del_tree.configure(yscrollcommand=del_scroll.set)
+        self._bind_treeview_mousewheel(del_tree)
 
         # Right - Items in selected delivery
         right_frame = tk.LabelFrame(main_frame, text="Items in Selected Delivery", font=('Arial', 10, 'bold'))
@@ -3934,6 +4496,7 @@ class BarStockManagementSystem:
         item_scroll = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=item_tree.yview)
         item_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         item_tree.configure(yscrollcommand=item_scroll.set)
+        self._bind_treeview_mousewheel(item_tree)
 
         # Populate deliveries
         delivery_groups = {}
@@ -4014,6 +4577,8 @@ class BarStockManagementSystem:
         tk.Button(btn_frame, text="Edit Selected", command=edit_selected_delivery, width=15).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Delete Selected", command=delete_selected_delivery, width=15).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack(side=tk.LEFT, padx=20)
+
+        self._apply_legacy_theme()
 
     def edit_delivery_dialog(self, timestamp, delivery_group):
         """Open a dialog to edit a delivery's items."""
@@ -4201,7 +4766,9 @@ class BarStockManagementSystem:
         btn_frame = tk.Frame(self.main_menu)
         btn_frame.pack(pady=20)
 
-        tk.Button(btn_frame, text="Back to Main Menu", command=self.create_main_menu, width=25).pack()
+        tk.Button(btn_frame, text="Back to Main Menu", command=self.show_dashboard, width=25).pack()
+
+        self._apply_legacy_theme()
 
     def view_transaction_log(self):
         """View the complete transaction log."""
@@ -4250,6 +4817,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=log_tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             log_tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(log_tree)
 
             # Sort by timestamp descending
             if not self.log_df.empty and COL_TIMESTAMP in self.log_df.columns:
@@ -4279,6 +4847,8 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def generate_gp_report(self):
         """Generate and display the Gross Profit report."""
@@ -4342,6 +4912,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             report_tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(report_tree)
 
             # Configure alternating row colors
             report_tree.tag_configure('oddrow', background='#f9f9f9')
@@ -4390,6 +4961,8 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def generate_surplus_report(self):
         """Generate and display the Surplus/Variance Report."""
@@ -4448,6 +5021,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             report_tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(report_tree)
 
             # Insert data
             for _, row in report_df.iterrows():
@@ -4469,6 +5043,8 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def generate_division_report(self):
         """Generate and display sales by Division/Category report."""
@@ -4544,6 +5120,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             report_tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(report_tree)
 
             # Insert data
             for _, row in division_summary.iterrows():
@@ -4588,6 +5165,8 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def generate_draught_yield_report(self):
         """Generate and display the Draught Yield Report."""
@@ -4896,6 +5475,8 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
 
+        self._apply_legacy_theme()
+
     def generate_price_history_report(self):
         """Generate and display price history report from delivery transactions."""
         self.clear_main_menu()
@@ -4958,6 +5539,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(tree)
 
             for row in report_data:
                 change_str = f"{'+' if row['change'] >= 0 else ''}{row['change']:.2f} ({row['change_pct']:.1f}%)"
@@ -4997,7 +5579,7 @@ class BarStockManagementSystem:
                     self.cell(0, 10, 'Prestonfield Golf Club - Price History Report', 0, 1, 'C')
                     self.set_font('Arial', '', 10)
                     self.set_text_color(100, 100, 100)
-                    self.cell(0, 5, f'Generated: {datetime.now().strftime("%d %B %Y at %H:%M")}', 0, 1, 'C')
+                    self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
                     self.ln(5)
 
                 def footer(self):
@@ -5109,7 +5691,9 @@ class BarStockManagementSystem:
         btn_frame = tk.Frame(self.main_menu)
         btn_frame.pack(side='bottom', fill='x', pady=10)
 
-        tk.Button(btn_frame, text="Back to Menu", command=self.create_main_menu, width=15).pack()
+        tk.Button(btn_frame, text="Back to Menu", command=self.show_dashboard, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def _create_category_sales_tab(self, notebook):
         """Create the Sales by Category tab."""
@@ -5182,6 +5766,7 @@ class BarStockManagementSystem:
 
         tree.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
+        self._bind_treeview_mousewheel(tree)
 
         for _, row in category_sales.iterrows():
             tree.insert('', tk.END, values=(
@@ -5240,6 +5825,7 @@ class BarStockManagementSystem:
         fast_tree.configure(yscrollcommand=fast_scroll.set)
         fast_tree.pack(side='left', fill='both', expand=True)
         fast_scroll.pack(side='right', fill='y')
+        self._bind_treeview_mousewheel(fast_tree)
 
         for _, row in fast_movers.iterrows():
             fast_tree.insert('', tk.END, values=(
@@ -5261,6 +5847,7 @@ class BarStockManagementSystem:
         slow_tree.configure(yscrollcommand=slow_scroll.set)
         slow_tree.pack(side='left', fill='both', expand=True)
         slow_scroll.pack(side='right', fill='y')
+        self._bind_treeview_mousewheel(slow_tree)
 
         for _, row in slow_movers.iterrows():
             slow_tree.insert('', tk.END, values=(
@@ -5416,6 +6003,7 @@ class BarStockManagementSystem:
 
         tree.pack(side='left', fill='x', expand=True)
         scrollbar.pack(side='right', fill='y')
+        self._bind_treeview_mousewheel(tree)
 
         for _, row in category_profit.iterrows():
             tree.insert('', tk.END, values=(
@@ -5471,6 +6059,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(tree)
 
             for item in report_data:
                 tree.insert('', tk.END, values=(
@@ -5496,6 +6085,8 @@ class BarStockManagementSystem:
         btn_frame = tk.Frame(self.main_menu)
         btn_frame.pack(pady=10)
         tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._apply_legacy_theme()
 
     def generate_stock_order_sheet(self):
         """Generate the custom printable stock order sheet PDF."""
@@ -5551,11 +6142,11 @@ class BarStockManagementSystem:
             tk.Label(header_frame, text="Period Comparison Report", font=('Arial', 16, 'bold')).pack(expand=True)
 
             if start_a and end_a:
-                period_a_text = f"{start_a.strftime('%d/%m/%Y')} - {end_a.strftime('%d/%m/%Y')}"
+                period_a_text = f"{start_a.strftime(DATE_FORMAT_DISPLAY)} - {end_a.strftime(DATE_FORMAT_DISPLAY)}"
             else:
                 period_a_text = "All Time"
             if start_b and end_b:
-                period_b_text = f"{start_b.strftime('%d/%m/%Y')} - {end_b.strftime('%d/%m/%Y')}"
+                period_b_text = f"{start_b.strftime(DATE_FORMAT_DISPLAY)} - {end_b.strftime(DATE_FORMAT_DISPLAY)}"
             else:
                 period_b_text = "All Time"
 
@@ -5602,6 +6193,7 @@ class BarStockManagementSystem:
             scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             tree.configure(yscrollcommand=scrollbar.set)
+            self._bind_treeview_mousewheel(tree)
 
             for _, row in report_df.iterrows():
                 delta_gp_pct_str = f"{row['delta_gp_pct']:+.1f}%" if row['total_revenue_a'] != 0 else '-'
@@ -5713,7 +6305,7 @@ class BarStockManagementSystem:
                         if isinstance(period, str) and ' - ' in period:
                             try:
                                 parts = period.split(' - ')
-                                p_end = datetime.strptime(parts[1].strip(), '%d/%m/%Y').replace(hour=23, minute=59, second=59)
+                                p_end = parse_display_date(parts[1].strip()).replace(hour=23, minute=59, second=59)
                                 return p_end > end_date
                             except Exception:
                                 pass
@@ -5752,6 +6344,7 @@ class BarStockManagementSystem:
             pdf.output(filepath)
 
             messagebox.showinfo("Report Generated", f"Comprehensive PDF report saved to:\n{filepath}\n\nThe report includes:\n• Stock Summary by Division\n• Sales Performance\n• Wastage & Complimentary Summary\n• Draught Yield Report\n• Financial Summary with Totals\n• Stocktake Variance Report (if recorded)")
+            self._apply_legacy_theme()
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate report: {e}")
@@ -5878,6 +6471,8 @@ class BarStockManagementSystem:
             else:
                 messagebox.showerror("Error", "Failed to save inventory.")
 
+            self._apply_legacy_theme()
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to initialize stock: {e}")
 
@@ -5932,6 +6527,7 @@ class BarStockManagementSystem:
         tk.Button(btn_frame, text="Cancel", command=top.destroy, width=15).pack(side='left', padx=10)
 
         top.update_idletasks()
+        self._apply_legacy_theme()
 
     def reset_system(self):
         """Reset all system data while preserving stock items.
@@ -5973,6 +6569,8 @@ class BarStockManagementSystem:
             else:
                 messagebox.showerror("Error", "Failed to complete reset. Some historical data may remain.")
 
+            self._apply_legacy_theme()
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to reset system: {e}")
 
@@ -5999,6 +6597,7 @@ class BarStockManagementSystem:
             tree.column('name', width=300)
             tree.column('size', width=80, anchor='center')
             tree.pack(fill='both', expand=True, padx=10, pady=5)
+            self._bind_treeview_mousewheel(tree)
 
             for b in backups:
                 tree.insert('', tk.END, values=(b['timestamp'], b['name'], b['size_kb']))
@@ -6031,6 +6630,8 @@ class BarStockManagementSystem:
             btn_frame.pack(pady=10)
             tk.Button(btn_frame, text="Restore Selected", command=do_restore, width=15).pack(side=tk.LEFT, padx=5)
             tk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
+
+            self._apply_legacy_theme()
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open restore dialog: {e}")
@@ -6068,7 +6669,7 @@ class BarStockManagementSystem:
             start_date, end_date = self.parse_date_range_from_filename(filepath)
             date_range_str = ""
             if start_date and end_date:
-                date_range_str = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
+                date_range_str = f"{start_date.strftime(DATE_FORMAT_DISPLAY)} - {end_date.strftime(DATE_FORMAT_DISPLAY)}"
 
             # Duplicate guard
             with open(filepath, 'rb') as f:
@@ -6171,7 +6772,7 @@ class BarStockManagementSystem:
                             skipped_items.append(product_name)
                             continue
 
-                    if should_exclude(item_id) and not has_parent_stock(item_id):
+                    if should_exclude(item_id) and not has_parent_stock(item_id) and item_id not in SALES_INCLUDED_EXCLUDED_ITEMS:
                         skipped_items.append(f"{product_name} (excluded)")
                         continue
 
@@ -6306,6 +6907,7 @@ class BarStockManagementSystem:
             sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
             sb.pack(side=tk.RIGHT, fill=tk.Y)
             tree.configure(yscrollcommand=sb.set)
+            self._bind_treeview_mousewheel(tree)
 
             for p in preview_items:
                 tag = 'negative' if p['projected'] < 0 and not p['has_parent'] else ''
@@ -6422,7 +7024,7 @@ class BarStockManagementSystem:
             start_date, end_date = self.parse_date_range_from_filename(filepath)
             date_range_str = ""
             if start_date and end_date:
-                date_range_str = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
+                date_range_str = f"{start_date.strftime(DATE_FORMAT_DISPLAY)} - {end_date.strftime(DATE_FORMAT_DISPLAY)}"
 
             # Duplicate guard
             with open(filepath, 'rb') as f:
@@ -6487,7 +7089,7 @@ class BarStockManagementSystem:
                             skipped_items.append(product_name)
                             continue
 
-                    if should_exclude(item_id) and not has_parent_stock(item_id):
+                    if should_exclude(item_id) and not has_parent_stock(item_id) and item_id not in SALES_INCLUDED_EXCLUDED_ITEMS:
                         skipped_items.append(f"{product_name} (excluded)")
                         continue
 
@@ -6579,6 +7181,7 @@ class BarStockManagementSystem:
             sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
             sb.pack(side=tk.RIGHT, fill=tk.Y)
             tree.configure(yscrollcommand=sb.set)
+            self._bind_treeview_mousewheel(tree)
 
             for p in preview_items:
                 tag = 'negative' if p['projected'] < 0 and not p['has_parent'] else ''
@@ -6664,7 +7267,7 @@ class BarStockManagementSystem:
                         success_msg += "\n" + "\n".join(skipped_items[:10]) + f"\n... and {len(skipped_items) - 10} more"
 
                 messagebox.showinfo("Success", success_msg)
-                self.create_main_menu()
+                self.show_dashboard()
             else:
                 messagebox.showerror("Error", "Failed to save transactions.")
         except Exception as e:

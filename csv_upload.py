@@ -18,11 +18,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from actions import ACTION_SALES, ACTION_COMPLIMENTARY, ACTION_PARENT_STOCK_ADJ
-from categories import should_exclude
+from categories import should_exclude, SALES_INCLUDED_EXCLUDED_ITEMS
 from sales_mapping import (
     has_parent_stock, check_apply_sale_to_parent, apply_sale_to_parent,
     normalize_product_name, resolve_epos_item_id, get_effective_cost_price,
 )
+from conversions import DATE_FORMAT_DISPLAY
 from data_manager import COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE
 from data_manager import COL_ACTION, COL_TIMESTAMP, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON
 from data_manager import COL_MEMBER_QTY, COL_NON_MEMBER_QTY
@@ -152,7 +153,7 @@ def parse_sales_csv(
     start_date, end_date = parse_date_range_from_filename(filepath)
     date_range_str = ""
     if start_date and end_date:
-        date_range_str = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
+        date_range_str = f"{start_date.strftime(DATE_FORMAT_DISPLAY)} - {end_date.strftime(DATE_FORMAT_DISPLAY)}"
 
     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
         raw_lines = f.readlines()
@@ -203,7 +204,7 @@ def parse_sales_csv(
                 continue
             item_id = resolved
 
-            if should_exclude(item_id) and not has_parent_stock(item_id):
+            if should_exclude(item_id) and not has_parent_stock(item_id) and item_id not in SALES_INCLUDED_EXCLUDED_ITEMS:
                 skipped_items.append(f"{product_name} (excluded)")
                 continue
 
@@ -244,7 +245,7 @@ def parse_complimentary_csv(
     start_date, end_date = parse_date_range_from_filename(filepath)
     date_range_str = ""
     if start_date and end_date:
-        date_range_str = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
+        date_range_str = f"{start_date.strftime(DATE_FORMAT_DISPLAY)} - {end_date.strftime(DATE_FORMAT_DISPLAY)}"
 
     comp_df = pd.read_csv(filepath, compression=None)
     comp_df.columns = [col.strip() for col in comp_df.columns]
@@ -285,7 +286,7 @@ def parse_complimentary_csv(
                 continue
             item_id = resolved
 
-            if should_exclude(item_id) and not has_parent_stock(item_id):
+            if should_exclude(item_id) and not has_parent_stock(item_id) and item_id not in SALES_INCLUDED_EXCLUDED_ITEMS:
                 skipped_items.append(f"{product_name} (excluded)")
                 continue
 

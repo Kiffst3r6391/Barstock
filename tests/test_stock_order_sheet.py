@@ -9,6 +9,7 @@ import pytest
 
 from reports import build_stock_order_sheet_data
 from actions import ACTION_DELIVERY
+from conversions import DATE_FORMAT_DISPLAY
 from data_manager import (
     COL_ITEM_ID,
     COL_ITEM_NAME,
@@ -140,7 +141,8 @@ class TestStockOrderSheetData:
 
         # Budweiser has two deliveries - should use the most recent one
         assert by_id["budweiser"]["last_delivery_supplier"] == "Booker"
-        assert by_id["budweiser"]["last_delivery_date"] == delivery_log.iloc[0][COL_TIMESTAMP][:10]
+        expected_date = datetime.strptime(delivery_log.iloc[0][COL_TIMESTAMP][:10], '%Y-%m-%d').strftime(DATE_FORMAT_DISPLAY)
+        assert by_id["budweiser"]["last_delivery_date"] == expected_date
 
         assert by_id["tennents_lager"]["last_delivery_supplier"] == "Tennents"
         assert by_id["belhaven_best"]["last_delivery_supplier"] == "Belhaven"
