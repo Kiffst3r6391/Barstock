@@ -1,4 +1,4 @@
-#!/usr/bin/,nv python3
+#!/usr/bin/env python3
 """
 Build script to create a launchable macOS app from the Bar Stock Management System.
 
@@ -111,8 +111,6 @@ def build_with_pyinstaller():
         '--add-data', 'pdf_generator.py:.',
         '--add-data', 'reports.py:.',
         '--add-data', 'inventory_sync.py:.',
-        '--add-data', 'stock_service.py:.',
-        '--add-data', 'csv_upload.py:.',
         # Hidden imports
         '--hidden-import', 'pandas',
         '--hidden-import', 'numpy',
@@ -143,8 +141,6 @@ def build_with_pyinstaller():
         '--hidden-import', 'pdf_generator',
         '--hidden-import', 'reports',
         '--hidden-import', 'inventory_sync',
-        '--hidden-import', 'stock_service',
-        '--hidden-import', 'csv_upload',
         # Exclude unnecessary packages
         '--exclude-module', 'scipy',
         '--exclude-module', 'sphinx',
@@ -274,15 +270,10 @@ Your database will be created automatically in
 ~/Library/Application Support/BarStockManagement/barstock.db on first run.
         """)
     else:
-        print("\n⚠ PyInstaller build failed.")
-        print("Attempting py2app as fallback...")
-        if build_with_py2app():
-            print("\n✓ Build successful with py2app!")
-        else:
-            print("\n✗ All build methods failed.")
-            print("Creating simple launcher script as fallback...")
-            create_launch_script()
-            print("\nYou can run the app with: ./launch.sh")
+        print("\n✗ Build failed. Check the output above for errors.")
+        print("Creating simple launcher script as fallback...")
+        create_launch_script()
+        print("\nYou can run the app with: ./launch.sh")
 
 
 if __name__ == "__main__":

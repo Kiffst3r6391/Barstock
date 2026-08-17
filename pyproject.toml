@@ -26,15 +26,12 @@ py-modules = [
     "actions",
     "categories",
     "conversions",
-    "csv_upload",
     "data_manager",
     "pdf_generator",
     "reports",
     "sales_mapping",
-    "stock_service",
     "supplier_mapping",
     "order_sheet_layout",
-    "update_stock",
 ]
 
 [tool.pytest.ini_options]

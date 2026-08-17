@@ -1694,7 +1694,7 @@ class BarStockManagementSystem:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Add Item", command=self.add_stock_item).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Update Item", command=self.update_stock_item).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Update Item", command=self.edit_selected_stock_item).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Delete Item", command=self.delete_stock_item).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Back", command=self.show_dashboard).pack(side=tk.LEFT, padx=5)
 
@@ -1959,9 +1959,9 @@ class BarStockManagementSystem:
         item = self.stock_tree.identify('item', event.x, event.y)
         if item:
             self.stock_tree.selection_set(item)
-            self.update_stock_item()
+            self.edit_selected_stock_item()
 
-    def update_stock_item(self):
+    def edit_selected_stock_item(self):
         """Update an existing stock item based on selected item in treeview."""
         selected_item = self.stock_tree.selection()
         if not selected_item:

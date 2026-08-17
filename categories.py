@@ -60,10 +60,13 @@ EXCLUDED_ITEMS = {
 }
 
 # Items excluded from the physical stock count sheet but still tracked in sales uploads.
+# These items generate revenue but stock is not held/tracked, so sales do not
+# deduct from inventory.
 SALES_INCLUDED_EXCLUDED_ITEMS = {
     'tea',
     'barista_coffee',
     'specialist_tea',
+    'coffee_machine',
 }
 
 # Category mapping based on item_id or item_name patterns
