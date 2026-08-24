@@ -23,7 +23,6 @@ SUPPLIER_ORDER = [
 ITEM_SUPPLIER_MAP = {
     # Tennents products
     'tennents_lager': 'Tennents',
-    'tennents_0%': 'Tennents',
     'tennents_lager_half': 'Tennents',
     'tennants_shandy_pint': 'Tennents',
     'tennants_shandy_half_pint': 'Tennents',
