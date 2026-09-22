@@ -15,6 +15,7 @@ from tkinter import messagebox
 from datetime import datetime
 
 from conversions import convert_to_system
+from sales_mapping import SALES_TO_PARENT
 
 # Column constants (must match BarStockApp.py)
 COL_ITEM_ID = 'item_id'
@@ -187,6 +188,20 @@ def _init_db_schema(conn):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON transaction_archive(timestamp)")
 
+    # Dedicated audit table for baseline resets (replaces the transient settings JSON).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS baseline_resets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            items_count INTEGER NOT NULL,
+            archived_count INTEGER NOT NULL,
+            note TEXT DEFAULT '',
+            snapshot_json TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_baseline_resets_timestamp ON baseline_resets(timestamp)")
+
     # Index for fast transaction queries
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)")
@@ -355,6 +370,56 @@ def initialize_db():
     except Exception as e:
         messagebox.showerror("Initialization Error", f"Failed to initialize database: {e}")
         raise
+
+
+def _deduct_stock_in_txn(txn, item_id: str, quantity: float) -> None:
+    """Deduct stock for an item and any affected parents within an AtomicTransaction.
+
+    Mirrors sales_mapping.apply_sale_to_parent but operates directly on the
+    SQLite inventory table so the log entry and stock change share one transaction.
+    """
+    current = txn.get_inventory_quantity(item_id)
+    txn.update_inventory_quantity(item_id, current - float(quantity))
+
+    parent_info = SALES_TO_PARENT.get(str(item_id).lower())
+    if not parent_info:
+        return
+
+    parent_items, factors, _ = parent_info[:3]
+    if isinstance(parent_items, list):
+        for parent_id, factor in zip(parent_items, factors):
+            if not parent_id:
+                continue
+            parent_current = txn.get_inventory_quantity(parent_id)
+            txn.update_inventory_quantity(parent_id, parent_current - float(quantity) * float(factor))
+    elif parent_items:
+        parent_current = txn.get_inventory_quantity(parent_items)
+        txn.update_inventory_quantity(parent_items, parent_current - float(quantity) * float(factors))
+
+
+def _restore_stock_in_txn(txn, item_id: str, quantity: float) -> None:
+    """Restore stock for an item and any affected parents within an AtomicTransaction.
+
+    This is the inverse of _deduct_stock_in_txn and is used when a reservation
+    (e.g. an open tab) is cancelled.
+    """
+    current = txn.get_inventory_quantity(item_id)
+    txn.update_inventory_quantity(item_id, current + float(quantity))
+
+    parent_info = SALES_TO_PARENT.get(str(item_id).lower())
+    if not parent_info:
+        return
+
+    parent_items, factors, _ = parent_info[:3]
+    if isinstance(parent_items, list):
+        for parent_id, factor in zip(parent_items, factors):
+            if not parent_id:
+                continue
+            parent_current = txn.get_inventory_quantity(parent_id)
+            txn.update_inventory_quantity(parent_id, parent_current + float(quantity) * float(factor))
+    elif parent_items:
+        parent_current = txn.get_inventory_quantity(parent_items)
+        txn.update_inventory_quantity(parent_items, parent_current + float(quantity) * float(factors))
 
 
 class InventoryDataManager:
@@ -596,16 +661,19 @@ class InventoryDataManager:
                 tab_id = txn.cursor.lastrowid
 
                 for item in items:
+                    item_id = item['item_id']
+                    quantity = float(item['quantity'])
                     txn.log_transaction(
-                        item_id=item['item_id'],
+                        item_id=item_id,
                         action='Open Tab',
-                        quantity=item['quantity'],
+                        quantity=quantity,
                         timestamp=timestamp,
                         cost_price=item.get('cost_price', 0),
                         sell_price=item.get('sell_price', 0),
                         reason=customer_name,
                         open_tab_id=tab_id
                     )
+                    _deduct_stock_in_txn(txn, item_id, quantity)
                 return tab_id
         except Exception as e:
             messagebox.showerror("Error", f"Failed to create open tab: {e}")
@@ -681,6 +749,41 @@ class InventoryDataManager:
             return False
 
     @staticmethod
+    def close_open_tab_as_complimentary(tab_id, items):
+        """Close an open tab as complimentary: remove stock, record no revenue.
+
+        The stock was already deducted when the tab was opened. This method only
+        reclassifies the tab as complimentary and logs Complimentary transactions
+        for reporting.
+
+        items: list of dicts with keys: item_id, quantity, cost_price, sell_price
+        Returns True on success.
+        """
+        try:
+            with AtomicTransaction() as txn:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                txn.cursor.execute(
+                    "UPDATE open_tabs SET status = ?, closed_at = ? WHERE id = ?",
+                    ('complimentary', timestamp, int(tab_id))
+                )
+
+                for item in items:
+                    txn.log_transaction(
+                        item_id=item['item_id'],
+                        action='Complimentary',
+                        quantity=item['quantity'],
+                        timestamp=timestamp,
+                        cost_price=item.get('cost_price', 0),
+                        sell_price=item.get('sell_price', 0),
+                        reason='Open tab closed as complimentary',
+                        open_tab_id=tab_id
+                    )
+                return True
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to close tab as complimentary: {e}")
+            return False
+
+    @staticmethod
     def cancel_open_tab(tab_id):
         """Cancel an open tab and restore stock.
 
@@ -702,15 +805,18 @@ class InventoryDataManager:
                     ('cancelled', timestamp, int(tab_id))
                 )
 
-                # Log cancellation transactions and restore stock
+                # Log cancellation transactions and restore stock atomically.
                 for item in items:
+                    item_id = item['item_id']
+                    quantity = float(item['quantity'])
                     txn.log_transaction(
-                        item_id=item['item_id'],
+                        item_id=item_id,
                         action='Tab Cancelled',
-                        quantity=item['quantity'],
+                        quantity=quantity,
                         timestamp=timestamp,
                         open_tab_id=tab_id
                     )
+                    _restore_stock_in_txn(txn, item_id, quantity)
 
                 return items
         except Exception as e:
@@ -1032,27 +1138,278 @@ def restore_archived_transactions():
         return -1
 
 
-def get_baseline_reset_history():
-    """Get list of baseline resets from settings."""
+def get_baseline_reset_history(limit=100):
+    """Get baseline reset audit history from the dedicated table."""
     import json
-    raw = get_setting('baseline_resets', '[]')
     try:
-        return json.loads(raw)
-    except Exception:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, timestamp, items_count, archived_count, note, snapshot_json
+            FROM baseline_resets
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+        """, (int(limit),))
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load baseline reset history: {e}")
         return []
 
+    results = []
+    for row in rows:
+        snapshot = []
+        if row["snapshot_json"]:
+            try:
+                snapshot = json.loads(row["snapshot_json"])
+            except Exception:
+                snapshot = []
+        results.append({
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "items_count": row["items_count"],
+            "archived_count": row["archived_count"],
+            "note": row["note"],
+            "snapshot": snapshot,
+        })
 
-def add_baseline_reset(timestamp, items_count, archived_count, note=''):
-    """Record a baseline reset event."""
+    # One-off migration from the legacy JSON setting. Once the table has rows
+    # the setting is no longer consulted, but legacy entries are imported if
+    # the table is empty.
+    if not results:
+        raw = get_setting('baseline_resets', '[]')
+        try:
+            legacy = json.loads(raw)
+            if isinstance(legacy, list) and legacy:
+                results = [
+                    {
+                        "id": None,
+                        "timestamp": entry.get("timestamp", ""),
+                        "items_count": entry.get("items_count", 0),
+                        "archived_count": entry.get("archived_count", 0),
+                        "note": entry.get("note", ""),
+                        "snapshot": [],
+                    }
+                    for entry in legacy
+                ]
+                results.sort(key=lambda x: x["timestamp"], reverse=True)
+        except Exception:
+            pass
+
+    return results
+
+
+def get_last_baseline_reset_date():
+    """Return the timestamp of the most recent baseline reset, or None."""
+    history = get_baseline_reset_history(limit=1)
+    if not history:
+        return None
+    ts_str = history[0].get("timestamp", "")
+    if not ts_str:
+        return None
+    try:
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def add_baseline_reset(timestamp, items_count, archived_count, note='', snapshot=None):
+    """Record a baseline reset event in the dedicated audit table.
+
+    snapshot: optional list/dict of per-item baseline data (will be JSON-encoded).
+    """
     import json
-    resets = get_baseline_reset_history()
-    resets.append({
-        'timestamp': timestamp,
-        'items_count': items_count,
-        'archived_count': archived_count,
-        'note': note
-    })
-    set_setting('baseline_resets', json.dumps(resets[-10:]))  # Keep last 10
+    snapshot_json = ''
+    if snapshot is not None:
+        try:
+            snapshot_json = json.dumps(snapshot, default=str)
+        except Exception:
+            snapshot_json = ''
+
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO baseline_resets (timestamp, items_count, archived_count, note, snapshot_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            str(timestamp),
+            int(items_count),
+            int(archived_count),
+            str(note),
+            snapshot_json,
+            created_at,
+        ))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to record baseline reset: {e}")
+        return False
+
+
+def reset_baseline(counted_items, timestamp, note=''):
+    """Reset inventory baseline from a stocktake.
+
+    This performs the full baseline reset in one SQLite transaction:
+      1. Archives all transactions before the baseline timestamp.
+      2. Removes any stale Stocktake Adjustment / Baseline rows at the baseline timestamp.
+      3. Inserts stocktake snapshots.
+      4. Sets inventory quantities to the counted amounts.
+      5. Logs new Stocktake Baseline transactions.
+      6. Records the reset in the baseline_resets audit table.
+
+    counted_items: list of dicts with keys: item_id, counted_system, input_value, input_unit
+    timestamp: baseline timestamp string (YYYY-MM-DD HH:MM:SS)
+    note: optional note for the snapshot/audit trail
+
+    Returns a dict with success, archived_count, baseline_logged, saved_count, error.
+    """
+    import json
+    conn = None
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+
+        # 1. Archive old transactions before the baseline timestamp.
+        archived_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO transaction_archive
+            (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
+             date_range, reason, user, member_qty, non_member_qty, open_tab_id, archived_at)
+            SELECT item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
+                   date_range, reason, user, member_qty, non_member_qty, open_tab_id, ?
+            FROM transactions WHERE timestamp < ?
+        """, (archived_at, str(timestamp)))
+        archived_count = cursor.rowcount
+        cursor.execute("DELETE FROM transactions WHERE timestamp < ?", (str(timestamp),))
+
+        # 2. Clean up any stale baseline rows already stamped with this timestamp.
+        cursor.execute("""
+            DELETE FROM transactions
+            WHERE timestamp = ? AND action IN ('Stocktake Adjustment', 'Stocktake Baseline')
+        """, (str(timestamp),))
+
+        # 3. Record snapshots, update inventory, and log baselines atomically.
+        saved_count = 0
+        baseline_logged = 0
+        for item in counted_items:
+            item_id = str(item['item_id'])
+            counted = float(item['counted_system'])
+            input_value = float(item['input_value'])
+            input_unit = str(item['input_unit'])
+
+            cursor.execute("""
+                INSERT INTO stocktake_snapshots (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (item_id, counted, counted, 0.0, str(timestamp), str(note) + " (Baseline)"))
+
+            cursor.execute("""
+                UPDATE inventory SET quantity = ? WHERE item_id = ?
+            """, (counted, item_id))
+
+            reason = f"Baseline from physical count: {input_value:.1f} {input_unit}s"
+            cursor.execute("""
+                INSERT INTO transactions
+                (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
+                 date_range, reason, user, member_qty, non_member_qty, open_tab_id)
+                VALUES (?, ?, ?, ?, 0, 0, '', '', ?, '', 0, 0, NULL)
+            """, (item_id, 'Stocktake Baseline', counted, str(timestamp), reason))
+
+            saved_count += 1
+            baseline_logged += 1
+
+        conn.commit()
+        conn.close()
+        conn = None
+
+        # 4. Record audit trail.
+        add_baseline_reset(timestamp, len(counted_items), archived_count, note, snapshot=counted_items)
+
+        return {
+            'success': True,
+            'archived_count': archived_count,
+            'baseline_logged': baseline_logged,
+            'saved_count': saved_count,
+        }
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        messagebox.showerror("Error", f"Failed to reset baseline: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def roll_forward_and_clean():
+    """Clean up old snapshot/audit clutter after a baseline reset.
+
+    This is the safe 'Option B' cleanup: it removes duplicate historical
+    stocktake snapshots and old baseline_resets audit rows, but leaves
+    the current inventory, current-period transactions, and the full
+    transaction_archive untouched. A backup is created first.
+
+    Returns a dict with success flag and counts of removed rows.
+    """
+    backup_path = create_backup('roll_forward_clean')
+    if not backup_path:
+        messagebox.showwarning("Backup Failed", "Could not create a backup before cleaning. Cleanup aborted.")
+        return {'success': False, 'error': 'backup_failed'}
+
+    conn = None
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+
+        # Find the latest baseline reset timestamp
+        cursor.execute("""
+            SELECT timestamp FROM baseline_resets
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            messagebox.showinfo("Nothing to Clean", "No baseline reset records found.")
+            return {'success': True, 'snapshots_removed': 0, 'resets_removed': 0}
+        latest_ts = row["timestamp"]
+
+        # Remove stocktake snapshots from any earlier baseline/stocktake
+        cursor.execute("""
+            DELETE FROM stocktake_snapshots
+            WHERE timestamp != ?
+        """, (latest_ts,))
+        snapshots_removed = cursor.rowcount
+
+        # Keep only the latest baseline_resets audit row
+        cursor.execute("""
+            DELETE FROM baseline_resets
+            WHERE timestamp != ?
+        """, (latest_ts,))
+        resets_removed = cursor.rowcount
+
+        conn.commit()
+        conn.close()
+        conn = None
+
+        return {
+            'success': True,
+            'snapshots_removed': snapshots_removed,
+            'resets_removed': resets_removed,
+            'backup_path': backup_path,
+        }
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        messagebox.showerror("Error", f"Failed to roll forward and clean: {e}")
+        return {'success': False, 'error': str(e)}
 
 
 # Upload hash helpers for duplicate sales upload guard

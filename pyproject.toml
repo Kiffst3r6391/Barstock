@@ -14,6 +14,7 @@ dependencies = [
     "matplotlib",
     "tkcalendar",
     "babel",
+    "pdfplumber",
 ]
 
 [project.optional-dependencies]

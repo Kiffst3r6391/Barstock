@@ -188,7 +188,7 @@ def _load_items_csv_ids(script_dir: str) -> set:
         if 'Name' not in df.columns:
             return set()
         names = df['Name'].dropna().astype(str).str.lower()
-        return set(names.str.replace(' ', '_').str.replace("'", '').str.replace('.', '', regex=False))
+        return set(names.str.replace(' ', '_').str.replace("'", '').str.replace('.', '', regex=False).str.replace('/', '_', regex=False))
     except Exception:
         return set()
 
@@ -261,6 +261,84 @@ def find_recent_negative_items(
     return result
 
 
+def _items_csv_path(script_dir: str) -> str:
+    return os.path.join(script_dir, 'Items.csv')
+
+
+def _read_items_csv_rows(items_csv_path: str) -> tuple[list[str], list[list[str]]]:
+    """Read Items.csv and return (header, rows). Creates a default header if missing."""
+    default_header = ["Name", "Division", "Unit", "Total Stock", "Total Value", "Active", "Min Alert", "Max Alert"]
+    if not os.path.exists(items_csv_path):
+        return default_header, []
+    try:
+        with open(items_csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+            if rows:
+                return rows[0], rows[1:]
+            return default_header, []
+    except Exception:
+        return default_header, []
+
+
+def _write_items_csv(items_csv_path: str, header: list[str], rows: list[list[str]]) -> None:
+    with open(items_csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(header)
+        writer.writerows(row for row in rows if row)
+
+
+def update_items_csv_total_value(
+    script_dir: str,
+    item_id: str,
+    item_name: str,
+    quantity: float,
+    total_value: float,
+) -> bool:
+    """Update or append an item row in Items.csv, keeping Total Value in sync.
+
+    Matching is by item_id derived from item_name. If a matching row exists, its
+    Total Stock and Total Value columns are overwritten; otherwise a new row is
+    appended with empty optional fields.
+    """
+    items_csv_path = _items_csv_path(script_dir)
+    header, rows = _read_items_csv_rows(items_csv_path)
+
+    # Ensure expected columns exist
+    required = ["Name", "Total Stock", "Total Value"]
+    missing = [c for c in required if c not in header]
+    if missing:
+        raise ValueError(f"Items.csv missing required columns: {missing}")
+
+    name_col = header.index("Name")
+    stock_col = header.index("Total Stock")
+    value_col = header.index("Total Value")
+
+    target_name_lower = item_name.strip().lower()
+    updated = False
+    for row in rows:
+        if not row:
+            continue
+        if len(row) > name_col and row[name_col].strip().lower() == target_name_lower:
+            if len(row) <= stock_col:
+                row.extend([""] * (stock_col - len(row) + 1))
+            if len(row) <= value_col:
+                row.extend([""] * (value_col - len(row) + 1))
+            row[stock_col] = f"{quantity:.2f}"
+            row[value_col] = f"{total_value:.2f}"
+            updated = True
+            break
+
+    if not updated:
+        new_row = [item_name, "", "", f"{quantity:.2f}", f"{total_value:.2f}", "", "", ""]
+        # Trim/pad to match header length
+        new_row = (new_row + [""] * len(header))[:len(header)]
+        rows.append(new_row)
+
+    _write_items_csv(items_csv_path, header, rows)
+    return updated
+
+
 def append_item_to_items_csv(
     script_dir: str,
     item_id: str,
@@ -277,40 +355,22 @@ def append_item_to_items_csv(
 
     Returns True if a row was appended, False if it already existed.
     """
-    items_csv_path = os.path.join(script_dir, 'Items.csv')
-    header = ["Name", "Division", "Unit", "Total Stock", "Total Value", "Active", "Min Alert", "Max Alert"]
+    items_csv_path = _items_csv_path(script_dir)
+    header, rows = _read_items_csv_rows(items_csv_path)
 
-    # If CSV exists, check for existing name (case-insensitive)
-    existing_names = set()
-    rows = []
-    if os.path.exists(items_csv_path):
-        try:
-            with open(items_csv_path, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                rows = list(reader)
-                if rows:
-                    header = rows[0]
-                    for row in rows[1:]:
-                        if row:
-                            existing_names.add(row[0].strip().lower())
-        except Exception:
-            pass
-
+    name_col = header.index("Name") if "Name" in header else 0
+    existing_names = {row[name_col].strip().lower() for row in rows if row and len(row) > name_col}
     if item_name.strip().lower() in existing_names:
         return False
 
     new_row = [item_name, division, measure, str(quantity), f"{total_value:.2f}", active, min_alert, max_alert]
+    # Pad or trim to header length
+    new_row = (new_row + [""] * len(header))[:len(header)]
 
-    # If file didn't exist or was empty, write header + row
     if not rows:
-        with open(items_csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-            writer.writerow(header)
-            writer.writerow(new_row)
+        _write_items_csv(items_csv_path, header, [new_row])
         return True
 
-    # Append row
-    with open(items_csv_path, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(new_row)
+    rows.append(new_row)
+    _write_items_csv(items_csv_path, header, rows)
     return True

@@ -3,10 +3,12 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('stock.csv', '.'), ('transaction_log.csv', '.'), ('Items.csv', '.'), ('categories.py', '.'), ('conversions.py', '.'), ('sales_mapping.py', '.'), ('supplier_mapping.py', '.'), ('order_sheet_layout.py', '.'), ('actions.py', '.'), ('data_manager.py', '.'), ('pdf_generator.py', '.'), ('reports.py', '.'), ('inventory_sync.py', '.')]
 binaries = []
-hiddenimports = ['pandas', 'numpy', 'tkinter', 'tkinter.messagebox', 'tkinter.ttk', 'ttkthemes', 'fpdf', 'fpdf.FPDF', 'defusedxml', 'PIL', 'tkcalendar', 'babel', 'babel.numbers', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.backends.backend_tkagg', 'matplotlib.dates', 'categories', 'conversions', 'sales_mapping', 'supplier_mapping', 'order_sheet_layout', 'actions', 'data_manager', 'pdf_generator', 'reports', 'inventory_sync']
+hiddenimports = ['pandas', 'numpy', 'tkinter', 'tkinter.messagebox', 'tkinter.ttk', 'ttkthemes', 'fpdf', 'fpdf.FPDF', 'defusedxml', 'PIL', 'tkcalendar', 'babel', 'babel.numbers', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.backends.backend_tkagg', 'matplotlib.dates', 'categories', 'conversions', 'sales_mapping', 'supplier_mapping', 'order_sheet_layout', 'actions', 'data_manager', 'pdf_generator', 'reports', 'inventory_sync', 'pdfplumber']
 tmp_ret = collect_all('tkcalendar')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('babel')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pdfplumber')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 

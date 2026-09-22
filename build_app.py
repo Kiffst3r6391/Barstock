@@ -141,6 +141,8 @@ def build_with_pyinstaller():
         '--hidden-import', 'pdf_generator',
         '--hidden-import', 'reports',
         '--hidden-import', 'inventory_sync',
+        '--hidden-import', 'pdfplumber',
+        '--collect-all', 'pdfplumber',
         # Exclude unnecessary packages
         '--exclude-module', 'scipy',
         '--exclude-module', 'sphinx',

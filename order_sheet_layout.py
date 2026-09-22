@@ -137,16 +137,13 @@ ORDER_SHEET_LAYOUT = [
                     ("Edinburgh gin", "edinburgh_r&g"),
                     ("Glayva", "glayva"),
                     ("Gordons", "gordons_gin"),
-                    ("Gordons lemon", "gordons_lemon_gin"),
                     ("Gordons pink", "gordons_pink_gin"),
                     ("Havana 7", "havana_club_7"),
                     ("Jack Daniels", "jack_daniels"),
                     ("Jagermeister", "jagermeister"),
                     ("Kahlua", "kahlua"),
                     ("Kraken", "kraken_rum"),
-                    ("Margarita", "margarita"),
                     ("Martial", "martell"),
-                    ("Mexcal", "mexcal"),
                     ("malibu", "malibu"),
                     ("Pimms", "pimms"),
                     ("Port", "port"),
@@ -190,7 +187,7 @@ ORDER_SHEET_LAYOUT = [
         ],
     ),
     (
-        "Tennent’s",
+        "Tennents",
         [
             (
                 "Kegs",

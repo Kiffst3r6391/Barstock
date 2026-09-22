@@ -112,78 +112,52 @@ class PDFReport(FPDF):
             self.cell(width, 5, str(value), 1, 0, align, True)
         self.ln()
 
-    def generate_report(self, report_data, member_discount_pct=10, stocktake_data=None):
-        """Generate the full report."""
+    def generate_report(self, report_data, member_discount_pct=10, stocktake_data=None, running_surplus_value=None):
+        """Generate the full report.
+
+        Args:
+            report_data: list of item dicts from build_comprehensive_report_data.
+            member_discount_pct: member discount percentage.
+            stocktake_data: Stocktake Variance Report data for the selected period.
+            running_surplus_value: Cumulative surplus/shortfall value from all
+                historical stocktakes, surviving baseline resets.
+        """
         self.add_page()
 
         # Filter out equipment/capital assets from report data
         report_data = [item for item in report_data if item.get('division') != 'Equipment']
 
-        total_wastage_value = 0
-        total_line_clean_value = 0
+        # Determine whether any member split data exists
+        has_member_data = any(i.get('member_sales_value', 0) > 0 for i in report_data)
 
-        # Group data by division
+        # Group data by division and classify draught items
         by_division = defaultdict(list)
         draught_items = []
-
         for item in report_data:
             by_division[item['division']].append(item)
             if item['is_draught']:
                 draught_items.append(item)
 
-        # SECTION 1: Stock Summary by Division
-        self.chapter_title('1. Stock Summary by Division')
-
-        headers = ['Division', 'Itm', 'Stk Val', 'Sale Val', 'GP', 'GP%', 'M Rev', 'M GP%', 'M GP', 'NM Rev', 'NM GP%', 'NM GP']
-        widths = [20, 8, 15, 16, 15, 9, 16, 9, 15, 16, 9, 15]
-
-        self.section_table_header(headers, widths, font_size=6)
-
+        # Pre-compute division totals
         division_totals = {}
         for division, items in by_division.items():
-            total_stock = sum(i['current_stock'] for i in items)
-            stock_value = sum(i['stock_value'] for i in items)
-            sales_qty = sum(i['total_sales_qty'] for i in items)
-            sales_value = sum(i['total_sales_value'] for i in items)
-            sales_cost = sum(i['sales_cost'] for i in items)
-            gp = sum(i['sales_gp'] for i in items)
-            gp_pct = (gp / sales_value * 100) if sales_value > 0 else 0
-            member_gp = sum(i['member_gp'] for i in items)
-            member_sales_value = sum(i['member_sales_value'] for i in items)
-            member_gp_pct = (member_gp / member_sales_value * 100) if member_sales_value > 0 else 0
-            non_member_gp = sum(i.get('non_member_gp', 0) for i in items)
-            non_member_sales_value = sum(i.get('non_member_sales_value', 0) for i in items)
-            non_member_gp_pct = (non_member_gp / non_member_sales_value * 100) if non_member_sales_value > 0 else 0
-
             division_totals[division] = {
-                'stock_value': stock_value,
-                'sales_value': sales_value,
-                'gp': gp,
-                'sales_qty': sales_qty,
-                'member_gp': member_gp,
-                'member_sales_value': member_sales_value,
-                'member_gp_pct': member_gp_pct,
-                'non_member_gp': non_member_gp,
-                'non_member_sales_value': non_member_sales_value,
-                'non_member_gp_pct': non_member_gp_pct
+                'stock_value': sum(i['stock_value'] for i in items),
+                'sales_value': sum(i['total_sales_value'] for i in items),
+                'gp': sum(i['sales_gp'] for i in items),
+                'sales_qty': sum(i['total_sales_qty'] for i in items),
+                'member_gp': sum(i['member_gp'] for i in items),
+                'member_sales_value': sum(i['member_sales_value'] for i in items),
+                'member_gp_pct': (sum(i['member_gp'] for i in items) / sum(i['member_sales_value'] for i in items) * 100)
+                    if sum(i['member_sales_value'] for i in items) > 0 else 0,
+                'non_member_gp': sum(i.get('non_member_gp', 0) for i in items),
+                'non_member_sales_value': sum(i.get('non_member_sales_value', 0) for i in items),
+                'non_member_gp_pct': (sum(i.get('non_member_gp', 0) for i in items) /
+                    sum(i.get('non_member_sales_value', 0) for i in items) * 100)
+                    if sum(i.get('non_member_sales_value', 0) for i in items) > 0 else 0,
             }
 
-            values = [
-                division[:14],
-                len(items),
-                f"£{stock_value:.2f}",
-                f"£{sales_value:.2f}",
-                f"£{gp:.2f}",
-                f"{gp_pct:.1f}%",
-                f"£{member_sales_value:.2f}",
-                f"{member_gp_pct:.1f}%",
-                f"£{member_gp:.2f}",
-                f"£{non_member_sales_value:.2f}",
-                f"{non_member_gp_pct:.1f}%",
-                f"£{non_member_gp:.2f}"
-            ]
-            self.section_table_row(values, widths, font_size=6)
-
+        # Grand totals
         total_stock_value = sum(d['stock_value'] for d in division_totals.values())
         total_sales_value = sum(d['sales_value'] for d in division_totals.values())
         total_gp = sum(d['gp'] for d in division_totals.values())
@@ -196,248 +170,45 @@ class PDFReport(FPDF):
         total_non_member_rev_div = sum(d['non_member_sales_value'] for d in division_totals.values())
         total_non_member_gp_pct_div = (total_non_member_gp_div / total_non_member_rev_div * 100) if total_non_member_rev_div > 0 else 0
 
-        values = [
-            'TOTAL',
-            len(report_data),
-            f"£{total_stock_value:.2f}",
-            f"£{total_sales_value:.2f}",
-            f"£{total_gp:.2f}",
-            f"{(total_gp / total_sales_value * 100) if total_sales_value > 0 else 0:.1f}%",
-            f"£{total_member_rev_div:.2f}",
-            f"{total_member_gp_pct_div:.1f}%",
-            f"£{total_member_gp_div:.2f}",
-            f"£{total_non_member_rev_div:.2f}",
-            f"{total_non_member_gp_pct_div:.1f}%",
-            f"£{total_non_member_gp_div:.2f}"
-        ]
-        self.section_table_row(values, widths, is_total=True, font_size=6)
-        self.ln(5)
-
-        # SECTION 2: Wastage Summary
-        self.chapter_title('2. Wastage Summary')
-
-        wastage_items = [i for i in report_data if i['wastage_qty'] > 0]
-        if wastage_items:
-            headers = ['Item', 'Division', 'Wastage Qty', 'Cost Price', 'Wastage Value']
-            widths = [60, 40, 25, 30, 30]
-
-            self.section_table_header(headers, widths)
-            total_wastage = 0
-            total_wastage_value = 0
-
-            for item in wastage_items:
-                wastage_value = item['wastage_qty'] * item['cost_price']
-                total_wastage += item['wastage_qty']
-                total_wastage_value += wastage_value
-
-                values = [
-                    item['item_name'][:25],
-                    item['division'][:18],
-                    f"{item['wastage_qty']:.1f}",
-                    f"£{item['cost_price']:.2f}",
-                    f"£{wastage_value:.2f}"
-                ]
-                self.section_table_row(values, widths)
-
-            values = ['TOTAL', '', f"{total_wastage:.1f}", '', f"£{total_wastage_value:.2f}"]
-            self.section_table_row(values, widths, is_total=True)
-        else:
-            self.set_font('Arial', 'I', 10)
-            self.cell(0, 10, 'No wastage recorded in this period.', 0, 1, 'L')
-        self.ln(5)
-
-        # SECTION 2b: Line Cleaning Summary
-        line_clean_items = [i for i in report_data if i.get('line_clean_qty', 0) > 0]
-        if line_clean_items:
-            self.chapter_title('2b. Line Cleaning Summary')
-
-            headers = ['Item', 'Division', 'Line Clean Qty', 'Cost Price', 'Line Clean Value']
-            widths = [60, 40, 25, 30, 30]
-
-            self.section_table_header(headers, widths)
-            total_line_clean = 0
-            total_line_clean_value = 0
-
-            for item in line_clean_items:
-                line_clean_value = item['line_clean_qty'] * item['cost_price']
-                total_line_clean += item['line_clean_qty']
-                total_line_clean_value += line_clean_value
-
-                values = [
-                    item['item_name'][:25],
-                    item['division'][:18],
-                    f"{item['line_clean_qty']:.1f}",
-                    f"£{item['cost_price']:.2f}",
-                    f"£{line_clean_value:.2f}"
-                ]
-                self.section_table_row(values, widths)
-
-            values = ['TOTAL', '', f"{total_line_clean:.1f}", '', f"£{total_line_clean_value:.2f}"]
-            self.section_table_row(values, widths, is_total=True)
-            self.ln(5)
-
-        # Combined Wastage & Line Clean note
-        if total_wastage_value > 0 or total_line_clean_value > 0:
-            combined_total = total_wastage_value + total_line_clean_value
-            self.set_font('Arial', 'B', 11)
-            self.set_text_color(0, 0, 0)
-            self.cell(0, 8, f"Total Wastage Value (excluding line clean): £{total_wastage_value:.2f}", 0, 1, 'L')
-            if total_line_clean_value > 0:
-                self.cell(0, 8, f"Total Line Clean Value: £{total_line_clean_value:.2f}", 0, 1, 'L')
-            self.cell(0, 8, f"Combined Wastage & Line Clean Value: £{combined_total:.2f}", 0, 1, 'L')
-            self.ln(5)
-
-        # SECTION 3: Complimentary Summary
-        self.chapter_title('3. Complimentary Summary')
-
-        comp_items = [i for i in report_data if i['complimentary_qty'] > 0]
-        if comp_items:
-            headers = ['Item', 'Division', 'Qty', 'Retail Value']
-            widths = [70, 50, 30, 35]
-
-            self.section_table_header(headers, widths)
-            total_comp = 0
-            total_comp_value = 0
-
-            for item in comp_items:
-                comp_value = item['complimentary_qty'] * item['sell_price']
-                total_comp += item['complimentary_qty']
-                total_comp_value += comp_value
-
-                values = [
-                    item['item_name'][:30],
-                    item['division'][:22],
-                    f"{item['complimentary_qty']:.1f}",
-                    f"£{comp_value:.2f}"
-                ]
-                self.section_table_row(values, widths)
-
-            values = ['TOTAL', '', f"{total_comp:.1f}", f"£{total_comp_value:.2f}"]
-            self.section_table_row(values, widths, is_total=True)
-        else:
-            self.set_font('Arial', 'I', 10)
-            self.cell(0, 10, 'No complimentary items recorded in this period.', 0, 1, 'L')
-        self.ln(5)
-
-        # SECTION 3b: Open Tabs / Pending Sales Summary
-        self.chapter_title('3b. Open Tabs / Pending Sales Summary')
-
-        open_tab_items = [i for i in report_data if i['open_tab_qty'] > 0]
-        if open_tab_items:
-            headers = ['Item', 'Division', 'Qty', 'Cost Price', 'Pending Value']
-            widths = [60, 40, 25, 30, 30]
-
-            self.section_table_header(headers, widths)
-            total_open_tab = 0
-            total_open_tab_value = 0
-
-            for item in open_tab_items:
-                open_tab_value = item['open_tab_qty'] * item['cost_price']
-                total_open_tab += item['open_tab_qty']
-                total_open_tab_value += open_tab_value
-
-                values = [
-                    item['item_name'][:25],
-                    item['division'][:18],
-                    f"{item['open_tab_qty']:.1f}",
-                    f"£{item['cost_price']:.2f}",
-                    f"£{open_tab_value:.2f}"
-                ]
-                self.section_table_row(values, widths)
-
-            values = ['TOTAL', '', f"{total_open_tab:.1f}", '', f"£{total_open_tab_value:.2f}"]
-            self.section_table_row(values, widths, is_total=True)
-        else:
-            self.set_font('Arial', 'I', 10)
-            self.cell(0, 10, 'No open tabs recorded in this period.', 0, 1, 'L')
-        self.ln(5)
-
-        # SECTION 3c: Parent Stock Adjustment Summary
-        parent_adj_items = [i for i in report_data if i['parent_adj_qty'] > 0 and not i.get('is_hidden', False)]
-        if parent_adj_items:
-            self.chapter_title('3c. Parent Stock Adjustments')
-
-            headers = ['Parent Item', 'Division', 'Qty Adjusted', 'Cost Price', 'Adj. Value']
-            widths = [50, 40, 25, 30, 30]
-
-            self.section_table_header(headers, widths)
-            total_adj_qty = 0
-            total_adj_value = 0
-
-            for item in parent_adj_items:
-                adj_value = item['parent_adj_qty'] * item['cost_price']
-                total_adj_qty += item['parent_adj_qty']
-                total_adj_value += adj_value
-
-                values = [
-                    item['item_name'][:25],
-                    item['division'][:18],
-                    f"{item['parent_adj_qty']:.1f}",
-                    f"£{item['cost_price']:.2f}",
-                    f"£{adj_value:.2f}"
-                ]
-                self.section_table_row(values, widths)
-
-            values = ['TOTAL', '', f"{total_adj_qty:.1f}", '', f"£{total_adj_value:.2f}"]
-            self.section_table_row(values, widths, is_total=True)
-            self.ln(5)
-
-        # SECTION 4: Draught Yield Report
-        draught_items = [i for i in draught_items if i['item_id'] in DRAUGHT_YIELD_ITEMS]
-        if draught_items:
-            self.chapter_title('4. Draught Yield Report (pints)')
-
-            headers = ['Item', 'Sales', 'Adj.', 'Wast', 'Comp', 'Open Tabs', 'Consumed', 'Closing', 'Yield%']
-            widths = [38, 16, 14, 14, 14, 16, 18, 18, 16]
-
-            self.section_table_header(headers, widths)
-
-            for item in draught_items:
-                yield_pct = item['yield_pct']
-                yield_str = f"{yield_pct:.1f}%" if yield_pct > 0 else "N/A"
-                adj_display = f"{item['parent_adj_qty']:.1f}" if item.get('parent_adj_qty', 0) > 0 else '-'
-
-                values = [
-                    item['item_name'][:18],
-                    f"{item['total_sales_qty']:.1f}",
-                    adj_display,
-                    f"{item['wastage_qty']:.1f}" if item['wastage_qty'] > 0 else '-',
-                    f"{item['complimentary_qty']:.1f}" if item['complimentary_qty'] > 0 else '-',
-                    f"{item['open_tab_qty']:.1f}" if item['open_tab_qty'] > 0 else '-',
-                    f"{item['expected_consumption']:.1f}",
-                    f"{item['current_stock']:.1f}",
-                    yield_str
-                ]
-                self.section_table_row(values, widths)
-            self.ln(2)
-            self.set_font('Arial', 'I', 8)
-            self.cell(0, 5, 'All quantities in pints. Yield% = Sales / Total Consumption. Adj = pints deducted via half pints/shandies.', 0, 1, 'L')
-
-        # SECTION 5: Financial Summary
-        self.add_page()
-        self.chapter_title('5. Financial Summary')
-
-        self.set_font('Arial', '', 11)
-        self.set_text_color(0, 0, 0)
-
+        # Member/non-member overall totals
         total_member_gp = sum(i['member_gp'] for i in report_data)
         total_member_revenue = sum(i['member_sales_value'] for i in report_data)
         overall_member_gp_pct = (total_member_gp / total_member_revenue * 100) if total_member_revenue > 0 else 0
-
         total_non_member_gp = sum(i.get('non_member_gp', 0) for i in report_data)
         total_non_member_revenue = sum(i.get('non_member_sales_value', 0) for i in report_data)
         overall_non_member_gp_pct = (total_non_member_gp / total_non_member_revenue * 100) if total_non_member_revenue > 0 else 0
 
-        # Stock Surplus/Shortfall — only meaningful when a stocktake exists
+        # Stocktake / surplus
         items_with_stocktake = [i for i in report_data if i.get('surplus_value') is not None]
         total_surplus_value = sum(i['surplus_value'] for i in items_with_stocktake) if items_with_stocktake else None
         has_stocktake = total_surplus_value is not None
 
-        self.set_fill_color(245, 245, 245)
-        self.rect(10, self.get_y(), 190, 150 if has_stocktake else 140, 'F')
+        # Cost prices and stock values are stored inc-VAT; sales revenue is inc-VAT.
+        # Gross profit and net profit are therefore already inc-VAT.
+        total_net_profit = total_sales_value - total_cost_of_sales
 
-        y_start = self.get_y() + 5
-        self.set_xy(15, y_start)
+        # Pre-compute detailed item lists and their totals
+        sales_items = [i for i in report_data if i['total_sales_qty'] > 0]
+        wastage_items = [i for i in report_data if i['wastage_qty'] > 0]
+        line_clean_items = [i for i in report_data if i.get('line_clean_qty', 0) > 0]
+        supplier_return_items = [i for i in report_data if i.get('supplier_return_qty', 0) > 0]
+        comp_items = [i for i in report_data if i['complimentary_qty'] > 0]
+        open_tab_items = [i for i in report_data if i['open_tab_qty'] > 0]
+        parent_adj_items = [i for i in report_data if i['parent_adj_qty'] > 0 and not i.get('is_hidden', False)]
+        variance_items = [i for i in report_data if i['expected_consumption'] > 0 and not i.get('is_hidden', False)]
+
+        total_wastage_value = sum(i['wastage_qty'] * i['cost_price'] for i in wastage_items)
+        total_line_clean_value = sum(i.get('line_clean_qty', 0) * i['cost_price'] for i in line_clean_items)
+        total_supplier_return_value = sum(i['supplier_return_qty'] * i['cost_price'] for i in supplier_return_items)
+        total_comp_value = sum(i['complimentary_qty'] * i['sell_price'] for i in comp_items)
+
+        # ------------------------------------------------------------------
+        # SECTION 1: Financial Summary (directors' view first)
+        # ------------------------------------------------------------------
+        self.chapter_title('1. Financial Summary')
+
+        self.set_font('Arial', '', 11)
+        self.set_text_color(0, 0, 0)
 
         summary_data = [
             ('Total Stock Value', f"£{total_stock_value:.2f}"),
@@ -445,17 +216,37 @@ class PDFReport(FPDF):
             ('Total Cost of Sales', f"£{total_cost_of_sales:.2f}"),
             ('Total Gross Profit', f"£{total_gp:.2f}"),
             ('Overall GP Margin', f"{(total_gp / total_sales_value * 100) if total_sales_value > 0 else 0:.1f}%"),
-            (f'Member Revenue ({member_discount_pct}% disc.)', f"£{total_member_revenue:.2f}"),
-            ('Non-Member Revenue', f"£{total_non_member_revenue:.2f}"),
-            ('Member Gross Profit', f"£{total_member_gp:.2f}"),
-            ('Non-Member Gross Profit', f"£{total_non_member_gp:.2f}"),
-            ('Member GP Margin', f"{overall_member_gp_pct:.1f}%"),
-            ('Non-Member GP Margin', f"{overall_non_member_gp_pct:.1f}%"),
-            ('Total Wastage Value (inc. line clean)', f"£{total_wastage_value + total_line_clean_value:.2f}"),
-            ('Total Complimentary Value', f"£{total_comp_value:.2f}" if 'total_comp_value' in dir() else "£0.00"),
+            ('Total Net Profit', f"£{total_net_profit:.2f}"),
         ]
+        if has_member_data:
+            summary_data.extend([
+                (f'Member Revenue ({member_discount_pct}% disc.)', f"£{total_member_revenue:.2f}"),
+                ('Non-Member Revenue', f"£{total_non_member_revenue:.2f}"),
+                ('Member Gross Profit', f"£{total_member_gp:.2f}"),
+                ('Non-Member Gross Profit', f"£{total_non_member_gp:.2f}"),
+                ('Member GP Margin', f"{overall_member_gp_pct:.1f}%"),
+                ('Non-Member GP Margin', f"{overall_non_member_gp_pct:.1f}%"),
+            ])
+        summary_data.extend([
+            ('Total Wastage Value (inc. line clean)', f"£{total_wastage_value + total_line_clean_value:.2f}"),
+            ('Total Supplier Return Value', f"£{total_supplier_return_value:.2f}"),
+            ('Total Complimentary Value', f"£{total_comp_value:.2f}"),
+        ])
         if has_stocktake:
-            summary_data.append(('Stock Surplus/Shortfall', f"£{total_surplus_value:+.2f}"))
+            summary_data.append(('Stock Surplus/Shortfall (period)', f"£{total_surplus_value:+.2f}"))
+        if running_surplus_value is not None:
+            summary_data.append(('Running Surplus/Shortfall (all stocktakes)', f"£{running_surplus_value:+.2f}"))
+
+        # Size the summary box to fit all rows with a little padding
+        row_height = 10
+        box_padding = 15
+        box_height = max(120, len(summary_data) * row_height + box_padding)
+
+        self.set_fill_color(245, 245, 245)
+        self.rect(10, self.get_y(), 190, box_height, 'F')
+
+        y_start = self.get_y() + 5
+        self.set_xy(15, y_start)
 
         for label, value in summary_data:
             self.set_xy(15, self.get_y())
@@ -466,51 +257,145 @@ class PDFReport(FPDF):
 
         self.ln(10)
 
-        # Add per-item financial breakdown with member GP
-        self.chapter_title('5b. Item Financial Breakdown (incl. Member GP)')
-
-        sales_items = [i for i in report_data if i['total_sales_qty'] > 0]
-        if sales_items:
+        # ------------------------------------------------------------------
+        # SECTION 2: Item Financial Breakdown
+        # ------------------------------------------------------------------
+        if has_member_data:
+            self.chapter_title('2. Item Financial Breakdown (incl. Member GP)')
             headers = ['Item', 'Revenue', 'Cost', 'GP', 'GP%', 'Mem Qty', 'Non-Mem', 'Mem GP', 'Mem GP%']
             widths = [40, 20, 20, 20, 14, 18, 18, 20, 14]
+        else:
+            self.chapter_title('2. Item Financial Breakdown')
+            headers = ['Item', 'Revenue', 'Cost', 'GP', 'GP%']
+            widths = [58, 28, 28, 28, 18]
 
+        if sales_items:
             self.section_table_header(headers, widths)
 
             for item in sales_items:
-                values = [
-                    item['item_name'][:22],
-                    f"£{item['total_sales_value']:.2f}",
-                    f"£{item['sales_cost']:.2f}",
-                    f"£{item['sales_gp']:.2f}",
-                    f"{item['sales_gp_pct']:.1f}%",
-                    f"{item.get('member_qty', 0):.1f}" if item.get('member_qty', 0) > 0 else '-',
-                    f"{item.get('non_member_qty', 0):.1f}" if item.get('non_member_qty', 0) > 0 else '-',
-                    f"£{item['member_gp']:.2f}",
-                    f"{item['member_gp_pct']:.1f}%"
-                ]
+                if has_member_data:
+                    values = [
+                        item['item_name'][:22],
+                        f"£{item['total_sales_value']:.2f}",
+                        f"£{item['sales_cost']:.2f}",
+                        f"£{item['sales_gp']:.2f}",
+                        f"{item['sales_gp_pct']:.1f}%",
+                        f"{item.get('member_qty', 0):.1f}" if item.get('member_qty', 0) > 0 else '-',
+                        f"{item.get('non_member_qty', 0):.1f}" if item.get('non_member_qty', 0) > 0 else '-',
+                        f"£{item['member_gp']:.2f}",
+                        f"{item['member_gp_pct']:.1f}%"
+                    ]
+                else:
+                    values = [
+                        item['item_name'][:34],
+                        f"£{item['total_sales_value']:.2f}",
+                        f"£{item['sales_cost']:.2f}",
+                        f"£{item['sales_gp']:.2f}",
+                        f"{item['sales_gp_pct']:.1f}%",
+                    ]
                 self.section_table_row(values, widths)
 
-            values = [
-                'TOTAL',
-                f"£{total_sales_value:.2f}",
-                f"£{sum(i['sales_cost'] for i in sales_items):.2f}",
-                f"£{sum(i['sales_gp'] for i in sales_items):.2f}",
-                '',
-                f"{sum(i.get('member_qty', 0) for i in sales_items):.1f}",
-                f"{sum(i.get('non_member_qty', 0) for i in sales_items):.1f}",
-                f"£{total_member_gp:.2f}",
-                f"{overall_member_gp_pct:.1f}%"
-            ]
+            if has_member_data:
+                values = [
+                    'TOTAL',
+                    f"£{total_sales_value:.2f}",
+                    f"£{sum(i['sales_cost'] for i in sales_items):.2f}",
+                    f"£{sum(i['sales_gp'] for i in sales_items):.2f}",
+                    '',
+                    f"{sum(i.get('member_qty', 0) for i in sales_items):.1f}",
+                    f"{sum(i.get('non_member_qty', 0) for i in sales_items):.1f}",
+                    f"£{total_member_gp:.2f}",
+                    f"{overall_member_gp_pct:.1f}%"
+                ]
+            else:
+                values = [
+                    'TOTAL',
+                    f"£{total_sales_value:.2f}",
+                    f"£{sum(i['sales_cost'] for i in sales_items):.2f}",
+                    f"£{sum(i['sales_gp'] for i in sales_items):.2f}",
+                    '',
+                ]
             self.section_table_row(values, widths, is_total=True)
         else:
             self.set_font('Arial', 'I', 10)
             self.cell(0, 10, 'No sales recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
-        # Add stock movement & variance summary
-        self.chapter_title('6. Stock Movement & Variance')
+        # ------------------------------------------------------------------
+        # SECTION 3: Stock Summary by Division
+        # ------------------------------------------------------------------
+        self.add_page()
+        self.chapter_title('3. Stock Summary by Division')
 
-        variance_items = [i for i in report_data if i['expected_consumption'] > 0 and not i.get('is_hidden', False)]
+        if has_member_data:
+            headers = ['Division', 'Itm', 'Stk Val', 'Sale Val', 'GP', 'GP%', 'M Rev', 'M GP%', 'M GP', 'NM Rev', 'NM GP%', 'NM GP']
+            widths = [20, 8, 15, 16, 15, 9, 16, 9, 15, 16, 9, 15]
+        else:
+            headers = ['Division', 'Itm', 'Stk Val', 'Sale Val', 'GP', 'GP%']
+            widths = [30, 10, 20, 20, 20, 16]
+
+        self.section_table_header(headers, widths, font_size=6)
+
+        for division, totals in division_totals.items():
+            gp_pct = (totals['gp'] / totals['sales_value'] * 100) if totals['sales_value'] > 0 else 0
+            if has_member_data:
+                values = [
+                    division[:14],
+                    len(by_division[division]),
+                    f"£{totals['stock_value']:.2f}",
+                    f"£{totals['sales_value']:.2f}",
+                    f"£{totals['gp']:.2f}",
+                    f"{gp_pct:.1f}%",
+                    f"£{totals['member_sales_value']:.2f}",
+                    f"{totals['member_gp_pct']:.1f}%",
+                    f"£{totals['member_gp']:.2f}",
+                    f"£{totals['non_member_sales_value']:.2f}",
+                    f"{totals['non_member_gp_pct']:.1f}%",
+                    f"£{totals['non_member_gp']:.2f}"
+                ]
+            else:
+                values = [
+                    division[:24],
+                    len(by_division[division]),
+                    f"£{totals['stock_value']:.2f}",
+                    f"£{totals['sales_value']:.2f}",
+                    f"£{totals['gp']:.2f}",
+                    f"{gp_pct:.1f}%",
+                ]
+            self.section_table_row(values, widths, font_size=6)
+
+        if has_member_data:
+            values = [
+                'TOTAL',
+                len(report_data),
+                f"£{total_stock_value:.2f}",
+                f"£{total_sales_value:.2f}",
+                f"£{total_gp:.2f}",
+                f"{(total_gp / total_sales_value * 100) if total_sales_value > 0 else 0:.1f}%",
+                f"£{total_member_rev_div:.2f}",
+                f"{total_member_gp_pct_div:.1f}%",
+                f"£{total_member_gp_div:.2f}",
+                f"£{total_non_member_rev_div:.2f}",
+                f"{total_non_member_gp_pct_div:.1f}%",
+                f"£{total_non_member_gp_div:.2f}"
+            ]
+        else:
+            values = [
+                'TOTAL',
+                len(report_data),
+                f"£{total_stock_value:.2f}",
+                f"£{total_sales_value:.2f}",
+                f"£{total_gp:.2f}",
+                f"{(total_gp / total_sales_value * 100) if total_sales_value > 0 else 0:.1f}%",
+            ]
+        self.section_table_row(values, widths, is_total=True, font_size=6)
+        self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 4: Stock Movement & Variance
+        # ------------------------------------------------------------------
+        self.chapter_title('4. Stock Movement & Variance')
+
         if variance_items:
             headers = ['Item', 'Opening', '+Del.', '-Sold', '-Adj', '-Wast', '-Comp', 'Closing', 'Exp.Con', 'Act.Con', 'Var%']
             widths = [34, 16, 14, 14, 14, 14, 14, 16, 16, 16, 14]
@@ -576,12 +461,243 @@ class PDFReport(FPDF):
             self.set_font('Arial', 'I', 10)
             self.cell(0, 10, 'No stock consumption data available for variance calculation.', 0, 1, 'L')
 
-        # SECTION 7: Stocktake Variance Report
+        # ------------------------------------------------------------------
+        # SECTION 5: Draught Yield Report
+        # ------------------------------------------------------------------
+        draught_items = [i for i in draught_items if i['item_id'] in DRAUGHT_YIELD_ITEMS]
+        if draught_items:
+            self.chapter_title('5. Draught Yield Report (pints)')
+
+            headers = ['Item', 'Sales', 'Adj.', 'Wast', 'Comp', 'Open Tabs', 'Consumed', 'Closing', 'Yield%']
+            widths = [38, 16, 14, 14, 14, 16, 18, 18, 16]
+
+            self.section_table_header(headers, widths)
+
+            for item in draught_items:
+                yield_pct = item['yield_pct']
+                yield_str = f"{yield_pct:.1f}%" if yield_pct > 0 else "N/A"
+                adj_display = f"{item['parent_adj_qty']:.1f}" if item.get('parent_adj_qty', 0) > 0 else '-'
+
+                values = [
+                    item['item_name'][:18],
+                    f"{item['total_sales_qty']:.1f}",
+                    adj_display,
+                    f"{item['wastage_qty']:.1f}" if item['wastage_qty'] > 0 else '-',
+                    f"{item['complimentary_qty']:.1f}" if item['complimentary_qty'] > 0 else '-',
+                    f"{item['open_tab_qty']:.1f}" if item['open_tab_qty'] > 0 else '-',
+                    f"{item['expected_consumption']:.1f}",
+                    f"{item['current_stock']:.1f}",
+                    yield_str
+                ]
+                self.section_table_row(values, widths)
+            self.ln(2)
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 5, 'All quantities in pints. Yield% = Sales / Total Consumption. Adj = pints deducted via half pints/shandies.', 0, 1, 'L')
+
+        # ------------------------------------------------------------------
+        # SECTION 6: Wastage Summary
+        # ------------------------------------------------------------------
+        self.chapter_title('6. Wastage Summary')
+
+        if wastage_items:
+            headers = ['Item', 'Division', 'Wastage Qty', 'Cost Price', 'Wastage Value']
+            widths = [60, 40, 25, 30, 30]
+
+            self.section_table_header(headers, widths)
+            total_wastage = sum(i['wastage_qty'] for i in wastage_items)
+
+            for item in wastage_items:
+                wastage_value = item['wastage_qty'] * item['cost_price']
+                values = [
+                    item['item_name'][:25],
+                    item['division'][:18],
+                    f"{item['wastage_qty']:.1f}",
+                    f"£{item['cost_price']:.2f}",
+                    f"£{wastage_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_wastage:.1f}", '', f"£{total_wastage_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+        else:
+            self.set_font('Arial', 'I', 10)
+            self.cell(0, 10, 'No wastage recorded in this period.', 0, 1, 'L')
+        self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 7: Line Cleaning Summary
+        # ------------------------------------------------------------------
+        if line_clean_items:
+            self.chapter_title('7. Line Cleaning Summary')
+
+            headers = ['Item', 'Division', 'Line Clean Qty', 'Cost Price', 'Line Clean Value']
+            widths = [60, 40, 25, 30, 30]
+
+            self.section_table_header(headers, widths)
+            total_line_clean = sum(i['line_clean_qty'] for i in line_clean_items)
+
+            for item in line_clean_items:
+                line_clean_value = item['line_clean_qty'] * item['cost_price']
+                values = [
+                    item['item_name'][:25],
+                    item['division'][:18],
+                    f"{item['line_clean_qty']:.1f}",
+                    f"£{item['cost_price']:.2f}",
+                    f"£{line_clean_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_line_clean:.1f}", '', f"£{total_line_clean_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+            self.ln(5)
+
+        # Combined Wastage & Line Clean note
+        if total_wastage_value > 0 or total_line_clean_value > 0:
+            combined_total = total_wastage_value + total_line_clean_value
+            self.set_font('Arial', 'B', 11)
+            self.set_text_color(0, 0, 0)
+            self.cell(0, 8, f"Total Wastage Value (excluding line clean): £{total_wastage_value:.2f}", 0, 1, 'L')
+            if total_line_clean_value > 0:
+                self.cell(0, 8, f"Total Line Clean Value: £{total_line_clean_value:.2f}", 0, 1, 'L')
+            self.cell(0, 8, f"Combined Wastage & Line Clean Value: £{combined_total:.2f}", 0, 1, 'L')
+            self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 8: Supplier Returns Summary
+        # ------------------------------------------------------------------
+        self.chapter_title('8. Supplier Returns Summary')
+
+        if supplier_return_items:
+            headers = ['Item', 'Division', 'Qty', 'Cost Price', 'Supplier', 'Reason', 'Return Value']
+            widths = [40, 25, 18, 22, 25, 30, 25]
+
+            self.section_table_header(headers, widths)
+            total_supplier_return_qty = sum(i['supplier_return_qty'] for i in supplier_return_items)
+
+            for item in supplier_return_items:
+                return_value = item['supplier_return_qty'] * item['cost_price']
+                values = [
+                    item['item_name'][:20],
+                    item['division'][:12],
+                    f"{item['supplier_return_qty']:.1f}",
+                    f"£{item['cost_price']:.2f}",
+                    str(item.get('supplier_return_supplier', ''))[:12],
+                    str(item.get('supplier_return_reason', ''))[:18],
+                    f"£{return_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_supplier_return_qty:.1f}", '', '', '', f"£{total_supplier_return_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+        else:
+            self.set_font('Arial', 'I', 10)
+            self.cell(0, 10, 'No supplier returns recorded in this period.', 0, 1, 'L')
+        self.ln(5)
+
+        if total_supplier_return_value > 0:
+            self.set_font('Arial', 'B', 11)
+            self.set_text_color(0, 0, 0)
+            self.cell(0, 8, f"Total Supplier Return Value (at cost): £{total_supplier_return_value:.2f}", 0, 1, 'L')
+            self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 9: Complimentary Summary
+        # ------------------------------------------------------------------
+        self.chapter_title('9. Complimentary Summary')
+
+        if comp_items:
+            headers = ['Item', 'Division', 'Qty', 'Retail Value']
+            widths = [70, 50, 30, 35]
+
+            self.section_table_header(headers, widths)
+            total_comp = sum(i['complimentary_qty'] for i in comp_items)
+
+            for item in comp_items:
+                comp_value = item['complimentary_qty'] * item['sell_price']
+                values = [
+                    item['item_name'][:30],
+                    item['division'][:22],
+                    f"{item['complimentary_qty']:.1f}",
+                    f"£{comp_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_comp:.1f}", f"£{total_comp_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+        else:
+            self.set_font('Arial', 'I', 10)
+            self.cell(0, 10, 'No complimentary items recorded in this period.', 0, 1, 'L')
+        self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 10: Open Tabs / Pending Sales Summary
+        # ------------------------------------------------------------------
+        self.chapter_title('10. Open Tabs / Pending Sales Summary')
+
+        if open_tab_items:
+            headers = ['Item', 'Division', 'Qty', 'Cost Price', 'Pending Value']
+            widths = [60, 40, 25, 30, 30]
+
+            self.section_table_header(headers, widths)
+            total_open_tab = sum(i['open_tab_qty'] for i in open_tab_items)
+            total_open_tab_value = sum(i['open_tab_qty'] * i['cost_price'] for i in open_tab_items)
+
+            for item in open_tab_items:
+                open_tab_value = item['open_tab_qty'] * item['cost_price']
+                values = [
+                    item['item_name'][:25],
+                    item['division'][:18],
+                    f"{item['open_tab_qty']:.1f}",
+                    f"£{item['cost_price']:.2f}",
+                    f"£{open_tab_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_open_tab:.1f}", '', f"£{total_open_tab_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+        else:
+            self.set_font('Arial', 'I', 10)
+            self.cell(0, 10, 'No open tabs recorded in this period.', 0, 1, 'L')
+        self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 11: Parent Stock Adjustment Summary
+        # ------------------------------------------------------------------
+        if parent_adj_items:
+            self.chapter_title('11. Parent Stock Adjustments')
+
+            headers = ['Parent Item', 'Division', 'Qty Adjusted', 'Cost Price', 'Adj. Value']
+            widths = [50, 40, 25, 30, 30]
+
+            self.section_table_header(headers, widths)
+            total_adj_qty = sum(i['parent_adj_qty'] for i in parent_adj_items)
+            total_adj_value = sum(i['parent_adj_qty'] * i['cost_price'] for i in parent_adj_items)
+
+            for item in parent_adj_items:
+                adj_value = item['parent_adj_qty'] * item['cost_price']
+                values = [
+                    item['item_name'][:25],
+                    item['division'][:18],
+                    f"{item['parent_adj_qty']:.1f}",
+                    f"£{item['cost_price']:.2f}",
+                    f"£{adj_value:.2f}"
+                ]
+                self.section_table_row(values, widths)
+
+            values = ['TOTAL', '', f"{total_adj_qty:.1f}", '', f"£{total_adj_value:.2f}"]
+            self.section_table_row(values, widths, is_total=True)
+            self.ln(5)
+
+        # ------------------------------------------------------------------
+        # SECTION 12: Stocktake Variance Report
+        # ------------------------------------------------------------------
         if stocktake_data:
             st_items = [i for i in stocktake_data if i.get('has_stocktake', False)]
             if st_items:
+                # Sort by absolute variance value so the biggest issues appear first
+                st_items.sort(key=lambda i: abs(i.get('variance_value', 0) or 0), reverse=True)
                 self.add_page()
-                self.chapter_title('7. Stocktake Variance Report')
+                self.chapter_title('12. Stocktake Variance Report')
 
                 headers = ['Item', 'Expected', 'Counted', 'Variance', 'Var %', 'Value']
                 widths = [60, 22, 22, 22, 18, 22]
@@ -795,7 +911,7 @@ class StockOrderSheetPDF(FPDF):
             report_data: List of dicts from reports.build_custom_stock_order_sheet_data().
                 Expected keys: item_id, item_name, category, supplier, quantity,
                 measure, reorder_level, suggested_order, is_placeholder.
-            downloads_dir: Directory to save the PDF. Defaults to ~/Downloads.
+            downloads_dir: Directory to save the PDF file. Defaults to ~/Downloads.
 
         Returns:
             The full path to the saved PDF file.

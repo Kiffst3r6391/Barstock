@@ -12,7 +12,14 @@ import sys
 from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
+import re
 from fpdf import FPDF
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    pdfplumber = None
+    PDFPLUMBER_AVAILABLE = False
 from categories import get_category, should_exclude, CATEGORY_ORDER, EXCLUDED_ITEMS, SALES_INCLUDED_EXCLUDED_ITEMS
 from conversions import (
     get_conversion, convert_to_system, convert_to_input,
@@ -25,16 +32,18 @@ from sales_mapping import (
     get_affected_parents_description, is_hidden_from_stock_view, get_hidden_items,
     get_effective_cost_price, resolve_epos_item_id
 )
+from supplier_mapping import get_supplier, get_supplier_order
 from inventory_sync import (
     find_missing_mappings, has_sync_issues, format_sync_report,
-    append_item_to_items_csv, find_items_csv_inventory_mismatches,
+    append_item_to_items_csv, update_items_csv_total_value,
+    find_items_csv_inventory_mismatches,
     find_untracked_items_on_order_sheet, find_recent_negative_items,
 )
 from actions import (
     ACTION_SALES, ACTION_SALES_ONE_UNIT, ACTION_DELIVERY,
     ACTION_WASTAGE, ACTION_LINE_CLEAN, ACTION_COMPLIMENTARY,
     ACTION_OPEN_TAB, ACTION_TAB_CANCELLED, ACTION_PARENT_STOCK_ADJ,
-    ACTION_STOCKTAKE_BASELINE, ACTION_IMPORT,
+    ACTION_STOCKTAKE_BASELINE, ACTION_IMPORT, ACTION_SUPPLIER_RETURN,
 )
 
 # Calendar picker
@@ -158,10 +167,12 @@ MEMBER_DISCOUNT_PCT = 10
 class DateRangeDialog:
     """Reusable date range picker dialog with interactive calendars."""
 
-    def __init__(self, parent, title="Select Date Range"):
+    def __init__(self, parent, title="Select Date Range", default_start=None, default_end=None):
         self.parent = parent
         self.title = title
         self.result = None
+        self.default_start = default_start
+        self.default_end = default_end
 
         self.top = tk.Toplevel(parent)
         self.top.title(title)
@@ -230,6 +241,12 @@ class DateRangeDialog:
                                      selectbackground='#0078d7', selectforeground='white', headersbackground='#444444', headersforeground='white')
             self.end_cal.pack(padx=5, pady=5)
 
+            # Apply caller-supplied defaults if present
+            if self.default_start is not None:
+                self.start_cal.selection_set(self.default_start)
+            if self.default_end is not None:
+                self.end_cal.selection_set(self.default_end)
+
             # Selected dates display
             self.dates_label = tk.Label(frame, text="", font=('Arial', 10))
             self.dates_label.pack(pady=5)
@@ -245,11 +262,15 @@ class DateRangeDialog:
 
             tk.Label(date_frame, text="Start:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
             self.start_var = tk.StringVar()
+            if self.default_start is not None:
+                self.start_var.set(self.default_start.strftime(DATE_FORMAT_DISPLAY))
             tk.Entry(date_frame, textvariable=self.start_var, width=15).grid(row=0, column=1, padx=5, pady=5)
             tk.Label(date_frame, text="DD-MM-YYYY").grid(row=0, column=2, padx=5, pady=5, sticky='w')
 
             tk.Label(date_frame, text="End:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
             self.end_var = tk.StringVar()
+            if self.default_end is not None:
+                self.end_var.set(self.default_end.strftime(DATE_FORMAT_DISPLAY))
             tk.Entry(date_frame, textvariable=self.end_var, width=15).grid(row=1, column=1, padx=5, pady=5)
             tk.Label(date_frame, text="DD-MM-YYYY").grid(row=1, column=2, padx=5, pady=5, sticky='w')
 
@@ -973,6 +994,7 @@ class BarStockManagementSystem:
             ("Manage Stock", self.manage_initial_stock),
             ("Add Wastage", self.add_wastage),
             ("Add Complimentary", self.add_complimentary),
+            ("Supplier Return", self.add_supplier_return),
             ("Open Tabs", self.open_tabs_menu),
             ("Line Clean", self.line_clean),
             ("Transactions", self.view_transaction_log),
@@ -994,36 +1016,29 @@ class BarStockManagementSystem:
             tile.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew')
 
     def _render_reports_hub(self):
-        """Render the reports hub with report cards."""
+        """Render the reports hub as a simple vertical list."""
         header = self.themed_frame(self.main_menu)
         header.pack(fill='x', pady=(0, 20))
         self.themed_label(header, "Reports",
                           font=(THEME_FONT, 24, 'bold')).pack(side='left')
 
-        reports = [
-            ("Gross Profit", "Profit margins by item", self.generate_gp_report),
-            ("Division Report", "Stock value by division", self.generate_division_report),
-            ("Reorder Suggestions", "Items below reorder level", self.generate_reorder_report),
-            ("Sales Trends", "Sales over time", self.generate_sales_analytics),
-            ("Surplus / Variance", "Stock discrepancies", self.generate_surplus_report),
-            ("Transaction Log", "All transactions", self.view_transaction_log),
-            ("Delivery History", "Past deliveries", self.view_delivery_history),
-            ("Reconciliation", "Stock vs transactions", self.generate_reconciliation_report),
+        buttons = [
+            ("📄 Download Comprehensive PDF Report", self.download_comprehensive_report),
+            ("Gross Profit Report", self.generate_gp_report),
+            ("Division Report", self.generate_division_report),
+            ("Delivery History", self.view_delivery_history),
         ]
 
-        grid = self.themed_frame(self.main_menu)
-        grid.pack(fill='x')
-        for i in range(3):
-            grid.grid_columnconfigure(i, weight=1)
+        list_frame = self.themed_frame(self.main_menu)
+        list_frame.pack(fill='both', expand=True)
 
-        for i, (title, desc, command) in enumerate(reports):
-            card = self._card(grid)
-            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky='nsew')
-            tk.Label(card, text=title, font=(THEME_FONT, 13, 'bold'),
-                     fg=THEME_TEXT, bg=THEME_CARD, anchor='w').pack(fill='x', padx=14, pady=(12, 4))
-            tk.Label(card, text=desc, font=(THEME_FONT, 10),
-                     fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x', padx=14, pady=(0, 10))
-            self.styled_button(card, "Open", command, width=12, variant='primary').pack(anchor='w', padx=14, pady=(0, 12))
+        for text, command in buttons:
+            btn = self.tile_button(list_frame, text, command)
+            btn.pack(fill='x', pady=4)
+
+        back_btn = self.tile_button(list_frame, "← Back to Main Menu",
+                                     self.show_main_menu)
+        back_btn.pack(fill='x', pady=(16, 4))
 
     def _render_sync_alert(self, parent=None):
         """Show a non-blocking setup/sync banner if issues were detected at startup."""
@@ -1255,7 +1270,7 @@ class BarStockManagementSystem:
         self.create_card(cards_frame, "Period Sales", f"£{snap['period_sales']:,.2f}",
                          snap['period_label'])
         self.create_card(cards_frame, "Stock Holding", f"£{snap['stock_holding']:,.2f}",
-                         "At cost price")
+                         "At cost price (inc VAT)")
         recent_uploads_text = "\n".join(
             [f"{u['period']}" for u in snap['recent_sales_uploads']]
         ) or "No recent uploads"
@@ -2207,9 +2222,22 @@ class BarStockManagementSystem:
             self.current_delivery_supplier = selected_supplier
             self.process_delivery_multi_item()
 
+        def upload_invoice_for_price_check():
+            selected_supplier = supplier_var.get()
+            if selected_supplier == "Select supplier...":
+                messagebox.showerror("Error", "Please select a supplier first.")
+                return
+            if selected_supplier != "Booker":
+                messagebox.showerror("Error", "Invoice price check is currently only available for Booker invoices.")
+                return
+            self.current_delivery_supplier = selected_supplier
+            self.upload_delivery_invoice_price_check()
+
         btn_frame = self.themed_frame(self.main_menu)
         btn_frame.pack(fill='x', padx=20, pady=(10, 0))
         self.styled_button(btn_frame, "Proceed", proceed_with_delivery, width=16, variant='primary').pack(side='left', padx=(0, 10))
+        self.styled_button(btn_frame, "Upload Invoice to Price Check", upload_invoice_for_price_check,
+                           width=26, variant='secondary').pack(side='left', padx=(0, 10))
         self.styled_button(btn_frame, "Back", self.show_dashboard, width=16, variant='ghost').pack(side='left')
 
         # Recent deliveries
@@ -2265,9 +2293,16 @@ class BarStockManagementSystem:
         self.themed_label(header_frame, f"Add Delivery - {supplier_name}", font=(THEME_FONT, 24, 'bold')).pack(side='left')
 
         self.refresh_data()
-        full_item_list = [f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}" for _, row in self.inventory_df.iterrows()]
+        from sales_mapping import get_hidden_items
+        from categories import EXCLUDED_ITEMS
+        excluded_ids = set(get_hidden_items()) | {i.lower() for i in EXCLUDED_ITEMS}
+        full_item_list = [
+            f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}"
+            for _, row in self.inventory_df.iterrows()
+            if row[COL_ITEM_ID].lower() not in excluded_ids
+        ]
         if not full_item_list:
-            messagebox.showerror("Error", "No items in inventory. Please add items first.")
+            messagebox.showerror("Error", "No parent items available for delivery. Please add stock first.")
             self.show_dashboard()
             return
 
@@ -2358,7 +2393,7 @@ class BarStockManagementSystem:
 
         cost_frame = tk.Frame(qty_cost_row, bg=THEME_CARD)
         cost_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
-        cost_label = tk.Label(cost_frame, text="Cost Price (£)", font=(THEME_FONT, 10, 'bold'),
+        cost_label = tk.Label(cost_frame, text="Cost Price (inc VAT) (£)", font=(THEME_FONT, 10, 'bold'),
                               fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
         cost_label.pack(fill='x')
         entry_cost_price = tk.Entry(cost_frame, width=15, font=(THEME_FONT, 12))
@@ -2443,7 +2478,7 @@ class BarStockManagementSystem:
                         conversion_label.config(text=f"1 {input_unit} = {factor} {output_unit}s")
                         selected_factor[0] = factor
                         selected_has_conversion[0] = True
-                        cost_label.config(text="Pack Cost Price (£):")
+                        cost_label.config(text="Pack Cost Price (inc VAT) (£):")
                         entry_cost_price.delete(0, tk.END)
                         entry_cost_price.insert(0, f"{last_delivery_cost_per_unit[0] * factor:.2f}")
                     else:
@@ -2452,7 +2487,7 @@ class BarStockManagementSystem:
                         conversion_label.config(text="")
                         selected_factor[0] = 1.0
                         selected_has_conversion[0] = False
-                        cost_label.config(text="Cost Price (£):")
+                        cost_label.config(text="Cost Price (inc VAT) (£):")
                         entry_cost_price.delete(0, tk.END)
                         entry_cost_price.insert(0, f"{last_delivery_cost_per_unit[0]:.2f}")
                     update_gp_label()
@@ -2821,6 +2856,10 @@ class BarStockManagementSystem:
         """Add complimentary transactions (multi-item like delivery)."""
         self.process_multi_transaction(ACTION_COMPLIMENTARY)
 
+    def add_supplier_return(self):
+        """Add supplier return transactions (multi-item)."""
+        self.process_multi_transaction(ACTION_SUPPLIER_RETURN)
+
     def open_tabs_menu(self):
         """Display the Open Tabs menu with options to create or view tabs."""
         self.clear_main_menu()
@@ -3066,20 +3105,14 @@ class BarStockManagementSystem:
                     messagebox.showerror("Error", "Failed to create open tab.")
                     return
 
-                # Deduct stock
-                for item_id, item_name, quantity in transaction_items:
-                    self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
-                    if has_parent_stock(item_id):
-                        apply_sale_to_parent(item_id, quantity, self.inventory_df, COL_ITEM_ID, COL_QUANTITY)
-
-                if InventoryDataManager.save_inventory(self.inventory_df):
-                    msg = f"Tab saved for '{customer_name}'!\n\n{len(transaction_items)} items:\n"
-                    msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty in transaction_items])
-                    messagebox.showinfo("Success", msg)
-                    self.update_dashboard_stats()
-                    self.open_tabs_menu()
-                else:
-                    messagebox.showerror("Error", "Failed to save inventory.")
+                # Stock was deducted atomically inside create_open_tab; refresh
+                # the in-memory DataFrame from the database so the UI stays in sync.
+                self.refresh_data()
+                msg = f"Tab saved for '{customer_name}'!\n\n{len(transaction_items)} items:\n"
+                msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty in transaction_items])
+                messagebox.showinfo("Success", msg)
+                self.update_dashboard_stats()
+                self.open_tabs_menu()
             except Exception as e:
                 messagebox.showerror("Error", f"Tab failed: {e}")
 
@@ -3177,6 +3210,37 @@ class BarStockManagementSystem:
             else:
                 messagebox.showerror("Error", "Failed to close tab.")
 
+        def close_as_complimentary():
+            selected = tabs_tree.selection()
+            if not selected:
+                messagebox.showerror("Error", "Please select a tab to close as complimentary.")
+                return
+            item_values = tabs_tree.item(selected[0], 'values')
+            tab_id = int(item_values[0])
+
+            if not messagebox.askyesno("Confirm", "Close this tab as complimentary? Stock will remain deducted and no sale will be recorded."):
+                return
+
+            self.refresh_data()
+            tab_items = tabs_df[tabs_df['id'] == tab_id]
+            items_for_db = []
+            for _, row in tab_items.iterrows():
+                items_for_db.append({
+                    'item_id': row['item_id'],
+                    'quantity': row['quantity'],
+                    'cost_price': row['cost_price'],
+                    'sell_price': row['sell_price']
+                })
+
+            if InventoryDataManager.close_open_tab_as_complimentary(tab_id, items_for_db):
+                # Reload log to include complimentary transactions
+                self.log_df = InventoryDataManager.load_log(self.inventory_df)
+                messagebox.showinfo("Success", f"Tab {tab_id} closed as complimentary.")
+                self.update_dashboard_stats()
+                self.view_open_tabs()
+            else:
+                messagebox.showerror("Error", "Failed to close tab as complimentary.")
+
         def cancel_tab():
             selected = tabs_tree.selection()
             if not selected:
@@ -3194,42 +3258,25 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", "Failed to cancel tab.")
                 return
 
-            # Restore stock
-            for item in items_to_restore:
-                item_id = item['item_id']
-                quantity = item['quantity']
-                self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] += quantity
-                if has_parent_stock(item_id):
-                    # Reverse parent stock adjustment by adding back
-                    parent_info = get_parent_for_sale(item_id)
-                    if parent_info:
-                        parent_ids, factors, _ = parent_info
-                        if isinstance(parent_ids, list):
-                            for pid, factor in zip(parent_ids, factors):
-                                if pid:
-                                    self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == pid, COL_QUANTITY] += quantity * factor
-                        elif parent_ids:
-                            self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == parent_ids, COL_QUANTITY] += quantity * factors
-
-            if InventoryDataManager.save_inventory(self.inventory_df):
-                # Reload log to include cancellation
-                self.log_df = InventoryDataManager.load_log(self.inventory_df)
-                messagebox.showinfo("Success", f"Tab {tab_id} cancelled and stock restored.")
-                self.update_dashboard_stats()
-                self.view_open_tabs()
-            else:
-                messagebox.showerror("Error", "Failed to save restored stock.")
+            # Stock was restored atomically inside cancel_open_tab; refresh the
+            # in-memory DataFrame from the database so the UI stays in sync.
+            self.refresh_data()
+            self.log_df = InventoryDataManager.load_log(self.inventory_df)
+            messagebox.showinfo("Success", f"Tab {tab_id} cancelled and stock restored.")
+            self.update_dashboard_stats()
+            self.view_open_tabs()
 
         btn_frame = tk.Frame(self.main_menu)
         btn_frame.pack(pady=10)
         tk.Button(btn_frame, text="Close as Sale", command=close_as_sale, width=15).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Close as Complimentary", command=close_as_complimentary, width=20).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Cancel Tab", command=cancel_tab, width=15).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Back", command=self.open_tabs_menu, width=15).pack(side=tk.LEFT, padx=5)
 
         self.root.update_idletasks()
 
     def process_multi_transaction(self, action):
-        """Process wastage or complimentary transactions with multiple items."""
+        """Process wastage, complimentary or supplier return transactions with multiple items."""
         self.clear_main_menu()
 
         # Header
@@ -3295,7 +3342,7 @@ class BarStockManagementSystem:
         entry_quantity = tk.Entry(entry_frame, width=15)
         entry_quantity.grid(row=2, column=1, padx=5, pady=8, sticky="w")
 
-        # Reason dropdown for Wastage and Complimentary
+        # Reason dropdown for Wastage, Complimentary and Supplier Return
         if action == ACTION_WASTAGE:
             tk.Label(entry_frame, text="Reason:").grid(row=3, column=0, padx=5, pady=8, sticky="e")
             reason_var = tk.StringVar(value="Broken/Damaged")
@@ -3316,6 +3363,23 @@ class BarStockManagementSystem:
             stock_row = 4
             conv_row = 5
             btn_row = 6
+        elif action == ACTION_SUPPLIER_RETURN:
+            tk.Label(entry_frame, text="Reason:").grid(row=3, column=0, padx=5, pady=8, sticky="e")
+            reason_var = tk.StringVar(value="Faulty Keg")
+            reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
+                                           values=["Faulty Keg", "Out of Date", "Damaged", "Wrong Product", "Other"],
+                                           width=33, state="readonly")
+            reason_dropdown.grid(row=3, column=1, padx=5, pady=8, sticky="w")
+
+            tk.Label(entry_frame, text="Supplier:").grid(row=4, column=0, padx=5, pady=8, sticky="e")
+            supplier_var = tk.StringVar(value="Tennents")
+            supplier_dropdown = ttk.Combobox(entry_frame, textvariable=supplier_var,
+                                             values=get_supplier_order() + ["Other"],
+                                             width=33, state="readonly")
+            supplier_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
+            stock_row = 5
+            conv_row = 6
+            btn_row = 7
         else:
             stock_row = 3
             conv_row = 4
@@ -3345,6 +3409,9 @@ class BarStockManagementSystem:
                         stock_label.config(text=f"Current stock: {qty:.1f}")
                         qty_label.config(text="Quantity:")
                         conversion_label.config(text="")
+                    if action == ACTION_SUPPLIER_RETURN:
+                        mapped_supplier = get_supplier(item_id)
+                        supplier_var.set(mapped_supplier)
                 except:
                     stock_label.config(text="Current stock: -")
             else:
@@ -3361,7 +3428,10 @@ class BarStockManagementSystem:
         list_frame = tk.LabelFrame(main_frame, text=f"Items in this {action}", font=('Arial', 10, 'bold'))
         list_frame.pack(side=tk.RIGHT, fill='both', expand=True)
 
-        columns = ('item_id', 'item_name', 'quantity', 'reason')
+        if action == ACTION_SUPPLIER_RETURN:
+            columns = ('item_id', 'item_name', 'quantity', 'reason', 'supplier')
+        else:
+            columns = ('item_id', 'item_name', 'quantity', 'reason')
         items_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
         items_tree.heading('item_id', text='Item ID')
         items_tree.heading('item_name', text='Name')
@@ -3371,6 +3441,9 @@ class BarStockManagementSystem:
         items_tree.column('item_name', width=120)
         items_tree.column('quantity', width=60)
         items_tree.column('reason', width=120)
+        if action == ACTION_SUPPLIER_RETURN:
+            items_tree.heading('supplier', text='Supplier')
+            items_tree.column('supplier', width=100)
         items_tree.pack(fill='both', expand=True, padx=5, pady=5)
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
@@ -3399,12 +3472,13 @@ class BarStockManagementSystem:
 
             item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
             item_name = item_row[COL_ITEM_NAME]
-            reason = reason_var.get() if action in (ACTION_WASTAGE, ACTION_COMPLIMENTARY) else ""
+            reason = reason_var.get() if action in (ACTION_WASTAGE, ACTION_COMPLIMENTARY, ACTION_SUPPLIER_RETURN) else ""
+            supplier = supplier_var.get() if action == ACTION_SUPPLIER_RETURN else ""
 
             # Check if already added
-            for i, (eid, _, eqty, _) in enumerate(transaction_items):
+            for i, (eid, _, eqty, _, _) in enumerate(transaction_items):
                 if eid == item_id:
-                    transaction_items[i] = (eid, item_name, eqty + quantity, reason)
+                    transaction_items[i] = (eid, item_name, eqty + quantity, reason, supplier)
                     refresh_list()
                     item_dropdown.set("Select an item...")
                     entry_quantity.delete(0, tk.END)
@@ -3412,7 +3486,7 @@ class BarStockManagementSystem:
                     conversion_label.config(text="")
                     return
 
-            transaction_items.append((item_id, item_name, quantity, reason))
+            transaction_items.append((item_id, item_name, quantity, reason, supplier))
             refresh_list()
             item_dropdown.set("Select an item...")
             entry_quantity.delete(0, tk.END)
@@ -3426,7 +3500,7 @@ class BarStockManagementSystem:
                 return
             item_values = items_tree.item(sel[0], 'values')
             item_id = item_values[0]
-            for i, (eid, _, _, _) in enumerate(transaction_items):
+            for i, (eid, _, _, _, _) in enumerate(transaction_items):
                 if eid == item_id:
                     transaction_items.pop(i)
                     break
@@ -3435,8 +3509,11 @@ class BarStockManagementSystem:
         def refresh_list():
             for item in items_tree.get_children():
                 items_tree.delete(item)
-            for item_id, item_name, qty, reason in transaction_items:
-                items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}", reason))
+            for item_id, item_name, qty, reason, supplier in transaction_items:
+                if action == ACTION_SUPPLIER_RETURN:
+                    items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}", reason, supplier))
+                else:
+                    items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}", reason))
 
         def save_all():
             if not transaction_items:
@@ -3447,15 +3524,15 @@ class BarStockManagementSystem:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 log_entries = []
 
-                for item_id, item_name, quantity, reason in transaction_items:
+                for item_id, item_name, quantity, reason, supplier in transaction_items:
                     # Negative stock guard for the item itself
                     ok, current_qty, _ = self.check_negative_stock(item_id, quantity)
                     if not ok:
                         messagebox.showerror("Negative Stock", f"Cannot {action.lower()} {quantity} of '{item_id}': only {current_qty} in stock.")
                         continue
 
-                    # Negative parent stock guard
-                    if has_parent_stock(item_id):
+                    # Negative parent stock guard (not applicable to supplier returns)
+                    if action != ACTION_SUPPLIER_RETURN and has_parent_stock(item_id):
                         parent_ok, parent_issues = check_apply_sale_to_parent(
                             item_id, quantity, self.inventory_df,
                             COL_ITEM_ID, COL_QUANTITY, COL_ALLOW_NEGATIVE
@@ -3469,15 +3546,17 @@ class BarStockManagementSystem:
 
                     if action == ACTION_WASTAGE:
                         self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
+                    elif action == ACTION_SUPPLIER_RETURN:
+                        self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
                     else:  # Complimentary
                         self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
 
-                    if has_parent_stock(item_id):
+                    if action != ACTION_SUPPLIER_RETURN and has_parent_stock(item_id):
                         apply_sale_to_parent(item_id, quantity, self.inventory_df, COL_ITEM_ID, COL_QUANTITY)
 
                     cost_price = get_effective_cost_price(item_id, self.inventory_df, COL_ITEM_ID, COL_COST_PRICE)
                     sell_price = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_SELL_PRICE].values[0]
-                    log_entries.append([item_id, action, quantity, timestamp, cost_price, sell_price, "", "", reason])
+                    log_entries.append([item_id, action, quantity, timestamp, cost_price, sell_price, supplier, "", reason])
 
                 if log_entries:
                     new_log_df = pd.DataFrame(log_entries, columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON])
@@ -3485,7 +3564,7 @@ class BarStockManagementSystem:
 
                 if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
                     msg = f"{action} saved!\n\n{len(transaction_items)} items:\n"
-                    msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty, _ in transaction_items])
+                    msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty, _, _ in transaction_items])
                     messagebox.showinfo("Success", msg)
                     self.update_dashboard_stats()
                     self.show_dashboard()
@@ -4178,43 +4257,7 @@ class BarStockManagementSystem:
             return True
 
         def save_and_set_baseline():
-            """Save stocktake, keep counts in memory, then immediately set as new baseline."""
-            from data_manager import create_backup
-            backup_path = create_backup('before_baseline_reset')
-            if backup_path:
-                print(f"Pre-baseline backup created: {backup_path}")
-
-            note = note_entry.get().strip()
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            # Step 1: save stocktake snapshot
-            recorded = 0
-            skipped = 0
-            errors = 0
-            for item in item_entries:
-                val = counts.get(item['item_id'], '').strip()
-                if not val:
-                    skipped += 1
-                    continue
-                try:
-                    counted_input = float(val)
-                    if counted_input < 0:
-                        errors += 1
-                        continue
-                    counted_system = counted_input * item['factor']
-                    variance = counted_system - item['expected_system']
-                    success = record_stocktake(
-                        item['item_id'], counted_system, item['expected_system'],
-                        variance, timestamp, note
-                    )
-                    if success:
-                        recorded += 1
-                    else:
-                        errors += 1
-                except ValueError:
-                    errors += 1
-
-            # Step 2: set baseline from same counts
+            """Save stocktake and immediately set the counted quantities as the new baseline."""
             counted_items = collect_counted_items()
             if not counted_items:
                 messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
@@ -4222,6 +4265,9 @@ class BarStockManagementSystem:
 
             if not confirm_unit_warning(counted_items):
                 return
+
+            note = note_entry.get().strip()
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             if not messagebox.askyesno(
                 "Confirm Baseline Reset",
@@ -4237,46 +4283,29 @@ class BarStockManagementSystem:
             ):
                 return
 
-            from data_manager import archive_transactions_before_date, add_baseline_reset
-            archived_count = archive_transactions_before_date(timestamp)
-            if archived_count < 0:
-                messagebox.showerror("Error", "Failed to archive transactions. Baseline reset aborted.")
-                return
+            from data_manager import create_backup, reset_baseline
+            backup_path = create_backup('before_baseline_reset')
+            if backup_path:
+                print(f"Pre-baseline backup created: {backup_path}")
 
-            baseline_logged = 0
-            try:
-                with AtomicTransaction() as txn:
-                    for item in counted_items:
-                        txn.log_transaction(
-                            item_id=item['item_id'],
-                            action=ACTION_STOCKTAKE_BASELINE,
-                            quantity=item['counted_system'],
-                            timestamp=timestamp,
-                            reason=f"Baseline from physical count: {item['input_value']:.1f} {item['input_unit']}s"
-                        )
-                        baseline_logged += 1
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to log baseline transactions: {e}")
+            result = reset_baseline(counted_items, timestamp, note)
+            if not result['success']:
                 return
-
-            add_baseline_reset(timestamp, len(counted_items), archived_count, note)
 
             msg = (
                 f"Stocktake saved and baseline reset complete!\n\n"
-                f"Stocktake recorded: {recorded} items\n"
-                f"Skipped (blank): {skipped} items\n"
-                f"Transactions archived: {archived_count}\n"
-                f"Baseline entries logged: {baseline_logged}\n\n"
+                f"Stocktake recorded: {result['saved_count']} items\n"
+                f"Transactions archived: {result['archived_count']}\n"
+                f"Baseline entries logged: {result['baseline_logged']}\n\n"
                 f"From now on, all reports will calculate expected stock\n"
                 f"using only transactions from {timestamp} onward."
             )
-            if errors > 0:
-                msg += f"\nErrors: {errors} items"
             messagebox.showinfo("Save & Baseline Complete", msg)
+            self.refresh_data()
             self.show_dashboard()
 
         def set_baseline_from_stocktake():
-            """Save stocktake and reset baseline: archive old transactions, log baselines."""
+            """Save stocktake and reset baseline: archive old transactions, set inventory, log baselines."""
             counted_items = collect_counted_items()
             if not counted_items:
                 messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
@@ -4301,53 +4330,54 @@ class BarStockManagementSystem:
             ):
                 return
 
-            from data_manager import create_backup
+            from data_manager import create_backup, reset_baseline
             backup_path = create_backup('before_baseline_reset')
             if backup_path:
                 print(f"Pre-baseline backup created: {backup_path}")
 
-            saved_count = 0
-            for item in counted_items:
-                success = record_stocktake(
-                    item['item_id'], item['counted_system'], 0,
-                    item['counted_system'], timestamp, note + " (Baseline)"
-                )
-                if success:
-                    saved_count += 1
-
-            from data_manager import archive_transactions_before_date, add_baseline_reset
-            archived_count = archive_transactions_before_date(timestamp)
-            if archived_count < 0:
-                messagebox.showerror("Error", "Failed to archive transactions. Baseline reset aborted.")
+            result = reset_baseline(counted_items, timestamp, note)
+            if not result['success']:
                 return
-
-            baseline_logged = 0
-            try:
-                with AtomicTransaction() as txn:
-                    for item in counted_items:
-                        txn.log_transaction(
-                            item_id=item['item_id'],
-                            action=ACTION_STOCKTAKE_BASELINE,
-                            quantity=item['counted_system'],
-                            timestamp=timestamp,
-                            reason=f"Baseline from physical count: {item['input_value']:.1f} {item['input_unit']}s"
-                        )
-                        baseline_logged += 1
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to log baseline transactions: {e}")
-                return
-
-            add_baseline_reset(timestamp, saved_count, archived_count, note)
 
             msg = (
                 f"Baseline reset complete!\n\n"
-                f"Stocktake saved: {saved_count} items\n"
-                f"Transactions archived: {archived_count}\n"
-                f"Baseline entries logged: {baseline_logged}\n\n"
+                f"Stocktake saved: {result['saved_count']} items\n"
+                f"Transactions archived: {result['archived_count']}\n"
+                f"Baseline entries logged: {result['baseline_logged']}\n\n"
                 f"From now on, all reports will calculate expected stock\n"
                 f"using only transactions from {timestamp} onward."
             )
             messagebox.showinfo("Baseline Reset Complete", msg)
+            self.refresh_data()
+            self.show_dashboard()
+
+        def roll_forward_and_clean_action():
+            """Clean old snapshots and audit rows once the baseline is confirmed."""
+            if not messagebox.askyesno(
+                "Roll Forward & Clean",
+                "This will tidy up after your stocktake by removing old stocktake snapshots\n"
+                "and old baseline reset records, leaving only the current baseline.\n\n"
+                "Your current inventory and any deliveries/sales/wastage entered since\n"
+                "the stocktake will NOT be touched.\n\n"
+                "A full backup will be created first so old data can be recovered if needed.\n\n"
+                "Do you want to continue?"
+            ):
+                return
+
+            from data_manager import roll_forward_and_clean
+            result = roll_forward_and_clean()
+            if not result.get('success'):
+                return
+
+            msg = (
+                f"Roll forward complete.\n\n"
+                f"Old stocktake snapshots removed: {result.get('snapshots_removed', 0)}\n"
+                f"Old baseline reset records removed: {result.get('resets_removed', 0)}\n\n"
+                f"Backup saved to:\n{result.get('backup_path', 'Unknown')}\n\n"
+                f"The app is now clean and ready for the next period."
+            )
+            messagebox.showinfo("Roll Forward & Clean Complete", msg)
+            self.refresh_data()
             self.show_dashboard()
 
         def back():
@@ -4365,6 +4395,8 @@ class BarStockManagementSystem:
         baseline_btn.pack(side=tk.LEFT, padx=(0, 10))
         save_baseline_btn = self.styled_button(actions_frame, "Save & Set Baseline", save_and_set_baseline, width=22, variant='primary')
         save_baseline_btn.pack(side=tk.LEFT, padx=(0, 10))
+        clean_btn = self.styled_button(actions_frame, "Roll Forward & Clean", roll_forward_and_clean_action, width=22, variant='danger')
+        clean_btn.pack(side=tk.LEFT, padx=(0, 10))
         self.styled_button(actions_frame, "Back", back, width=12, variant='ghost').pack(side=tk.LEFT)
 
         self._apply_legacy_theme()
@@ -4733,6 +4765,7 @@ class BarStockManagementSystem:
         frame.pack(pady=10, padx=20, fill='both', expand=True)
 
         buttons = [
+            ("📄 Download Comprehensive PDF Report", self.download_comprehensive_report),
             ("Gross Profit Report", self.generate_gp_report),
             ("Division Report", self.generate_division_report),
             ("Period Comparison Report", self.generate_comparison_report),
@@ -4749,18 +4782,7 @@ class BarStockManagementSystem:
         ]
 
         for text, command in buttons:
-            tk.Button(frame, text=text, command=command, width=30).pack(pady=5)
-
-        # Download full report button
-        download_frame = tk.Frame(self.main_menu)
-        download_frame.pack(fill='x', padx=20, pady=20)
-
-        tk.Label(download_frame, text="Download Comprehensive PDF Report",
-                font=('Arial', 12, 'bold')).pack(pady=5)
-        tk.Label(download_frame, text="Generate a formatted PDF report with sections, totals, and summary data").pack()
-
-        tk.Button(download_frame, text="Download PDF Report", command=self.download_comprehensive_report,
-                  width=25).pack(pady=10)
+            tk.Button(frame, text=text, command=command, width=35).pack(pady=5)
 
         # Back button
         btn_frame = tk.Frame(self.main_menu)
@@ -6244,8 +6266,16 @@ class BarStockManagementSystem:
             # reset while still using the current inventory state.
             full_log_df = InventoryDataManager.load_full_log(self.inventory_df)
 
-            # Date range filter
-            dialog = DateRangeDialog(self.root, title="Comprehensive PDF Report - Date Range")
+            # Date range filter — default from last baseline reset to today
+            from data_manager import get_last_baseline_reset_date
+            default_start = get_last_baseline_reset_date()
+            default_end = datetime.now()
+            dialog = DateRangeDialog(
+                self.root,
+                title="Comprehensive PDF Report - Date Range",
+                default_start=default_start,
+                default_end=default_end
+            )
             if dialog.result is None:
                 return
             if dialog.result == 'ALL_TIME':
@@ -6255,7 +6285,9 @@ class BarStockManagementSystem:
                 start_date, end_date = dialog.result
                 filtered_log = filter_log_by_date(full_log_df, start_date, end_date)
 
-            # Load latest stocktake data for meaningful variance calculation
+            # Load latest stocktake data for meaningful variance calculation.
+            # Baseline-reset snapshots are excluded from surplus/shortfall calculations
+            # because their variance represents the new baseline, not a physical over/short.
             stocktake_rows = get_stocktake_history(limit=1000)
             stocktake_map = {}
             stocktake_data = None
@@ -6263,19 +6295,41 @@ class BarStockManagementSystem:
                 st_df = pd.DataFrame([dict(row) for row in stocktake_rows])
                 st_df = st_df.sort_values('timestamp', ascending=False)
                 st_df = st_df.drop_duplicates(subset='item_id', keep='first')
+                # Variance/surplus should only reflect true stocktake counts, not baselines
+                variance_st_df = st_df[~st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)]
+                # Bound stocktakes to the selected report date range. A stocktake taken before
+                # the period is not a surplus/shortfall for this report; one taken after the
+                # period belongs to a later report.
+                if start_date is not None and end_date is not None:
+                    st_ts = pd.to_datetime(variance_st_df['timestamp'], errors='coerce')
+                    variance_st_df = variance_st_df[
+                        (st_ts >= pd.Timestamp(start_date)) &
+                        (st_ts <= pd.Timestamp(end_date) + pd.Timedelta(days=1))
+                    ]
                 stocktake_map = {
                     row['item_id']: {
                         'counted_quantity': row['counted_quantity'],
                         'expected_quantity': row['expected_quantity'],
                         'variance': row['variance'],
                     }
-                    for _, row in st_df.iterrows()
+                    for _, row in variance_st_df.iterrows()
                 }
                 from reports import build_stocktake_variance_report
-                stocktake_data = build_stocktake_variance_report(self.inventory_df, full_log_df, st_df)
+                stocktake_data = build_stocktake_variance_report(self.inventory_df, full_log_df, variance_st_df)
+
+                # Running surplus/shortfall: cumulative value of every non-baseline stocktake
+                # variance across all time, surviving monthly baseline resets.
+                all_variance_st_df = st_df[~st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)]
+                cost_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE]))
+                running_surplus_value = sum(
+                    float(row['variance']) * float(cost_by_id.get(row['item_id'], 0) or 0)
+                    for _, row in all_variance_st_df.iterrows()
+                ) if not all_variance_st_df.empty else 0.0
+            else:
+                running_surplus_value = 0.0
 
             # Compute historical closing stock at end_date for date-range consistency.
-            # If a stocktake exists on or before the end date, use its counted quantities
+            # If a stocktake exists on or before the report end date, use its counted quantities
             # as the authoritative closing stock. This avoids misclassifying CSV-uploaded
             # rows (timestamped after upload but belonging to an earlier period) as
             # post-period transactions.
@@ -6332,7 +6386,12 @@ class BarStockManagementSystem:
 
             # Create PDF
             pdf = PDFReport()
-            pdf.generate_report(report_data, member_discount_pct=int(self.get_member_discount_pct()), stocktake_data=stocktake_data)
+            pdf.generate_report(
+                report_data,
+                member_discount_pct=int(self.get_member_discount_pct()),
+                stocktake_data=stocktake_data,
+                running_surplus_value=running_surplus_value,
+            )
 
             # Generate timestamp for filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6723,7 +6782,8 @@ class BarStockManagementSystem:
             non_member_qty_col = None
             for col in sales_df.columns:
                 col_lower = col.lower()
-                if 'member' in col_lower and 'qty' in col_lower:
+                # Match "Member Qty", "Member Quantity", "Member Count", etc.
+                if 'member' in col_lower and ('qty' in col_lower or 'quantity' in col_lower or 'count' in col_lower):
                     if 'non' in col_lower:
                         non_member_qty_col = col
                     else:
@@ -6973,8 +7033,9 @@ class BarStockManagementSystem:
 
                 # Store the CSV's actual gross line revenue as the effective sell price,
                 # so reports match the source CSV 'Totals' column.
-                effective_sell_price = p.get('csv_revenue', quantity * sell_price) / quantity if quantity > 0 else sell_price
-                if not (effective_sell_price > 0 and p.get('csv_revenue') is not None):
+                csv_revenue = p.get('csv_revenue')
+                effective_sell_price = (csv_revenue / quantity if quantity > 0 and csv_revenue is not None else sell_price)
+                if not (effective_sell_price > 0 and csv_revenue is not None):
                     effective_sell_price = sell_price
 
                 new_log_entry = pd.DataFrame([[item_id, ACTION_SALES, quantity, timestamp, cost_price, effective_sell_price, "", date_range_str, "", member_qty, non_member_qty]],
@@ -7272,6 +7333,516 @@ class BarStockManagementSystem:
                 messagebox.showerror("Error", "Failed to save transactions.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to apply complimentary upload: {e}")
+
+    def _parse_booker_invoice_line(self, line):
+        """Parse a single Booker invoice line into (description, invoice_qty, case_size, unit_price_ex, vat_code).
+
+        The unit price token is the case/unit price **excluding VAT**.
+        The VAT code is normally three tokens after the unit price (A = VAT exempt, B = 20% VAT).
+        Returns None if the line does not look like a product row.
+        """
+        if any(k in line for k in ['Order No:', 'Customer:', 'VAT No:', 'BOOKER', 'Page', 'Sub Total', 'Total', 'VAT']):
+            return None
+        tokens = line.split()
+        if len(tokens) < 5:
+            return None
+
+        # First price-like decimal after the product code is the case/unit price (ex VAT)
+        price_idx = None
+        unit_price = None
+        for i in range(2, len(tokens)):
+            tok = tokens[i].replace('£', '').replace(',', '')
+            if re.match(r'^-?\d+\.\d{2,}$', tok):
+                price_idx = i
+                unit_price = float(tok)
+                break
+        if price_idx is None:
+            return None
+
+        if not re.match(r'^-?\d+$', tokens[price_idx - 1]):
+            return None
+        invoice_qty = int(tokens[price_idx - 1])
+
+        case_size = 1
+        product_end = price_idx - 1
+        if price_idx - 2 >= 1:
+            unit_token = tokens[price_idx - 2]
+            if re.match(r'^\d+(?:\.\d+)?(?:ml|cl|ltr|l|g|s)?$', unit_token, re.I) or 'x' in unit_token.lower():
+                product_end = price_idx - 2
+                if price_idx - 3 >= 1 and re.match(r'^\d+$', tokens[price_idx - 3]):
+                    case_size = int(tokens[price_idx - 3])
+                    product_end = price_idx - 3
+
+        # Keep the case/unit info in the description so downstream unit matching works
+        full_description = ' '.join(tokens[1:price_idx - 1])
+        if any(k in full_description.lower() for k in ['out of stock', 'delisted', 'substitute', 'alternative', 'credit', 'charge', 'delivery', 'refund']):
+            return None
+
+        # VAT code is typically the token after total-value and a marker, e.g. "... 10.50 TC 21.00 B 1.49 64.8%"
+        vat_code = 'B'
+        if price_idx + 3 < len(tokens):
+            candidate = tokens[price_idx + 3].upper()
+            if candidate in ('A', 'B'):
+                vat_code = candidate
+
+        return full_description, invoice_qty, case_size, unit_price, vat_code
+
+    @staticmethod
+    def _invoice_price_with_vat(unit_price_ex: float, vat_code: str) -> float:
+        """Convert an ex-VAT invoice price to inc-VAT using the Booker VAT code."""
+        if vat_code and vat_code.upper() == 'A':
+            return unit_price_ex  # VAT exempt
+        return unit_price_ex * 1.2
+
+    def _units_per_case_from_desc(self, desc, case_size):
+        """Infer actual stock units in a case from a Booker description."""
+        d = desc.lower()
+        # e.g. "6 4x330ml" -> 6 packs of 4 bottles = 24 units
+        m = re.search(r'(\d+)\s*x\s*\d+(?:ml|cl|ltr|l|g|s)\b', d)
+        if m:
+            return case_size * int(m.group(1))
+        # e.g. "32 s" (singles) - usually case_size already equals units
+        m = re.search(r'(\d+)\s*s\b', d)
+        if m:
+            return int(m.group(1))
+        return case_size
+
+    def _get_invoice_to_item_mapping(self):
+        """Return mapping from Booker invoice description to stock item_id."""
+        return {
+            'britvic lime cordial': 'cordial',
+            'tetley tea bags 1100s': 'tea',
+            'walkers crisp cheese & onion': 'walkers',
+            'walkers crisps ready salted': 'walkers',
+            'walkers prawn cocktail 32.5g': 'walkers',
+            'walkers salt & vinegar 32.5g': 'walkers',
+            'pringles bbq': 'pringles',
+            'pringles original': 'pringles',
+            'pringles salt & vinegar': 'pringles',
+            'pringles sour cream & onion': 'pringles',
+            'coca cola can': 'can',
+            'diet coke can': 'can',
+            'sprite can': 'can',
+            'tango orange can': 'can',
+            'irn bru': 'can',
+            'irn bru sugar free': 'can',
+            'old jamaica ginger beer': 'can',
+            'coke zero': 'can',
+            'fanta lemon': 'can',
+            'red bull': 'red_bull',
+            'red bull energy drink pm175': 'red_bull',
+            'corona extra nrb 4.5%': 'corona',
+            'peroni nastro azzurro': 'peroni',
+            'budweiser': 'budweiser',
+            'magners irish cider nrb': 'magners',
+            'inchs medium apple cider': 'inchs',
+            'kopparberg mixed fruit cider': 'kopparberg',
+            'kopparberg strbry&lime cider': 'kopparberg',
+            'kopparberg 0% mixed fruit': 'a_f_koppaberg',
+            'kopparberg non alcohol s/bry': 'a_f_koppaberg',
+            'old mout pineapple & r/berry': 'old_mout_cider',
+            'gordons gin': 'gordons_gin',
+            'gordons pink gin 35%': 'gordons_pink_gin',
+            'smirnoff red': 'smirnoff',
+            'jack daniels': 'jack_daniels',
+            'bombay sapphire': 'bombay_sapphire',
+            'disaronno': 'disaronno',
+            'antica sambuca classic': 'sambuca',
+            'malibu 18%': 'malibu',
+            'sierra tequila blanco 35%': 'tequila',
+            'havana club 7 year old rum': 'havana_club_7',
+            'archers peach schnapps': 'peach_schnapps',
+            'old pulteney 12yo m/whisky': 'old_pulteney',
+            'bowmore 12yo sgl malt': 'bowmore',
+            'glenmorangie 12yo malt': 'glenmorangie',
+            'martell vs cognac': 'martell',
+            'brockmans gin': 'brockmans_gin',
+            'kraken spiced rum 70cl': 'kraken_rum',
+            'bacardi carta blanca': 'bacardi',
+            'cointreau': 'cointreau',
+            'dead mans fingers spiced rum': 'dead_mans_fingers',
+            'fever tree prem indian tonic': 'tonic',
+            'f/tree refreshingly lghttnic': 'tonic',
+            'fever tree r/l ginger ale': 'tonic',
+            'fever tree r/l mediterranean': 'tonic',
+            'fever tree light tonic': 'fevertree_sl_tonic',
+            'glen scotia dbl csk sgl malt': 'glen_scotia',
+            'highland spring water stillpet': 'soda_water',
+            'h/land spring water stillpet': 'soda_water',
+            'j20 apple & mango': 'j2o',
+            'j20 orange & passionfruit': 'j2o',
+            'prosecco spumante doc ex dry': 'prosecco',
+            'prosecco spumante': 'prosecco',
+            'schweppes lemonade bag inbox': 'lemonade',
+            'schweppes lemonade bag in box': 'lemonade',
+            'cockburns port spec reserve': 'port',
+            'coca cola original bib': 'coke_pm',
+            'diet coke bag in box': 'diet_coke_pm',
+            'birra moretti 0%': 'birra_moretti_zero',
+            'birra moretti nrb uk': 'moretti_bottle',
+            'aperol': 'aperol',
+            'baileys irish cream': 'baileys_50ml',
+            'captain morgan spiced rum': 'morgans',
+            'highland park 12yo malt': 'highland_park',
+            'jura 12yr': 'jura_origin',
+            'kahlua coffee liqueur': 'kahlua',
+            'tanqueray sevilla': 'tanqueray_sevilla',
+            'magners 4x500ml': 'magners',
+        }
+
+    def _invoice_unit_matches_conversion(self, desc, input_unit):
+        """Heuristic: does the invoice description use the conversion input unit?"""
+        d = desc.lower()
+        if input_unit == 'bottle':
+            return any(k in d for k in ['bottle', 'ltr', 'cl', 'ml', '75cl', '70cl', '1.5ltr'])
+        if input_unit == 'box':
+            return any(k in d for k in ['bag in box', 'bib', 'box', '7ltr'])
+        if input_unit == 'barrel':
+            return any(k in d for k in ['barrel', 'keg', 'firkin'])
+        if input_unit == 'carton':
+            return any(k in d for k in ['carton'])
+        return False
+
+    def _map_invoice_description_to_item_id(self, desc, inventory_ids):
+        """Map an invoice description to a stock item_id, or None if unmapped."""
+        desc_lower = desc.lower().strip()
+        mapping = self._get_invoice_to_item_mapping()
+        for key in sorted(mapping.keys(), key=len, reverse=True):
+            if desc_lower.startswith(key) or key in desc_lower:
+                return mapping[key]
+        if desc_lower in inventory_ids:
+            return desc_lower
+        return None
+
+    CAN_AVERAGE_GROUP = [
+        'coca cola can',
+        'diet coke can',
+        'irn bru',
+        'irn bru sugar free',
+        'coke zero',
+        'fanta lemon',
+        'sprite can',
+        'old jamaica ginger beer',
+        'j20 apple & mango',
+        'j20 orange & passionfruit',
+    ]
+
+    def _is_can_average_description(self, desc: str) -> bool:
+        """Return True if this invoice description is part of the mixed can/bottle average group."""
+        desc_lower = desc.lower().strip()
+        return any(desc_lower.startswith(key) or key in desc_lower for key in self.CAN_AVERAGE_GROUP)
+
+    def _compute_can_average_cost(self, aggregated: dict, invoice_lines: list) -> tuple[float, int]:
+        """Compute weighted-average inc-VAT per-unit cost from the mixed can/bottle group.
+
+        Returns (average_cost_per_unit, total_units).
+        """
+        total_inc_value = 0.0
+        total_units = 0
+        for desc, qty, case_size, price, vat_code in invoice_lines:
+            if not self._is_can_average_description(desc):
+                continue
+            upc = self._units_per_case_from_desc(desc, case_size)
+            total_units += qty * upc
+            total_inc_value += qty * self._invoice_price_with_vat(price, vat_code)
+        if total_units == 0:
+            return 0.0, 0
+        return total_inc_value / total_units, total_units
+
+    def upload_delivery_invoice_price_check(self):
+        """Upload Booker invoice PDFs and compare prices to current system costs."""
+        if not PDFPLUMBER_AVAILABLE:
+            messagebox.showerror("Error", "pdfplumber is not installed. Cannot read invoice PDFs.")
+            return
+
+        filepaths = filedialog.askopenfilenames(
+            title="Select Booker Invoice PDFs (multi-select supported)",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+        )
+        if not filepaths:
+            return
+
+        try:
+            self.refresh_data()
+            invoice_lines = []
+            for filepath in filepaths:
+                with pdfplumber.open(filepath) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if not text:
+                            continue
+                        for line in text.split('\n'):
+                            parsed = self._parse_booker_invoice_line(line)
+                            if parsed:
+                                invoice_lines.append(parsed)
+
+            if not invoice_lines:
+                messagebox.showinfo("No Products Found", "Could not extract any product lines from the PDFs.")
+                return
+
+            # Aggregate duplicate descriptions by quantity, keep latest price and case size
+            aggregated = defaultdict(lambda: {'qty': 0, 'price': 0.0, 'case_size': 1, 'vat_code': 'B'})
+            for desc, qty, case_size, price, vat_code in invoice_lines:
+                key = desc.lower().strip()
+                aggregated[key]['qty'] += qty
+                aggregated[key]['price'] = price  # latest ex-VAT price wins
+                aggregated[key]['case_size'] = case_size
+                aggregated[key]['vat_code'] = vat_code
+
+            inventory_ids = {str(i).lower().strip() for i in self.inventory_df[COL_ITEM_ID].values}
+            cost_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE]))
+            name_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_ITEM_NAME]))
+            measure_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_MEASURE]))
+
+            comparison_rows = []
+            unmatched = []
+            can_group_seen = False
+            for desc, data in aggregated.items():
+                item_id = self._map_invoice_description_to_item_id(desc, inventory_ids)
+                if item_id is None:
+                    # Skip non-beverage/cleaning/refuse lines
+                    skip_keywords = ['refuse', 'sack', 'bleach', 'floor gel', 'sachet', 'mayonnaise',
+                                     'hp sauce', 'clean pro', 'lichfield', 'neapolitan', 'surface',
+                                     'surger', 'cp ', 'es citrus']
+                    if any(k in desc for k in skip_keywords):
+                        continue
+                    unmatched.append(desc)
+                    continue
+
+                # Fold all can-group lines into a single synthetic Can row
+                if self._is_can_average_description(desc):
+                    if can_group_seen:
+                        continue
+                    can_group_seen = True
+                    invoice_per_unit, total_cans = self._compute_can_average_cost(aggregated, invoice_lines)
+                    if total_cans == 0:
+                        continue
+                    item_id = 'can'
+                    invoice_unit = 'can'
+                    invoice_desc = (
+                        f"Weighted average across {total_cans} units "
+                        "(Can/J20 mix)"
+                    )
+                else:
+                    measure = measure_by_id.get(item_id, '')
+                    invoice_unit = measure or 'unit'
+                    upc = self._units_per_case_from_desc(desc, data['case_size'])
+                    case_inc = self._invoice_price_with_vat(data['price'], data['vat_code'])
+
+                    conv = get_conversion(item_id)
+                    if conv and self._invoice_unit_matches_conversion(desc, conv[0]):
+                        input_unit, factor, output_unit = conv
+                        invoice_per_unit = (case_inc / upc) / factor
+                        invoice_unit = output_unit
+                    else:
+                        invoice_per_unit = case_inc / upc
+                        if conv and not self._invoice_unit_matches_conversion(desc, conv[0]):
+                            invoice_unit = f"case/{upc}"
+                    invoice_desc = desc
+
+                current_cost = cost_by_id.get(item_id, 0.0)
+                diff = invoice_per_unit - current_cost
+                diff_pct = (diff / current_cost * 100) if current_cost > 0 else 0.0
+
+                comparison_rows.append({
+                    'item_id': item_id,
+                    'item_name': name_by_id.get(item_id, item_id),
+                    'invoice_desc': invoice_desc,
+                    'measure': measure_by_id.get(item_id, ''),
+                    'invoice_unit': invoice_unit,
+                    'current_cost': current_cost,
+                    'invoice_cost': invoice_per_unit,
+                    'diff': diff,
+                    'diff_pct': diff_pct,
+                })
+
+            if not comparison_rows and not unmatched:
+                messagebox.showinfo("No Products Found", "No recognisable Booker products found in the invoices.")
+                return
+
+            filename_summary = f"{len(filepaths)} invoice(s): " + ", ".join(os.path.basename(f) for f in filepaths[:3])
+            if len(filepaths) > 3:
+                filename_summary += "..."
+            self._show_invoice_price_check_results(comparison_rows, unmatched, filename_summary)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to process invoice PDF: {e}")
+
+    def _show_invoice_price_check_results(self, comparison_rows, unmatched, filename):
+        """Show the invoice price-check comparison in a modal dialog."""
+        top = tk.Toplevel(self.root)
+        top.title(f"Invoice Price Check - {filename}")
+        top.transient(self.root)
+        top.grab_set()
+        top.lift()
+        top.attributes('-topmost', True)
+        top.after_idle(lambda: top.attributes('-topmost', False))
+
+        top.update_idletasks()
+        width, height = 1050, 650
+        x = (top.winfo_screenwidth() - width) // 2
+        y = (top.winfo_screenheight() - height) // 2
+        top.geometry(f"{width}x{height}+{x}+{y}")
+        top.minsize(width, height)
+
+        frame = tk.Frame(top, bg=THEME_BG)
+        frame.pack(fill='both', expand=True, padx=15, pady=15)
+
+        tk.Label(frame, text=f"Price check for {filename}",
+                 font=(THEME_FONT, 14, 'bold'), fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 5))
+
+        summary_text = f"{len(comparison_rows)} matched items  |  {len(unmatched)} unmatched lines"
+        tk.Label(frame, text=summary_text,
+                 font=(THEME_FONT, 10), fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 10))
+
+        tree_frame = tk.Frame(frame, bg=THEME_BG)
+        tree_frame.pack(fill='both', expand=True)
+
+        columns = ('invoice_desc', 'item_id', 'item_name', 'measure', 'invoice_unit', 'current_cost', 'invoice_cost', 'diff', 'diff_pct')
+        tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=16)
+        tree.heading('invoice_desc', text='Invoice Product')
+        tree.heading('item_id', text='Item ID')
+        tree.heading('item_name', text='Name')
+        tree.heading('measure', text='System Unit')
+        tree.heading('invoice_unit', text='Invoice Unit')
+        tree.heading('current_cost', text='Current Cost')
+        tree.heading('invoice_cost', text='Invoice Cost')
+        tree.heading('diff', text='Difference')
+        tree.heading('diff_pct', text='Diff %')
+
+        tree.column('invoice_desc', width=180, anchor='w')
+        tree.column('item_id', width=90, anchor='w')
+        tree.column('item_name', width=110, anchor='w')
+        tree.column('measure', width=70, anchor='center')
+        tree.column('invoice_unit', width=80, anchor='center')
+        tree.column('current_cost', width=100, anchor='e')
+        tree.column('invoice_cost', width=100, anchor='e')
+        tree.column('diff', width=90, anchor='e')
+        tree.column('diff_pct', width=70, anchor='e')
+
+        tree.tag_configure('higher', foreground=THEME_DANGER)
+        tree.tag_configure('lower', foreground=THEME_SUCCESS)
+        tree.tag_configure('neutral', foreground=THEME_TEXT)
+
+        for row in sorted(comparison_rows, key=lambda r: abs(r['diff_pct']), reverse=True):
+            if row['diff_pct'] > 10:
+                tag = 'higher'
+            elif row['diff_pct'] < -10:
+                tag = 'lower'
+            else:
+                tag = 'neutral'
+            values = (
+                row['invoice_desc'] or '-',
+                row['item_id'],
+                row['item_name'],
+                row['measure'] or '-',
+                row['invoice_unit'] or '-',
+                f"£{row['current_cost']:.4f}",
+                f"£{row['invoice_cost']:.4f}",
+                f"£{row['diff']:+.4f}",
+                f"{row['diff_pct']:+.1f}%",
+            )
+            tree.insert('', tk.END, values=values, tags=(tag,))
+
+        tree.pack(side=tk.LEFT, fill='both', expand=True)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill='y')
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        if unmatched:
+            tk.Label(frame, text="Unmatched invoice lines (not in stock.csv):",
+                     font=(THEME_FONT, 10, 'bold'), fg=THEME_WARNING, bg=THEME_BG, anchor='w').pack(fill='x', pady=(10, 5))
+            unmatched_text = tk.Text(frame, height=4, wrap='word', bg=THEME_CARD, fg=THEME_TEXT,
+                                     font=(THEME_FONT, 9), relief='flat')
+            unmatched_text.pack(fill='x')
+            unmatched_text.insert('1.0', "\n".join(f"  • {u}" for u in sorted(unmatched)))
+            unmatched_text.config(state='disabled')
+
+        btn_frame = tk.Frame(frame, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(15, 0))
+
+        def apply_invoice_prices():
+            if not comparison_rows:
+                return
+            if not messagebox.askyesno(
+                "Confirm Apply",
+                f"Update {len(comparison_rows)} item cost prices from these invoices?\n\n"
+                "This will overwrite current costs and update Items.csv total values.",
+                parent=top,
+            ):
+                return
+            try:
+                self._apply_invoice_cost_updates(comparison_rows)
+                messagebox.showinfo("Success", "Invoice prices applied to stock.", parent=top)
+                top.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply invoice prices: {e}", parent=top)
+
+        self.styled_button(btn_frame, "Apply Invoice Prices to Stock", apply_invoice_prices,
+                           width=26, variant='secondary').pack(side='left')
+        self.styled_button(btn_frame, "Close", top.destroy, width=16, variant='primary').pack(side='right')
+
+    def _apply_invoice_cost_updates(self, comparison_rows):
+        """Persist invoice-derived cost prices into SQLite, CSVs, and log history."""
+        from inventory_sync import update_items_csv_total_value
+        from datetime import datetime
+
+        self.refresh_data()
+        timestamp = datetime.now().strftime(f"%Y-%m-%d %H:%M:%S")
+        supplier = getattr(self, 'current_delivery_supplier', 'Booker')
+
+        # Case-insensitive lookup because invoice mappings may return lowercase
+        # item_ids while the database stores the original casing (e.g. 'Cointreau').
+        id_lookup = {str(i).lower(): str(i) for i in self.inventory_df[COL_ITEM_ID].values}
+
+        log_entries = []
+        updated_items = []
+
+        for row in comparison_rows:
+            item_id = id_lookup.get(str(row['item_id']).lower(), row['item_id'])
+            new_cost = row['invoice_cost']
+            item_rows = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id]
+            if item_rows.empty:
+                continue
+            item_idx = item_rows.index[0]
+            is_locked = bool(self.inventory_df.at[item_idx, COL_PRICE_LOCKED])
+            if is_locked:
+                continue  # Respect locked prices, same as manual deliveries
+
+            old_cost = float(self.inventory_df.at[item_idx, COL_COST_PRICE])
+            if abs(old_cost - new_cost) < 0.0001:
+                continue
+
+            self.inventory_df.at[item_idx, COL_COST_PRICE] = new_cost
+            sell_price = float(self.inventory_df.at[item_idx, COL_SELL_PRICE])
+            log_entries.append([item_id, ACTION_DELIVERY, 0.0, timestamp, new_cost, sell_price, supplier, "", "Invoice price update"])
+            updated_items.append(item_id)
+
+        if updated_items:
+            if not InventoryDataManager.save_inventory(self.inventory_df):
+                raise RuntimeError("Failed to save inventory")
+
+            script_dir = get_script_directory()
+            for item_id in updated_items:
+                item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
+                quantity = float(item_row[COL_QUANTITY])
+                total_value = quantity * float(item_row[COL_COST_PRICE])
+                update_items_csv_total_value(
+                    script_dir=script_dir,
+                    item_id=item_id,
+                    item_name=str(item_row[COL_ITEM_NAME]),
+                    quantity=quantity,
+                    total_value=total_value,
+                )
+
+        if log_entries:
+            new_log_df = pd.DataFrame(
+                log_entries,
+                columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON]
+            )
+            self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
+            if not InventoryDataManager.save_log(self.log_df):
+                raise RuntimeError("Failed to save transaction log")
 
 
 if __name__ == "__main__":

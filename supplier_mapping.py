@@ -44,6 +44,22 @@ CATEGORY_SUPPLIER_OVERRIDES = {
 }
 
 
+def _normalize_supplier_name(name: str) -> str:
+    """Return a canonical form of a supplier name for comparison.
+
+    Handles case differences and curly-vs-straight apostrophes so that
+    order-sheet headings and CSV-derived names match the SUPPLIER_ORDER list.
+    """
+    normalized = str(name).lower().replace('’', "'").strip()
+    # Map common variant spellings to the canonical SUPPLIER_ORDER names.
+    variant_map = {
+        "tennent's": 'tennents',
+        "tennents'": 'tennents',
+        'tennent': 'tennents',
+    }
+    return variant_map.get(normalized, normalized)
+
+
 def get_supplier(item_id: str, category: str | None = None) -> str:
     """Return the supplier for the given item.
 
@@ -73,6 +89,18 @@ def get_supplier(item_id: str, category: str | None = None) -> str:
             return category_supplier
 
     return 'Booker'
+
+
+def supplier_rank(name: str) -> int:
+    """Return the display sort index for a supplier name, tolerating apostrophe variants.
+
+    Falls back to 999 for unknown suppliers so they sort at the end.
+    """
+    normalized = _normalize_supplier_name(name)
+    for i, candidate in enumerate(SUPPLIER_ORDER):
+        if _normalize_supplier_name(candidate) == normalized:
+            return i
+    return 999
 
 
 def get_supplier_order() -> list[str]:

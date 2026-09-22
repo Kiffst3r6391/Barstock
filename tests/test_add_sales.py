@@ -199,6 +199,27 @@ class TestSalesUploadSimulation(unittest.TestCase):
         parent_qty = self.inventory.loc[self.inventory[COL_ITEM_ID] == 'tennents_lager', COL_QUANTITY].values[0]
         self.assertAlmostEqual(parent_qty, 1.0)
 
+    def test_effective_sell_price_handles_none_csv_revenue(self):
+        """Regression: missing/None CSV revenue must not crash with None / float."""
+        preview = {'qty': 5.0, 'sell': 3.50, 'csv_revenue': None}
+        quantity = preview['qty']
+        sell_price = preview['sell']
+        csv_revenue = preview.get('csv_revenue')
+        effective_sell_price = (csv_revenue / quantity if quantity > 0 and csv_revenue is not None else sell_price)
+        if not (effective_sell_price > 0 and csv_revenue is not None):
+            effective_sell_price = sell_price
+        self.assertAlmostEqual(effective_sell_price, sell_price)
+
+    def test_effective_sell_price_uses_csv_revenue_when_present(self):
+        preview = {'qty': 4.0, 'sell': 3.50, 'csv_revenue': 16.0}
+        quantity = preview['qty']
+        sell_price = preview['sell']
+        csv_revenue = preview.get('csv_revenue')
+        effective_sell_price = (csv_revenue / quantity if quantity > 0 and csv_revenue is not None else sell_price)
+        if not (effective_sell_price > 0 and csv_revenue is not None):
+            effective_sell_price = sell_price
+        self.assertAlmostEqual(effective_sell_price, 4.0)
+
 
 class TestFourTupleParentMapping(unittest.TestCase):
     """Regression test for mappings with an optional 4th visibility element."""

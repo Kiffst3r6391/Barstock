@@ -14,8 +14,8 @@ SALES_TO_PARENT = {
     'thatchers_half': ('thatchers', 0.5, 'Thatchers Half Pint'),
     'carton_juice_half': ('carton_juice', 0.5, 'Carton Juice Half'),
 
-    # DASH -> deduct from soft drinks
-    'dash': ('lemonade', 0.1, 'Dash (10% of pint)'),
+    # DASH -> deduct from Coke PM (0.15% of a pint)
+    'dash': ('coke_pm', 0.0015, 'Dash (0.15% of a pint from Coke PM)'),
 
     # SHANDIES -> deduct from beer + lemonade
     'tennants_shandy_pint': (['tennents_lager', 'lemonade'], [0.5, 0.5], 'Tennents Shandy'),
@@ -55,7 +55,7 @@ SALES_TO_PARENT = {
     'tg_can': ('can', 1.0, 'TG Can', True),
     'tg_single_serve_wine': ('single_serve_wine', 1.0, 'TG Single Serve Wine', True),
 
-    # CART KOPPARBERG -> deduct from kopparberg stock
+    # CART KOPPARBERG -> deduct from kopparberg stock, visible in Manage Stock
     'cart_koppa': ('kopparberg', 1.0, 'Cart Koppa (Kopparberg)', True),
 
 
@@ -78,14 +78,6 @@ SALES_TO_PARENT = {
     'cart_cans': ('can', 1.0, 'Cart Cans'),
     'cart_inchs': ('inchs', 1.0, 'Cart Inch\'s'),
     'cart_peroni': ('peroni', 1.0, 'Cart Peroni'),
-    'cart_koppa': ('kopparberg', 1.0, 'Cart Koppa (Kopparberg)'),
-
-    # TG (Table/Golf) ITEMS -> deduct from parent stock at 1:1 ratio
-    # Premium cart sales that deduct from standard parent stock
-    'tg_can': ('can', 1.0, 'TG Can'),
-    'tg_tennents': ('tennents_lager', 1.0, 'TG Tennents'),
-    'tb_best': ('belhaven_best', 1.0, 'TB Best'),
-    'tg_single_serve_wine': ('single_serve_wine', 1.0, 'TG Single Serve Wine'),
 
     # COCKTAILS / MIXED DRINKS -> deduct multiple ingredients
     # Aperol Spritz: 50ml Aperol + 1 single-serve Prosecco
@@ -133,6 +125,8 @@ EPOS_NAME_TO_ITEM_ID = {
 
     # Tea/Coffee Urn maps to Tea
     'teacoffee_urn': 'tea',
+    # EPOS "Nuts small pack" is the tracked Nuts item
+    'nuts_small_pack': 'nuts',
 }
 
 

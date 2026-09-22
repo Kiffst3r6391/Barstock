@@ -1,119 +1,132 @@
-"Name","Division","Unit","Total Stock","Total Value","Active","Min Alert","Max Alert"
-"A/F Koppaberg","Beer - Bottled","BOTTLE","16","19.18","","0","0"
-"Baileys 50ml","Beer - Bottled","BOTTLE","0","0.00","","",""
-"Birra Moretti Zero","Beer - Bottled","BOTTLE","-43","-33.13","","0","0"
-"Budweiser","Beer - Bottled","BOTTLE","66","53.35","","0","0"
-"Corona","Beer - Bottled","BOTTLE","149","140.92","","0","0"
-"Inchs","Beer - Bottled","BOTTLE","39","50.34","","0","0"
-"Kopparberg","Beer - Bottled","BOTTLE","-6","-10.00","","0","0"
-"Magners","Beer - Bottled","BOTTLE","20","27.83","","0","0"
-"old mout cider","Beer - Bottled","BOTTLE","16","24.99","","0","0"
-"Peroni","Beer - Bottled","BOTTLE","31","30.34","","0","0"
-"Guinness Can","Beer - Can","CAN","354","756.70","","0","0"
-"Belhaven Best","Beers- Draught","PINT","-8.1","-12.84","","0","0"
-"Birra Moretti","Beers- Draught","PINT","-125.8","-279.28","","0","0"
-"Joker IPA","Beers- Draught","PINT","5.5","9.68","","0","0"
-"Tennents Lager","Beers- Draught","PINT","-637.25","-1102.44","","0","0"
-"Thatchers","Beers- Draught","PINT","150.1","239.36","","0","0"
-"Aperol","Liqueurs","BOTTLE","1.17142","13.22","","0","0"
-"Disaronno","Liqueurs","BOTTLE","1.72856","24.64","","0","0"
-"Drambuie","Liqueurs","BOTTLE","-0.214291","0.00","","0","0"
-"Glayva","Liqueurs","BOTTLE","1.52856","29.79","","0","0"
-"Kahlua","Liqueurs","BOTTLE","4.82857","57.89","","0","0"
-"Malibu","Liqueurs","BOTTLE","2.57143","30.83","","0","0"
-"Mexcal","Liqueurs","BOTTLE","1.4","27.44","","0","0"
-"Peach Schnapps","Liqueurs","BOTTLE","2.2","22.64","","0","0"
-"Sourz","Liqueurs","BOTTLE","1.55711","9.33","","0","0"
-"Southern Comfort","Liqueurs","BOTTLE","0.742834","21.13","","0","0"
-"Tequila Rose","Liqueurs","BOTTLE","-0.800074","0.00","","0","0"
-"Bowmore","Malt Whisky","BOTTLE","3.25039","99.98","","0","0"
-"Glenlivet","Malt Whisky","BOTTLE","0","0.00","","0","0"
-"Glenmorangie","Malt Whisky","BOTTLE","1.65021","42.06","","0","0"
-"Glen Scotia","Malt Whisky","BOTTLE","1.50000","30.60","","0","0"
-"Highland Park","Malt Whisky","BOTTLE","4.35758","127.57","","0","0"
-"Jura Origin","Malt Whisky","BOTTLE","2.60018","50.38","","0","0"
-"loch lomond","Malt Whisky","BOTTLE","0","0.00","","0","0"
-"Monkey Shoulder","Malt Whisky","BOTTLE","0","0.00","","0","0"
-"Old Pulteney","Malt Whisky","BOTTLE","4.99341","108.69","","0","0"
-"Can","Minerals","CAN","284","123.83","","0","0"
-"Fevertree SL Tonic","Minerals","BOTTLE","72","49.79","","",""
-"Fevertree Tonic","Minerals","BOTTLE","96","65.37","","",""
-"J2O","Minerals","BOTTLE","11","10.35","","0","0"
-"Carton Juice","Post Mix","CARTON","179.744","231.32","","0","0"
-"Coke PM","Post Mix","PINT","554.8","552.60","","0","0"
-"Cordial","Post Mix","BOTTLE","27.4","53.09","","0","0"
-"Cranberry Juice","Post Mix","PINT","0","0.00","","0","0"
-"Diet Coke PM","Post Mix","PINT","350.4","324.59","","0","0"
-"Lemonade PM","Post Mix","PINT","336.95","329.06","","0","0"
-"Orange","Post Mix","PINT","-204.25","0.00","","0","0"
-"Red Bull","Post Mix","CAN","22","20.62","","0","0"
-"Simply Fruity","Post Mix","BOTTLE","-12","0.00","","0","0"
-"Slimline Tonic","Post Mix","BOTTLE","211","99.17","","0","0"
-"Tonic","Post Mix","BOTTLE","-193","-91.13","","0","0"
-"Pimms","Sherry","BOTTLE","0.114284","1.04","","0","0"
-"Port","Sherry","BOTTLE","-0.914321","0.00","","0","0"
-"Nuts","Snacks","PACK","148","85.70","","0","0"
-"Pringles","Snacks","PACK","59","36.83","","0","0"
-"Walkers","Snacks","PACK","0","0.00","","0","0"
-"Angostura","Spirits","BOTTLE","0.28","6.72","","0","0"
-"Bacardi","Spirits","BOTTLE","2.4647","52.84","","0","0"
-"Bombay Sapphire","Spirits","BOTTLE","2.6361","45.11","","0","0"
-"Brockmans Gin","Spirits","BOTTLE","3.0363","71.73","","0","0"
-"Dead Mans Fingers","Spirits","BOTTLE","0.5716","0.00","","0","0"
-"Edinburgh R&G","Spirits","BOTTLE","2.6004","25.58","","0","0"
-"Gordons Gin","Spirits","BOTTLE","-1.4812","-45.15","","0","0"
-"Gordons Lemon Gin","Spirits","BOTTLE","0.15","2.67","","0","0"
-"Gordons Pink Gin","Spirits","BOTTLE","2.4018","68.53","","0","0"
-"Grey Goose","Spirits","BOTTLE","0","0.00","","0","0"
-"Havana Club 7","Spirits","BOTTLE","2.1152","41.23","","0","0"
-"Jack Daniels","Spirits","BOTTLE","-1.3485","-45.26","","0","0"
-"Jack Daniels Honey","Spirits","BOTTLE","-0.0714","0.00","","0","0"
-"Jagermeister","Spirits","BOTTLE","4.2004","61.90","","0","0"
-"Kraken Rum","Spirits","BOTTLE","4.4801","85.24","","0","0"
-"Martell","Spirits","BOTTLE","0.5002","11.00","","0","0"
-"Morgans","Spirits","BOTTLE","-0.5625","0.00","","0","0"
-"Sailor Jerry","Spirits","BOTTLE","0","0.00","","0","0"
-"Sambuca","Spirits","BOTTLE","2.0432","29.44","","0","0"
-"Smirnoff","Spirits","BOTTLE","-8.7225","-265.86","","0","0"
-"Tanqueray","Spirits","BOTTLE","0","0.00","","0","0"
-"Tanqueray Sevilla","Spirits","BOTTLE","1.3144","24.83","","0","0"
-"Tequila","Spirits","BOTTLE","1.6799","28.04","","0","0"
-"Whitley Neill Gin","Spirits","BOTTLE","0","0.00","","0","0"
-"Zubrowka","Spirits","BOTTLE","0.243","0.00","","0","0"
-"Cabernt Sauvignon","Wine","BOTTLE","0","0.00","","0","0"
-"Cullinan View Sauvignon Blanc","Wine","BOTTLE","1.25","5.36","","",""
-"Le Beau Sud","Wine","BOTTLE","0","0.00","","0","0"
-"Malbec","Wine","BOTTLE","0","0.00","","0","0"
-"Merlot","Wine","BOTTLE","3","19.17","","0","0"
-"Pinto Grigio Rose","Wine","BOTTLE","-1","-6.90","","0","0"
-"Prosecco","Wine","BOTTLE","70","189.83","","0","0"
-"Prosecco Single Serve","Wine","BOTTLE","69","149.82","","0","0"
-"Riesling","Wine","BOTTLE","3","37.05","","0","0"
-"Short Mile Bay Merlot","Wine","BOTTLE","-3","-14.67","","",""
-"Whispering Hills White Zinfandel","Wine","BOTTLE","-2","-7.38","","",""
-"Wicked Lady Pinot Grigio","Wine","BOTTLE","8","39.12","","",""
-"Single Serve Wine","Wine","BOTTLE","7","14.49","","0","0"
-"Guinness 0.0","Beer - Bottled","BOTTLE","0","0.00","","0","0"
-"Tea","Hot Drinks","Cup","0","0.00","","0","0"
-"Tennants - Shandy Pint","Beer - Draught","PINT","0","0.00","","0","0"
-"Coffee Machine","Equipment","Unit","0","0.00","","0","0"
-"Dash","Soft Drinks","Portion","0","0.00","","0","0"
-"CART BUD","Beer - Draught","PINT","0","0.00","","0","0"
-"Barista Coffee","Hot Drinks","Cup","0","0.00","","0","0"
-"Specialist Tea","Hot Drinks","Cup","0","0.00","","0","0"
-"Cointreau","Spirits","BOTTLE","0","0.00","","0","0"
-"Moretti Bottle","Beer - Bottled","BOTTLE","0","0.00","","0","0"
-"Zarapito Malbec","Wine","BOTTLE","0","0.00","","0","0"
-Coke Pint,Post Mix,PINT,0,0.00,,0,0
-Diet Coke Pint,Post Mix,PINT,0,0.00,,0,0
-Lemonade Pint,Post Mix,PINT,0,0.00,,0,0
-Coke Half Pint,Post Mix,PINT,0,0.00,,0,0
-Diet Coke Half Pint,Post Mix,PINT,0,0.00,,0,0
-Lemonade Half Pint,Post Mix,PINT,0,0.00,,0,0
-TG Tennents,Beers - Draught,PINT,0,0.00,,0,0
-TG Best,Beers - Draught,PINT,0,0.00,,0,0
-TB Best,Beers - Draught,PINT,0,0.00,,0,0
-Tennants Shandy Half Pint,Beers - Draught,PINT,0,0.00,,0,0
-TG Can,Beer - Can,CAN,0,0.00,,0,0
-TG Single Serve Wine,Wine,BOTTLE,0,0.00,,0,0
-CART KOPPA,Beer - Bottled,BOTTLE,0,0.00,,0,0
+Name,Division,Unit,Total Stock,Total Value,Active,Min Alert,Max Alert
+Cointreau,Spirits,BOTTLE,20.00,21.59,,0,0
+Moretti Bottle,Beer - Bottled,BOTTLE,108.00,110.65,,0,0
+A/F Koppaberg,Beer - Bottled,BOTTLE,13.00,18.70,,0,0
+Angostura,Spirits,BOTTLE,10.0,8.3916,,0,0
+Aperol,Liqueurs,BOTTLE,36.00,24.39,,0,0
+Aperol Spritz,Others,SERVE,0.0,0.0,,0,0
+Bacardi,Spirits,BOTTLE,101.10,91.67,,0,0
+Baileys 50ml,Beer - Bottled,BOTTLE,24.00,17.70,,0,0
+Barista Coffee,Hot Drinks,Cup,0.0,0.0,,0,0
+Belhaven Best,Beers- Draught,PINT,263.6,267.16799999999995,,0,0
+Belhaven Best Half Pint,Draught,HALF PINT,0.0,0.0,,0,0
+Belhaven Best Shandy,Shandy,PINT,0.0,0.0,,0,0
+Best Shandy,Shandy,PINT,0.0,0.0,,0,0
+Birra Moretti,Beers- Draught,PINT,279.0,239.15231999999997,,0,0
+Birra Moretti Half,Draught,HALF PINT,0.0,0.0,,0,0
+Birra Moretti Shandy,Shandy,PINT,0.0,0.0,,0,0
+Birra Moretti Zero,Beer - Bottled,BOTTLE,71.00,69.19,,0,0
+Bombay Sapphire,Spirits,BOTTLE,45.00,44.52,,0,0
+Bowmore,Malt Whisky,BOTTLE,50.00,97.47,,0,0
+Brockmans Gin,Spirits,BOTTLE,49.00,76.41,,0,0
+Budweiser,Beer - Bottled,BOTTLE,55.00,60.47,,0,0
+Can,Minerals,CAN,821.00,433.12,,0,0
+CART BUD,Beer - Draught,PINT,0.0,0.0,,0,0
+CART CANS,Cart Sales,CAN,0.0,0.0,,0,0
+CART CORONA,Cart Sales,BOTTLE,0.0,0.0,,0,0
+CART INCH'S,Cart Sales,BOTTLE,0.0,0.0,,0,0
+CART KOPPA,Beer - Bottled,BOTTLE,0.0,0.0,,0,0
+CART MAGNERS,Cart Sales,BOTTLE,0.0,0.0,,0,0
+CART PERONI,Cart Sales,BOTTLE,0.0,0.0,,0,0
+Cart Roll Tea Coffee,Others,CUP,0.0,0.0,,0,0
+Carton Juice,Post Mix,CARTON,84.28,41.95804328266326,,0,0
+Carton Juice Half,Soft,HALF PINT,0.0,0.0,,0,0
+Carton Juice PINT,Soft,PINT,0.0,0.0,,0,0
+Coffee Machine,Equipment,Unit,0.0,0.0,,0,0
+Coke Half,Post Mix,PINT,0.0,0.0,,0,0
+Coke Half Pint,Post Mix,PINT,0.0,0.0,,0,0
+Coke Pint,Post Mix,PINT,0.0,0.0,,0,0
+Coke PM,Post Mix,PINT,213.40,264.00,,0,0
+Cordial,Post Mix,BOTTLE,520.50,59.05,,0,0
+Corona,Beer - Bottled,BOTTLE,97.00,116.35,,0,0
+Cullinan View Sauvignon Blanc,Wine,BOTTLE,13.0,97.5,,0,0
+Dead Mans Fingers,Spirits,BOTTLE,24.00,19.43,,0,0
+Diet Coke Half,Post Mix,PINT,0.0,0.0,,0,0
+Diet Coke Half Pint,Post Mix,PINT,0.0,0.0,,0,0
+Diet Coke Pint,Post Mix,PINT,0.0,0.0,,0,0
+Diet Coke PM,Post Mix,PINT,212.90,221.96,,0,0
+Disaronno,Liqueurs,BOTTLE,30.00,28.78,,0,0
+Drambuie,Liqueurs,BOTTLE,14.0,22.0704,,0,0
+Edinburgh R&G,Spirits,BOTTLE,56.0,55.047599999999996,,0,0
+Fevertree SL Tonic,Minerals,BOTTLE,67.00,56.45,,0,0
+Fevertree Tonic,Minerals,BOTTLE,87.0,61.174319999999994,,0,0
+Glayva,Liqueurs,BOTTLE,28.0,32.7432,,0,0
+Glen Scotia,Malt Whisky,BOTTLE,59.00,118.55,,0,0
+Glenmorangie,Malt Whisky,BOTTLE,65.00,120.86,,0,0
+Gordons Gin,Spirits,BOTTLE,134.50,114.41,,0,0
+Gordons Pink Gin,Spirits,BOTTLE,129.00,101.11,,0,0
+Guinness 0_0,Beer - Bottled,BOTTLE,55.0,173.58,,0,0
+Guinness Can,Beer - Can,CAN,30.0,36.0,,0,0
+Havana Club 7,Spirits,BOTTLE,55.00,62.67,,0,0
+Highland Park,Malt Whisky,BOTTLE,70.00,155.36,,0,0
+Inchs,Beer - Bottled,BOTTLE,40.00,61.96,,0,0
+J2O,Minerals,BOTTLE,80.0,67.7376,,0,0
+Jack Daniels,Spirits,BOTTLE,27.70,30.14,,0,0
+Jagermeister,Spirits,BOTTLE,74.0,57.04919999999999,,0,0
+Joker IPA,Beers- Draught,PINT,297.2,547.0079999999999,,0,0
+Joker IPA Half,Draught,HALF PINT,0.0,0.0,,0,0
+Joker IPA Shandy,Shandy,PINT,0.0,0.0,,0,0
+Jura Origin,Malt Whisky,BOTTLE,81.00,99.58,,0,0
+Kahlua,Liqueurs,BOTTLE,58.00,42.77,,0,0
+Kopparberg,Beer - Bottled,BOTTLE,44.00,87.96,,0,0
+Kraken Rum,Spirits,BOTTLE,60.00,66.56,,0,0
+Lemonade,Post Mix,PINT,182.5,178.92,,0,0
+Lemonade Half,Post Mix,PINT,0.0,0.0,,0,0
+Lemonade Half Pint,Post Mix,PINT,0.0,0.0,,0,0
+Lemonade Pint,Post Mix,PINT,0.0,0.0,,0,0
+Magners,Beer - Bottled,BOTTLE,63.0,73.75692,,0,0
+Malibu,Liqueurs,BOTTLE,44.00,30.34,,0,0
+Martell,Spirits,BOTTLE,34.00,46.90,,0,0
+Merlot,Wine,BOTTLE,0.0,0.0,,0,0
+Morgans,Spirits,BOTTLE,42.90,34.71,,0,0
+Nuts,Snacks,PACK,50.0,23.098319999999998,,0,0
+old mout cider,Beer - Bottled,BOTTLE,2.00,3.80,,0,0
+Old Pulteney,Malt Whisky,BOTTLE,50.00,62.97,,0,0
+Orange Lemonade,Soft,PINT,0.0,0.0,,0,0
+Orange Lemonade Half,Soft,HALF PINT,0.0,0.0,,0,0
+Orange Soda,Soft,PINT,0.0,0.0,,0,0
+Orange Soda Half,Soft,HALF PINT,0.0,0.0,,0,0
+Peach Schnapps,Liqueurs,BOTTLE,64.00,39.51,,0,0
+Peroni,Beer - Bottled,BOTTLE,31.00,34.08,,0,0
+Pimms,Sherry,BOTTLE,8.0,4.1364,,0,0
+Port,Sherry,BOTTLE,60.00,44.24,,0,0
+Pringles,Snacks,PACK,103.00,77.15,,0,0
+Prosecco,Wine,BOTTLE,35.00,251.93,,0,0
+Prosecco Single Serve,Wine,BOTTLE,41.0,111.95712,,0,0
+Red Bull,Post Mix,CAN,38.00,45.68,,0,0
+Sambuca,Spirits,BOTTLE,24.00,20.75,,0,0
+Short Mile Bay Merlot,Wine,BOTTLE,12.0,101.088,,0,0
+Simply Fruity,Post Mix,BOTTLE,0.0,0.0,,0,0
+Single Serve Wine,Wine,BOTTLE,281.0,594.3839999999999,,0,0
+Smirnoff,Spirits,BOTTLE,178.00,151.41,,0,0
+Soda Cordial HALF PI,Soft Drinks,UNIT,0.0,0.0,,0,0
+Soda Cordial HALF PINT,Soft Drinks,UNIT,0.0,0.0,,0,0
+Soda Cordial PINT,Soft Drinks,UNIT,0.0,0.0,,0,0
+Soda Water,Soft,BOTTLE,0.00,0.00,,0,0
+Sours,Liqueurs,BOTTLE,24.0,10.943999999999999,,0,0
+Southern Comfort,Liqueurs,BOTTLE,55.9,62.40761999999999,,0,0
+Specialist Tea,Hot Drinks,Cup,0.0,0.0,,0,0
+Tanqueray,Spirits,BOTTLE,51.0,57.474000000000004,,0,0
+Tanqueray Sevilla,Spirits,BOTTLE,48.00,65.35,,0,0
+TB Best,Beers - Draught,PINT,0.0,0.0,,0,0
+Tea,Hot Drinks,Cup,0.0,0.0,,0,0
+Tennants Shandy Half Pint,Beers - Draught,PINT,0.0,0.0,,0,0
+Tennants Shandy Pint,Beer - Draught,PINT,0.0,0.0,,0,0
+Tennents Lager,Beers- Draught,PINT,549.5,577.8431999999999,,0,0
+Tennents Lager Half,Draught,HALF PINT,0.0,0.0,,0,0
+Tequila,Spirits,BOTTLE,24.00,21.59,,0,0
+Tequila Rose,Liqueurs,BOTTLE,27.0,16.08432,,0,0
+TG Best,Beers - Draught,PINT,0.0,0.0,,0,0
+TG Can,Beer - Can,CAN,0.0,0.0,,0,0
+TG Single Serve Wine,Wine,BOTTLE,0.0,0.0,,0,0
+TG Tennents,Beers - Draught,PINT,0.0,0.0,,0,0
+Thatchers,Beers- Draught,PINT,211.2,387.9744,,0,0
+Thatchers Half,Draught,HALF PINT,0.0,0.0,,0,0
+Thatchers Shandy,Shandy,PINT,0.0,0.0,,0,0
+Tonic,Post Mix,BOTTLE,0.00,0.00,,0,0
+Walkers,Snacks,PACK,136.00,86.95,,0,0
+Whispering Hills White Zinfandel,Wine,BOTTLE,4.0,24.96,,0,0
+Whitley Neill Gin,Spirits,BOTTLE,56.0,58.76639999999999,,0,0
+Wicked Lady Pinot Grigio,Wine,BOTTLE,14.0,110.736,,0,0
+Zarapito Malbec,Wine,BOTTLE,16.0,144.19199999999998,,0,0
+Lemonade PM,,,143.40,169.03,,,
