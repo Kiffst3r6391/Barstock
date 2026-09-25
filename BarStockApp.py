@@ -6319,7 +6319,12 @@ class BarStockManagementSystem:
 
                 # Running surplus/shortfall: cumulative value of every non-baseline stocktake
                 # variance across all time, surviving monthly baseline resets.
-                all_variance_st_df = st_df[~st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)]
+                # Use the full history (not the per-item latest snapshot) so each physical
+                # stocktake's variance contributes to the year-end figure.
+                all_variance_st_df = pd.DataFrame([dict(row) for row in stocktake_rows])
+                all_variance_st_df = all_variance_st_df[
+                    ~all_variance_st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)
+                ]
                 cost_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE]))
                 running_surplus_value = sum(
                     float(row['variance']) * float(cost_by_id.get(row['item_id'], 0) or 0)
