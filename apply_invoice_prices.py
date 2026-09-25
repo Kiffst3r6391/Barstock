@@ -127,7 +127,6 @@ INVOICE_TO_ITEM = {
 CAN_AVERAGE_GROUP = [
     'coca cola can', 'diet coke can', 'irn bru', 'irn bru sugar free',
     'coke zero', 'fanta lemon', 'sprite can', 'old jamaica ginger beer',
-    'j20 apple & mango', 'j20 orange & passionfruit',
 ]
 
 SKIP_KEYWORDS = [

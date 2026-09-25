@@ -7523,8 +7523,6 @@ class BarStockManagementSystem:
         'fanta lemon',
         'sprite can',
         'old jamaica ginger beer',
-        'j20 apple & mango',
-        'j20 orange & passionfruit',
     ]
 
     def _is_can_average_description(self, desc: str) -> bool:

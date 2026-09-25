@@ -1,0 +1,128 @@
+BOOKER INVOICE PRICE UPDATE REPORT
+Generated: 2026-09-22 17:20:18
+Backups:   /Users/kiffy/PGC Barstock/Backups_pre_invoice_update_20260922_172018
+Invoices:  10 file(s)
+
+=== APPLIED UPDATES (0 items) ===
+No price changes applied.
+
+=== BOOKER STOCK ITEMS NOT UPDATED (53 items) ===
+a_f_koppaberg          A/F Koppaberg              qty=  13.00 Bottle     cur_cost=£1.4385
+aperol                 Aperol                     qty=  36.00 35ml       cur_cost=£0.6774
+bacardi                Bacardi                    qty= 101.10 35ml       cur_cost=£0.9067
+baileys_50ml           Baileys 50ml               qty=  24.00 35ml       cur_cost=£0.7374
+birra_moretti_zero     Birra Moretti Zero         qty=  71.00 Bottle     cur_cost=£0.9745
+bombay_sapphire        Bombay Sapphire            qty=  45.00 35ml       cur_cost=£0.9894
+bowmore                Bowmore                    qty=  50.00 35ml       cur_cost=£1.9494
+brockmans_gin          Brockmans Gin              qty=  49.00 35ml       cur_cost=£1.5594
+budweiser              Budweiser                  qty=  55.00 Bottle     cur_cost=£1.0995
+can                    Can                        qty= 821.00 Can        cur_cost=£0.5276
+Cointreau              Cointreau                  qty=  20.00 35ml       cur_cost=£1.0794
+coke_pm                Coke PM                    qty= 213.40 Pint       cur_cost=£1.2371
+cordial                Cordial                    qty= 520.50 35ml       cur_cost=£0.1135
+corona                 Corona                     qty=  97.00 Bottle     cur_cost=£1.1995
+dead_mans_fingers      Dead Mans Fingers          qty=  24.00 35ml       cur_cost=£0.7115
+diet_coke_pm           Diet Coke PM               qty= 212.90 Pint       cur_cost=£1.0425
+disaronno              Disaronno                  qty=  30.00 35ml       cur_cost=£0.9594
+fevertree_sl_tonic     Fevertree SL Tonic         qty=  67.00 Bottle     cur_cost=£0.8425
+glen_scotia            Glen Scotia                qty=  59.00 35ml       cur_cost=£2.0094
+glenmorangie           Glenmorangie               qty=  65.00 35ml       cur_cost=£1.8594
+gordons_gin            Gordons Gin                qty= 134.50 35ml       cur_cost=£0.8506
+gordons_pink_gin       Gordons Pink Gin           qty= 129.00 35ml       cur_cost=£0.8700
+havana_club_7          Havana Club 7              qty=  55.00 35ml       cur_cost=£1.1394
+highland_park          Highland Park              qty=  70.00 35ml       cur_cost=£2.2194
+inchs                  Inchs                      qty=  40.00 Bottle     cur_cost=£1.5490
+j2o                    J2O                        qty=  83.00 Bottle     cur_cost=£0.9400
+jack_daniels           Jack Daniels               qty=  27.70 35ml       cur_cost=£1.0881
+jura_origin            Jura Origin                qty=  81.00 35ml       cur_cost=£1.2294
+kahlua                 Kahlua                     qty=  58.00 35ml       cur_cost=£0.7374
+kopparberg             Kopparberg                 qty=  44.00 Bottle     cur_cost=£1.9992
+kraken_rum             Kraken Rum                 qty=  60.00 35ml       cur_cost=£1.1094
+lemonade               Lemonade PM                qty= 143.40 Pint       cur_cost=£1.1788
+magners                Magners                    qty=  67.00 Bottle     cur_cost=£1.6700
+malibu                 Malibu                     qty=  44.00 35ml       cur_cost=£0.6800
+martell                Martell                    qty=  34.00 35ml       cur_cost=£1.3794
+Moretti_Bottle         Moretti Bottle             qty= 108.00 Bottle     cur_cost=£1.0245
+morgans                Morgans                    qty=  42.90 35ml       cur_cost=£0.8090
+old_mout_cider         old mout cider             qty=   2.00 Bottle     cur_cost=£1.8990
+old_pulteney           Old Pulteney               qty=  50.00 35ml       cur_cost=£1.2594
+peach_schnapps         Peach Schnapps             qty=  64.00 35ml       cur_cost=£0.6174
+peroni                 Peroni                     qty=  31.00 Bottle     cur_cost=£1.0995
+port                   Port                       qty=  60.00 35ml       cur_cost=£0.7374
+pringles               Pringles                   qty= 103.00 Pack       cur_cost=£0.7490
+prosecco               Prosecco                   qty=  35.00 Bottle     cur_cost=£7.1980
+red_bull               Red Bull                   qty=  38.00 Can        cur_cost=£1.2020
+sambuca                Sambuca                    qty=  24.00 35ml       cur_cost=£0.8600
+smirnoff               Smirnoff                   qty= 178.00 35ml       cur_cost=£0.8506
+soda_water             Soda Water                 qty=   0.00 Bottle     cur_cost=£0.3595
+tanqueray_sevilla      Tanqueray Sevilla          qty=  48.00 35ml       cur_cost=£1.3614
+tea                    Tea                        qty=-214.00 Cup        cur_cost=£0.5000
+tequila                Tequila                    qty=  24.00 35ml       cur_cost=£0.8900
+tonic                  Tonic                      qty=   0.00 Bottle     cur_cost=£0.8845
+walkers                Walkers                    qty= 136.00 Pack       cur_cost=£0.6394
+
+=== UNMATCHED INVOICE LINES (15 lines) ===
+  • clrly blue vnyl pf glove lrg 10 100pk
+  • clrly blue vnyl pf glove med 10 100pk
+  • kp dry roasted peanut p card 21 50g
+  • kp original saltd pnut card 21 50g
+  • lemons 1 10s
+  • lf ft white sugar sticks 1 2kg
+  • limes 1 10s
+  • milfresh silver gran milk bl 1 500g
+  • mini magnum white almond 6 330ml
+  • nescafe original granules 1 1kg
+  • sunpride apple juice 12 1ltr
+  • sunpride cranberry juice 12 1ltr
+  • sunpride orange juice 12 1ltr
+  • tanqueray no10 1 70cl
+  • taylors espresso beans 3 1kg
+
+=== SKIPPED / SEEN BUT NOT APPLIED (47 items) ===
+a_f_koppaberg          no change or not in current stock
+aperol                 no change or not in current stock
+bacardi                no change or not in current stock
+baileys_50ml           no change or not in current stock
+birra_moretti_zero     no change or not in current stock
+bombay_sapphire        no change or not in current stock
+bowmore                no change or not in current stock
+brockmans_gin          no change or not in current stock
+budweiser              no change or not in current stock
+can                    no change or not in current stock
+cointreau              no change or not in current stock
+coke_pm                no change or not in current stock
+cordial                no change or not in current stock
+corona                 no change or not in current stock
+diet_coke_pm           no change or not in current stock
+disaronno              no change or not in current stock
+fevertree_sl_tonic     no change or not in current stock
+glen_scotia            no change or not in current stock
+glenmorangie           no change or not in current stock
+gordons_gin            no change or not in current stock
+havana_club_7          no change or not in current stock
+highland_park          no change or not in current stock
+inchs                  no change or not in current stock
+j2o                    no change or not in current stock
+jack_daniels           no change or not in current stock
+jura_origin            no change or not in current stock
+kahlua                 no change or not in current stock
+kopparberg             no change or not in current stock
+kraken_rum             no change or not in current stock
+lemonade               no change or not in current stock
+magners                no change or not in current stock
+martell                no change or not in current stock
+moretti_bottle         no change or not in current stock
+morgans                no change or not in current stock
+old_mout_cider         no change or not in current stock
+old_pulteney           no change or not in current stock
+peach_schnapps         no change or not in current stock
+peroni                 no change or not in current stock
+port                   no change or not in current stock
+pringles               no change or not in current stock
+prosecco               no change or not in current stock
+red_bull               no change or not in current stock
+smirnoff               no change or not in current stock
+soda_water             no change or not in current stock
+tanqueray_sevilla      no change or not in current stock
+tonic                  no change or not in current stock
+walkers                no change or not in current stock

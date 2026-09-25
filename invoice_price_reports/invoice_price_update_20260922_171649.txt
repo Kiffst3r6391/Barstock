@@ -1,0 +1,85 @@
+BOOKER INVOICE PRICE UPDATE REPORT
+Generated: 2026-09-22 17:16:50
+Backups:   /Users/kiffy/PGC Barstock/Backups_pre_invoice_update_20260922_171649
+Invoices:  10 file(s)
+
+=== APPLIED UPDATES (34 items) ===
+a_f_koppaberg          A/F Koppaberg              cur £1.4300 -> new £1.4385 (£+0.0085, +0.6%)
+bacardi                Bacardi                    cur £0.7556 -> new £0.9067 (£+0.1511, +20.0%)
+birra_moretti_zero     Birra Moretti Zero         cur £0.9700 -> new £0.9745 (£+0.0045, +0.5%)
+bombay_sapphire        Bombay Sapphire            cur £0.8245 -> new £0.9894 (£+0.1649, +20.0%)
+bowmore                Bowmore                    cur £1.6245 -> new £1.9494 (£+0.3249, +20.0%)
+brockmans_gin          Brockmans Gin              cur £1.2995 -> new £1.5594 (£+0.2599, +20.0%)
+budweiser              Budweiser                  cur £1.3100 -> new £1.0995 (£-0.2105, -16.1%)
+can                    Can                        cur £0.4300 -> new £0.5276 (£+0.0976, +22.7%)
+coke_pm                Coke PM                    cur £1.2300 -> new £1.2371 (£+0.0071, +0.6%)
+cordial                Cordial                    cur £0.0945 -> new £0.1135 (£+0.0190, +20.1%)
+corona                 Corona                     cur £0.9500 -> new £1.1995 (£+0.2495, +26.3%)
+diet_coke_pm           Diet Coke PM               cur £0.8688 -> new £1.0425 (£+0.1738, +20.0%)
+disaronno              Disaronno                  cur £0.7995 -> new £0.9594 (£+0.1599, +20.0%)
+fevertree_sl_tonic     Fevertree SL Tonic         cur £0.7000 -> new £0.8425 (£+0.1425, +20.4%)
+glenmorangie           Glenmorangie               cur £1.8500 -> new £1.8594 (£+0.0094, +0.5%)
+gordons_gin            Gordons Gin                cur £0.7088 -> new £0.8506 (£+0.1418, +20.0%)
+havana_club_7          Havana Club 7              cur £0.9495 -> new £1.1394 (£+0.1899, +20.0%)
+inchs                  Inchs                      cur £0.7700 -> new £1.5490 (£+0.7790, +101.2%)
+jack_daniels           Jack Daniels               cur £0.9300 -> new £1.0881 (£+0.1581, +17.0%)
+kopparberg             Kopparberg                 cur £1.9900 -> new £1.9992 (£+0.0092, +0.5%)
+kraken_rum             Kraken Rum                 cur £0.9245 -> new £1.1094 (£+0.1849, +20.0%)
+lemonade               Lemonade PM                cur £0.9728 -> new £1.1788 (£+0.2059, +21.2%)
+martell                Martell                    cur £1.3700 -> new £1.3794 (£+0.0094, +0.7%)
+old_pulteney           Old Pulteney               cur £1.0495 -> new £1.2594 (£+0.2099, +20.0%)
+peach_schnapps         Peach Schnapps             cur £0.5145 -> new £0.6174 (£+0.1029, +20.0%)
+peroni                 Peroni                     cur £1.0900 -> new £1.0995 (£+0.0095, +0.9%)
+port                   Port                       cur £0.7300 -> new £0.7374 (£+0.0074, +1.0%)
+pringles               Pringles                   cur £0.6200 -> new £0.7490 (£+0.1290, +20.8%)
+prosecco               Prosecco                   cur £7.1900 -> new £7.1980 (£+0.0080, +0.1%)
+red_bull               Red Bull                   cur £1.2000 -> new £1.2020 (£+0.0020, +0.2%)
+smirnoff               Smirnoff                   cur £0.7088 -> new £0.8506 (£+0.1418, +20.0%)
+tonic                  Tonic                      cur £0.5500 -> new £0.8845 (£+0.3345, +60.8%)
+walkers                Walkers                    cur £0.5000 -> new £0.6394 (£+0.1394, +27.9%)
+old_mout_cider         old mout cider             cur £1.8900 -> new £1.8990 (£+0.0090, +0.5%)
+
+=== BOOKER STOCK ITEMS NOT UPDATED (12 items) ===
+cointreau              cointreau                  qty=   0.00            cur_cost=£0.0000
+dead_mans_fingers      Dead Mans Fingers          qty=  24.00 35ml       cur_cost=£0.7115
+glen_scotia            Glen Scotia                qty=  59.00 35ml       cur_cost=£2.0094
+gordons_pink_gin       Gordons Pink Gin           qty= 129.00 35ml       cur_cost=£0.8700
+j2o                    J2O                        qty=  83.00 Bottle     cur_cost=£0.9400
+magners                Magners                    qty=  67.00 Bottle     cur_cost=£1.6700
+malibu                 Malibu                     qty=  44.00 35ml       cur_cost=£0.6800
+moretti_bottle         moretti_bottle             qty=   0.00            cur_cost=£0.0000
+sambuca                Sambuca                    qty=  24.00 35ml       cur_cost=£0.8600
+soda_water             Soda Water                 qty=   0.00 Bottle     cur_cost=£0.3000
+tea                    Tea                        qty=-214.00 Cup        cur_cost=£0.5000
+tequila                Tequila                    qty=  24.00 35ml       cur_cost=£0.8900
+
+=== UNMATCHED INVOICE LINES (24 lines) ===
+  • aperol 1 70cl
+  • baileys irish cream 1 70cl
+  • captain morgan spiced rum 1 1.5ltr
+  • clrly blue vnyl pf glove lrg 10 100pk
+  • clrly blue vnyl pf glove med 10 100pk
+  • h/land spring water stillpet 24 500ml
+  • highland park 12yo malt 1 70cl
+  • jura 12yr 1 70cl
+  • kahlua coffee liqueur 1 70cl
+  • kp dry roasted peanut p card 21 50g
+  • kp original saltd pnut card 21 50g
+  • lemons 1 10s
+  • lf ft white sugar sticks 1 2kg
+  • limes 1 10s
+  • magners 4x500ml pm599 6 4x500ml
+  • milfresh silver gran milk bl 1 500g
+  • mini magnum white almond 6 330ml
+  • nescafe original granules 1 1kg
+  • sunpride apple juice 12 1ltr
+  • sunpride cranberry juice 12 1ltr
+  • sunpride orange juice 12 1ltr
+  • tanqueray no10 1 70cl
+  • tanqueray sevilla 1 70cl
+  • taylors espresso beans 3 1kg
+
+=== SKIPPED / SEEN BUT NOT APPLIED (3 items) ===
+glen_scotia            no change or not in current stock
+j2o                    no change or not in current stock
+magners                no change or not in current stock
