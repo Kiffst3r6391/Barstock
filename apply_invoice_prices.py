@@ -6,6 +6,7 @@ BarStockApp.upload_delivery_invoice_price_check().
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import re
@@ -25,6 +26,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from conversions import get_conversion  # noqa: E402
 from inventory_sync import update_items_csv_total_value  # noqa: E402
+from actions import ACTION_PRICE_UPDATE  # noqa: E402
 from data_manager import (  # noqa: E402
     InventoryDataManager,
     get_resource_path,
@@ -309,24 +311,43 @@ def backup_files(timestamp: str) -> Path:
     return backup_dir
 
 
-def main() -> None:
-    if not INVOICE_DIR.exists():
-        print(f"Invoice directory not found: {INVOICE_DIR}")
-        sys.exit(1)
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Apply Booker invoice prices to live stock (dry run by default)."
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="Write the price changes. Without this flag the script only previews.",
+    )
+    parser.add_argument(
+        "--allow-locked", action="store_true",
+        help="Update items whose price is locked (default: skip and report them).",
+    )
+    parser.add_argument(
+        "--invoice-dir", type=Path, default=INVOICE_DIR,
+        help=f"Directory of invoice PDFs (default: {INVOICE_DIR}).",
+    )
+    args = parser.parse_args(argv)
+    dry_run = not args.apply
+    invoice_dir = args.invoice_dir
+
+    if not invoice_dir.exists():
+        print(f"Invoice directory not found: {invoice_dir}")
+        return 1
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = backup_files(timestamp)
+    backup_dir = None if dry_run else backup_files(timestamp)
     report_dir = REPORT_DIR
     report_dir.mkdir(exist_ok=True)
     report_path = report_dir / f"invoice_price_update_{timestamp}.txt"
 
     # Parse all Booker invoice PDFs
-    pdf_paths = sorted(INVOICE_DIR.glob("Booker-Invoice-*.pdf"))
+    pdf_paths = sorted(invoice_dir.glob("Booker-Invoice-*.pdf"))
     if not pdf_paths:
-        pdf_paths = sorted(INVOICE_DIR.glob("*.pdf"))
+        pdf_paths = sorted(invoice_dir.glob("*.pdf"))
     if not pdf_paths:
         print("No PDF invoices found.")
-        sys.exit(1)
+        return 1
 
     invoice_lines = []
     for pdf_path in pdf_paths:
@@ -352,8 +373,10 @@ def main() -> None:
         aggregated[key]['case_size'] = case_size
         aggregated[key]['vat_code'] = vat_code
 
-    # Load current inventory
+    # Load current inventory. Keep an untouched copy as the save baseline so a
+    # window that loaded earlier cannot be clobbered by a wholesale rewrite.
     inventory_df = InventoryDataManager.load_inventory()
+    inventory_baseline = inventory_df.copy()
     inventory_ids = {str(i).lower().strip() for i in inventory_df[COL_ITEM_ID].values}
     # Case-insensitive lookup from item_id to exact DataFrame key
     id_lookup = {str(i).lower().strip(): str(i) for i in inventory_df[COL_ITEM_ID].values}
@@ -459,8 +482,9 @@ def main() -> None:
     # Apply updates
     log_entries = []
     updated_item_ids = []
-    # Set this to True to update prices even when the item is marked price_locked.
-    OVERRIDE_PRICE_LOCKS = True
+    skipped_locked = []
+    # Price-locked items are respected unless the caller explicitly overrides.
+    OVERRIDE_PRICE_LOCKS = args.allow_locked
 
     if not df_updates.empty:
         for _, row in df_updates.iterrows():
@@ -474,6 +498,7 @@ def main() -> None:
             item_idx = item_rows.index[0]
             is_locked = bool(inventory_df.at[item_idx, 'price_locked'])
             if is_locked and not OVERRIDE_PRICE_LOCKS:
+                skipped_locked.append(actual_item_id)
                 print(f"Skipping locked price: {actual_item_id}")
                 continue
             if is_locked and OVERRIDE_PRICE_LOCKS:
@@ -486,7 +511,7 @@ def main() -> None:
             sell_price = float(inventory_df.at[item_idx, COL_SELL_PRICE])
             log_entries.append({
                 COL_ITEM_ID: actual_item_id,
-                COL_ACTION: 'Delivery',
+                COL_ACTION: ACTION_PRICE_UPDATE,
                 COL_QUANTITY: 0.0,
                 COL_TIMESTAMP: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 COL_COST_PRICE: new_cost,
@@ -497,8 +522,20 @@ def main() -> None:
             })
             updated_item_ids.append(actual_item_id)
 
+    if dry_run:
+        print(f"\nDRY RUN: {len(updated_item_ids)} item(s) would be updated.")
+        for item_id in updated_item_ids:
+            row = inventory_df[inventory_df[COL_ITEM_ID] == item_id].iloc[0]
+            print(f"  {item_id}: £{row[COL_COST_PRICE]:.4f}")
+        if skipped_locked:
+            print(f"Locked (skipped): {', '.join(skipped_locked)}")
+        print("Pass --apply to write these changes.")
+        return 0
+
     if updated_item_ids:
-        if not InventoryDataManager.save_inventory(inventory_df):
+        if not InventoryDataManager.save_inventory(
+            inventory_df, baseline_df=inventory_baseline
+        ):
             raise RuntimeError("Failed to save inventory to database")
 
         log_df = InventoryDataManager.load_log(inventory_df)
@@ -589,7 +626,8 @@ def main() -> None:
     report_path.write_text(report_text, encoding="utf-8")
     print(f"\nReport written to: {report_path}")
     print("\n" + report_text)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

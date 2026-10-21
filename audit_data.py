@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
-"""
-Standalone data-health audit for BarStock.
+"""Standalone data-health audit for BarStock.
 
-Reports inconsistencies between the live data sources without modifying anything.
-Run with:
+Reports inconsistencies between the live data sources without modifying
+anything.
 
-    cd "/Users/kiffy/PGC Barstock"
-    python3 audit_data.py
+Run with::
+
+    python3 audit_data.py                 # audit the live app-support database
+    python3 audit_data.py --json          # machine-readable report on stdout
+    python3 audit_data.py --db PATH --csv-dir DIR
 
 Checks:
 - Negative stock in stock.csv / Items.csv / SQLite DB
 - Duplicate keys in mapping dictionaries
 - Missing category/conversion/order-sheet mappings
-- Mismatches between stock.csv, Items.csv, SQLite inventory, and transaction_log.csv
+- Mismatches between stock.csv, Items.csv and the SQLite inventory
 - Stock-vs-transaction-log reconciliation differences
+
+Exit status is 1 when any issue is found, so the script can be used as a CI
+or pre-build health gate.
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
+import json
 import os
 import sqlite3
 import sys
@@ -31,24 +38,48 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from conversions import STOCK_CONVERSIONS
-from categories import CATEGORY_MAP
+from categories import CATEGORY_MAP, DELISTED_ITEMS, EXCLUDED_ITEMS, SALES_INCLUDED_EXCLUDED_ITEMS
 from order_sheet_layout import get_order_sheet_layout
 from sales_mapping import SALES_TO_PARENT, normalize_product_name
-from actions import (
-    ACTION_SALES,
-    ACTION_SALES_ONE_UNIT,
-    ACTION_DELIVERY,
-    ACTION_WASTAGE,
-    ACTION_LINE_CLEAN,
-    ACTION_COMPLIMENTARY,
-    ACTION_OPEN_TAB,
-    ACTION_TAB_CANCELLED,
-    ACTION_PARENT_STOCK_ADJ,
-    ACTION_STOCKTAKE_BASELINE,
-    ACTION_IMPORT,
-    CONSUMPTION_ACTIONS,
-)
-from categories import SALES_INCLUDED_EXCLUDED_ITEMS
+from actions import ACTION_SALES, ACTION_SALES_ONE_UNIT
+from reports import calculate_expected_remaining_series
+
+APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "BarStockManagement"
+DEFAULT_DB = APP_SUPPORT_DIR / "barstock.db"
+
+
+def _default_csv_dir() -> Path:
+    """Prefer the live app-support mirrors; fall back to the repo."""
+    if (APP_SUPPORT_DIR / "stock.csv").exists():
+        return APP_SUPPORT_DIR
+    return PROJECT_ROOT
+
+
+def _lower_set(values) -> set[str]:
+    return {str(value).lower() for value in values}
+
+
+NON_STOCKED = _lower_set(SALES_INCLUDED_EXCLUDED_ITEMS)
+IGNORED = _lower_set(EXCLUDED_ITEMS) | _lower_set(DELISTED_ITEMS)
+CHILD_ITEMS = _lower_set(SALES_TO_PARENT.keys())
+
+
+def _item_id_from_row(row) -> str:
+    """Return a canonical item id for either a stock.csv or Items.csv row."""
+    raw = row.get("item_id") if "item_id" in row else row.get("Name", "")
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)) or str(raw).strip() == "":
+        raw = row.get("Name", "unknown")
+    return normalize_product_name(str(raw).strip())
+
+
+def _is_reconciled_item(item_id: str) -> bool:
+    """True when the item holds independently reconcilable stock."""
+    item_id = item_id.lower()
+    return (
+        item_id not in CHILD_ITEMS
+        and item_id not in NON_STOCKED
+        and item_id not in IGNORED
+    )
 
 
 def _load_csv(path: Path) -> pd.DataFrame | None:
@@ -57,7 +88,7 @@ def _load_csv(path: Path) -> pd.DataFrame | None:
     try:
         return pd.read_csv(path)
     except Exception as e:
-        print(f"  WARNING: could not read {path}: {e}")
+        print(f"  WARNING: could not read {path}: {e}", file=sys.stderr)
         return None
 
 
@@ -104,23 +135,28 @@ def check_duplicate_keys() -> list[str]:
 
 def check_negative_stock(stock_df: pd.DataFrame, label: str) -> list[str]:
     issues: list[str] = []
-    if stock_df.empty or "quantity" not in stock_df.columns:
-        return issues
-    non_stocked = {str(i).lower() for i in SALES_INCLUDED_EXCLUDED_ITEMS}
-    neg = stock_df[pd.to_numeric(stock_df["quantity"], errors="coerce") < 0]
-    for _, row in neg.iterrows():
-        item = str(row.get("item_id", row.get("Name", "unknown"))).lower()
-        if item in non_stocked:
-            # These items generate revenue but stock is not held/tracked.
+    if stock_df is None or stock_df.empty or "quantity" not in stock_df.columns:
+        # Items.csv holds stock in "Total Stock"
+        if stock_df is None or stock_df.empty or "Total Stock" not in stock_df.columns:
+            return issues
+        quantity = pd.to_numeric(stock_df["Total Stock"], errors="coerce")
+    else:
+        quantity = pd.to_numeric(stock_df["quantity"], errors="coerce")
+
+    for idx, qty in quantity.items():
+        if pd.isna(qty) or qty >= 0:
             continue
-        qty = row["quantity"]
+        row = stock_df.loc[idx]
+        item = _item_id_from_row(row)
+        if not _is_reconciled_item(item):
+            continue
         issues.append(f"Negative stock in {label}: {item} = {qty}")
     return issues
 
 
 def check_missing_mappings(stock_df: pd.DataFrame) -> list[str]:
     issues: list[str] = []
-    if stock_df.empty:
+    if stock_df is None or stock_df.empty:
         return issues
 
     order_sheet_ids = set()
@@ -134,7 +170,9 @@ def check_missing_mappings(stock_df: pd.DataFrame) -> list[str]:
     category_ids = {k.lower() for k in CATEGORY_MAP.keys()}
 
     for _, row in stock_df.iterrows():
-        item_id = str(row["item_id"]).lower()
+        item_id = _item_id_from_row(row)
+        if not _is_reconciled_item(item_id):
+            continue
         measure = str(row.get("measure", "")).strip().upper()
         name = row.get("item_name", item_id)
 
@@ -150,16 +188,15 @@ def check_missing_mappings(stock_df: pd.DataFrame) -> list[str]:
             needs_conversion
             and item_id not in conversion_ids
             and item_id not in excluded
-            and item_id not in SALES_TO_PARENT
         ):
             issues.append(f"Missing conversion mapping: {name} ({item_id}) - {measure}")
 
         # Category check
-        if item_id not in category_ids and item_id not in SALES_TO_PARENT:
+        if item_id not in category_ids:
             issues.append(f"Missing category mapping: {name} ({item_id})")
 
         # Order sheet check
-        if item_id not in order_sheet_ids and item_id not in SALES_TO_PARENT:
+        if item_id not in order_sheet_ids:
             issues.append(f"Not linked on order sheet: {name} ({item_id})")
 
     return issues
@@ -168,40 +205,40 @@ def check_missing_mappings(stock_df: pd.DataFrame) -> list[str]:
 def check_csv_consistency(stock_df: pd.DataFrame, items_df: pd.DataFrame) -> list[str]:
     """Compare stock.csv against Items.csv."""
     issues: list[str] = []
-    if stock_df.empty or items_df.empty:
+    if stock_df is None or stock_df.empty or items_df is None or items_df.empty:
         return issues
 
-    # Build item_id columns consistently with sales_mapping.normalize_product_name
-    items_df = items_df.copy()
-    items_df["item_id"] = items_df["Name"].astype(str).apply(normalize_product_name)
+    stock = stock_df.copy()
+    stock["item_id_norm"] = stock.apply(_item_id_from_row, axis=1)
+    items = items_df.copy()
+    items["item_id_norm"] = items.apply(_item_id_from_row, axis=1)
 
-    stock_ids = set(stock_df["item_id"].astype(str).str.lower())
-    item_ids = set(items_df["item_id"])
+    stock_ids = set(stock["item_id_norm"])
+    item_ids = set(items["item_id_norm"])
 
     for item_id in sorted(stock_ids - item_ids):
-        name = stock_df.loc[stock_df["item_id"].str.lower() == item_id, "item_name"].iloc[0]
-        issues.append(f"In stock.csv but not Items.csv: {name} ({item_id})")
+        row = stock.loc[stock["item_id_norm"] == item_id].iloc[0]
+        if _is_reconciled_item(item_id):
+            issues.append(f"In stock.csv but not Items.csv: {row.get('item_name', item_id)} ({item_id})")
 
     for item_id in sorted(item_ids - stock_ids):
-        name = items_df.loc[items_df["item_id"] == item_id, "Name"].iloc[0]
-        issues.append(f"In Items.csv but not stock.csv: {name} ({item_id})")
+        row = items.loc[items["item_id_norm"] == item_id].iloc[0]
+        if _is_reconciled_item(item_id):
+            issues.append(f"In Items.csv but not stock.csv: {row.get('Name', item_id)} ({item_id})")
 
-    # Quantity mismatches
-    stock_for_merge = stock_df[["item_id", "item_name", "quantity"]].copy()
-    stock_for_merge["item_id_lower"] = stock_for_merge["item_id"].astype(str).str.lower()
-    items_for_merge = items_df[["item_id", "Total Stock"]].copy()
-    merged = stock_for_merge.merge(
-        items_for_merge,
-        left_on="item_id_lower",
-        right_on="item_id",
-        how="inner",
-        suffixes=("_stock", "_items"),
-    )
+    if "Total Stock" not in items.columns:
+        return issues
+
+    stock_for_merge = stock[["item_id_norm", "item_name", "quantity"]].copy()
+    items_for_merge = items[["item_id_norm", "Total Stock"]].copy()
+    merged = stock_for_merge.merge(items_for_merge, on="item_id_norm", how="inner")
     merged["stock_qty"] = pd.to_numeric(merged["quantity"], errors="coerce")
     merged["items_qty"] = pd.to_numeric(merged["Total Stock"], errors="coerce")
     merged["diff"] = merged["stock_qty"] - merged["items_qty"]
     mismatches = merged[abs(merged["diff"]) > 0.01]
     for _, row in mismatches.iterrows():
+        if not _is_reconciled_item(row["item_id_norm"]):
+            continue
         issues.append(
             f"Quantity mismatch stock.csv vs Items.csv: {row['item_name']} "
             f"(stock={row['stock_qty']:.2f}, items={row['items_qty']:.2f}, diff={row['diff']:.2f})"
@@ -211,57 +248,23 @@ def check_csv_consistency(stock_df: pd.DataFrame, items_df: pd.DataFrame) -> lis
 
 
 def check_stock_vs_log(stock_df: pd.DataFrame, log_df: pd.DataFrame) -> list[str]:
-    """Compare current stock against expected from transaction log."""
+    """Compare current stock.csv against expected stock from a transaction log."""
     issues: list[str] = []
-    if stock_df.empty or log_df.empty:
+    if stock_df is None or stock_df.empty or log_df is None or log_df.empty:
         return issues
 
-    log_df = log_df.copy()
-    log_df["quantity"] = pd.to_numeric(log_df["quantity"], errors="coerce").fillna(0)
+    expected = {
+        str(key).lower(): float(value)
+        for key, value in calculate_expected_remaining_series(log_df).items()
+    }
 
-    expected: dict[str, float] = {}
-    for _, row in log_df.iterrows():
-        item = str(row["item_id"]).lower()
-        action = str(row["action"]).strip()
-        action_lower = action.lower()
-        qty = float(row["quantity"])
-        additive_actions = {
-            ACTION_IMPORT.lower(),
-            ACTION_DELIVERY.lower(),
-            ACTION_TAB_CANCELLED.lower(),
-            "stocktake adjustment",
-        }
-        # Stocktake Baseline is an audit marker; the Stocktake Adjustment carries
-        # the actual variance delta. This mirrors the SQLite reconciliation.
-        # Parent stock adjustments record the parent-side stock movement caused
-        # by a child sale/complimentary transaction. They are always reductions,
-        # so they must be treated as consumption for reconciliation.
-        consumption_actions = {a.lower() for a in CONSUMPTION_ACTIONS} | {ACTION_OPEN_TAB.lower(), ACTION_PARENT_STOCK_ADJ.lower()}
-        if action_lower == ACTION_STOCKTAKE_BASELINE.lower():
-            # Marker only; the matching Stocktake Adjustment records the delta.
-            continue
-        elif action_lower in additive_actions:
-            expected[item] = expected.get(item, 0.0) + qty
-        elif action_lower in consumption_actions:
-            expected[item] = expected.get(item, 0.0) - qty
-        else:
-            # Unrecognised action: report it
-            issues.append(f"Unrecognised transaction action '{action}' for {item}")
-
-    child_ids = {k.lower() for k in SALES_TO_PARENT.keys()}
-    non_stocked = {str(i).lower() for i in SALES_INCLUDED_EXCLUDED_ITEMS}
     for _, row in stock_df.iterrows():
-        item = str(row["item_id"]).lower()
-        if item in child_ids:
-            # Child items deduct from parent stock; their own inventory in
-            # stock.csv is maintained independently and should not be
-            # reconciled against parent/child combined movements here.
+        item = _item_id_from_row(row)
+        if not _is_reconciled_item(item):
             continue
-        if item in non_stocked:
-            # Revenue-only items do not hold stock; their quantity is kept at 0
-            # and should not be reconciled against transaction volume.
+        actual = pd.to_numeric(row.get("quantity"), errors="coerce")
+        if pd.isna(actual):
             continue
-        actual = float(row["quantity"])
         exp = expected.get(item, 0.0)
         if abs(actual - exp) > 0.01:
             issues.append(
@@ -272,267 +275,291 @@ def check_stock_vs_log(stock_df: pd.DataFrame, log_df: pd.DataFrame) -> list[str
     return issues
 
 
-def check_sqlite_if_present() -> list[str]:
-    """Check the migrated SQLite database if it exists."""
-    issues: list[str] = []
-    db_path = Path.home() / "Library" / "Application Support" / "BarStockManagement" / "barstock.db"
+def _load_sqlite(db_path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     if not db_path.exists():
-        return issues
-
+        return None
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        conn = sqlite3.connect(db_path)
-        inv = pd.read_sql_query("SELECT item_id, item_name, quantity FROM inventory", conn)
-        non_stocked = {str(i).lower() for i in SALES_INCLUDED_EXCLUDED_ITEMS}
-        neg = inv[pd.to_numeric(inv["quantity"], errors="coerce") < 0]
-        for _, row in neg.iterrows():
-            item = str(row["item_id"]).lower()
-            if item in non_stocked:
-                continue
-            issues.append(
-                f"Negative stock in SQLite DB: {row['item_name']} ({row['item_id']}) = {row['quantity']}"
-            )
-
-        # Count transactions
-        tx_count = pd.read_sql_query("SELECT COUNT(*) AS c FROM transactions", conn).iloc[0]["c"]
-        archived = pd.read_sql_query("SELECT COUNT(*) AS c FROM transaction_archive", conn).iloc[0]["c"]
-        print(f"  SQLite DB found: {db_path}")
-        print(f"    Active transactions: {tx_count}")
-        print(f"    Archived transactions: {archived}")
-        conn.close()
-    except Exception as e:
-        issues.append(f"Could not audit SQLite DB: {e}")
-
-    return issues
-
-
-def check_sqlite_inventory_vs_csv(stock_df: pd.DataFrame) -> list[str]:
-    """Compare SQLite inventory quantities to stock.csv."""
-    issues: list[str] = []
-    db_path = Path.home() / "Library" / "Application Support" / "BarStockManagement" / "barstock.db"
-    if not db_path.exists() or stock_df is None or stock_df.empty:
-        return issues
-
-    try:
-        conn = sqlite3.connect(db_path)
-        inv = pd.read_sql_query("SELECT item_id, item_name, quantity FROM inventory", conn)
-        conn.close()
-
-        inv["item_id_lower"] = inv["item_id"].astype(str).str.lower()
-        stock_df = stock_df.copy()
-        stock_df["item_id_lower"] = stock_df["item_id"].astype(str).str.lower()
-
-        inv_ids = set(inv["item_id_lower"])
-        stock_ids = set(stock_df["item_id_lower"])
-
-        for iid in sorted(inv_ids - stock_ids):
-            name = inv.loc[inv["item_id_lower"] == iid, "item_name"].iloc[0]
-            issues.append(f"In SQLite inventory but not stock.csv: {name} ({iid})")
-
-        for iid in sorted(stock_ids - inv_ids):
-            name = stock_df.loc[stock_df["item_id_lower"] == iid, "item_name"].iloc[0]
-            issues.append(f"In stock.csv but not SQLite inventory: {name} ({iid})")
-
-        merged = inv[["item_id_lower", "item_name", "quantity"]].merge(
-            stock_df[["item_id_lower", "quantity"]],
-            on="item_id_lower",
-            how="inner",
-            suffixes=("_db", "_csv"),
+        inv = pd.read_sql_query(
+            "SELECT item_id, item_name, quantity FROM inventory ORDER BY item_id", conn
         )
-        merged["db_qty"] = pd.to_numeric(merged["quantity_db"], errors="coerce")
-        merged["csv_qty"] = pd.to_numeric(merged["quantity_csv"], errors="coerce")
-        merged["diff"] = merged["db_qty"] - merged["csv_qty"]
-        mismatches = merged[abs(merged["diff"]) > 0.01].sort_values("diff", key=abs, ascending=False)
-        for _, row in mismatches.iterrows():
-            issues.append(
-                f"SQLite vs stock.csv mismatch: {row['item_name']} ({row['item_id_lower']}) "
-                f"db={row['db_qty']:.2f}, csv={row['csv_qty']:.2f}, diff={row['diff']:.2f}"
-            )
-    except Exception as e:
-        issues.append(f"Could not compare SQLite inventory to stock.csv: {e}")
-
-    return issues
-
-
-def check_sqlite_transactions_reconciliation() -> list[str]:
-    """Reconcile SQLite inventory against active SQLite transactions.
-
-    Only active transactions are replayed because archived transactions are
-    superseded by the current Stocktake Baseline. Child/deduction items that
-    map to a parent in SALES_TO_PARENT are skipped; they do not hold
-    independent stock.
-    """
-    issues: list[str] = []
-    db_path = Path.home() / "Library" / "Application Support" / "BarStockManagement" / "barstock.db"
-    if not db_path.exists():
-        return issues
-
-    additive_actions = {
-        ACTION_IMPORT.lower(),
-        ACTION_DELIVERY.lower(),
-        ACTION_TAB_CANCELLED.lower(),
-        "stocktake adjustment",
-    }
-    # Parent stock adjustments record the parent-side stock movement caused by
-    # a child sale/complimentary transaction. They are always reductions, so they
-    # must be treated as consumption for stock reconciliation.
-    consumption_actions = {a.lower() for a in CONSUMPTION_ACTIONS} | {ACTION_OPEN_TAB.lower(), ACTION_PARENT_STOCK_ADJ.lower()}
-
-    try:
-        conn = sqlite3.connect(db_path)
         tx = pd.read_sql_query(
             "SELECT item_id, action, quantity, timestamp FROM transactions ORDER BY timestamp",
             conn,
         )
-        inv = pd.read_sql_query("SELECT item_id, item_name, quantity FROM inventory", conn)
+        return inv, tx
+    finally:
         conn.close()
 
-        expected: dict[str, float] = {}
-        for _, row in tx.iterrows():
-            item = str(row["item_id"]).lower()
-            action = str(row["action"]).strip()
-            action_lower = action.lower()
-            qty = float(row["quantity"])
 
-            if action == ACTION_STOCKTAKE_BASELINE:
-                # Baseline is an audit marker only; the Stocktake Adjustment
-                # transaction carries the actual variance delta.
-                continue
-            elif action_lower in additive_actions:
-                expected[item] = expected.get(item, 0.0) + qty
-            elif action_lower in consumption_actions:
-                expected[item] = expected.get(item, 0.0) - qty
-            else:
-                issues.append(f"Unrecognised SQLite action '{action}' for {item}")
+def _db_counts(db_path: Path) -> dict:
+    if not db_path.exists():
+        return {}
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        return {
+            "inventory": conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0],
+            "transactions": conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0],
+            "archived_transactions": conn.execute(
+                "SELECT COUNT(*) FROM transaction_archive"
+            ).fetchone()[0],
+        }
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
 
-        child_ids = {k.lower() for k in SALES_TO_PARENT.keys()}
-        non_stocked = {str(i).lower() for i in SALES_INCLUDED_EXCLUDED_ITEMS}
-        for _, row in inv.iterrows():
-            item = str(row["item_id"]).lower()
-            if item in child_ids:
-                # Child items deduct from parent stock; their own inventory
-                # is maintained at 0 and should not be reconciled here.
-                continue
-            if item in non_stocked:
-                # Revenue-only items do not hold stock.
-                continue
-            actual = float(row["quantity"])
-            exp = expected.get(item, 0.0)
-            if abs(actual - exp) > 0.01:
-                issues.append(
-                    f"SQLite inventory vs transactions mismatch: {row['item_name']} ({item}) "
-                    f"actual={actual:.2f}, expected_from_tx={exp:.2f}, diff={actual - exp:.2f}"
-                )
-    except Exception as e:
-        issues.append(f"Could not reconcile SQLite transactions: {e}")
+
+def check_sqlite_negative_stock(db_path: Path) -> list[str]:
+    issues: list[str] = []
+    loaded = _load_sqlite(db_path)
+    if loaded is None:
+        return issues
+    inv, _ = loaded
+    quantity = pd.to_numeric(inv["quantity"], errors="coerce")
+    for idx, qty in quantity.items():
+        if pd.isna(qty) or qty >= 0:
+            continue
+        row = inv.loc[idx]
+        item = str(row["item_id"]).lower()
+        if not _is_reconciled_item(item):
+            continue
+        issues.append(
+            f"Negative stock in SQLite DB: {row['item_name']} ({row['item_id']}) = {qty}"
+        )
+    return issues
+
+
+def check_sqlite_inventory_vs_csv(db_path: Path, stock_df: pd.DataFrame) -> list[str]:
+    """Compare SQLite inventory quantities to stock.csv."""
+    issues: list[str] = []
+    if stock_df is None or stock_df.empty:
+        return issues
+    loaded = _load_sqlite(db_path)
+    if loaded is None:
+        return issues
+    inv, _ = loaded
+
+    stock = stock_df.copy()
+    stock["item_id_norm"] = stock.apply(_item_id_from_row, axis=1)
+    inv = inv.copy()
+    inv["item_id_norm"] = inv["item_id"].astype(str).str.lower()
+
+    inv_ids = set(inv["item_id_norm"])
+    stock_ids = set(stock["item_id_norm"])
+
+    for iid in sorted(inv_ids - stock_ids):
+        if _is_reconciled_item(iid):
+            name = inv.loc[inv["item_id_norm"] == iid, "item_name"].iloc[0]
+            issues.append(f"In SQLite inventory but not stock.csv: {name} ({iid})")
+
+    for iid in sorted(stock_ids - inv_ids):
+        if _is_reconciled_item(iid):
+            name = stock.loc[stock["item_id_norm"] == iid, "item_name"].iloc[0]
+            issues.append(f"In stock.csv but not SQLite inventory: {name} ({iid})")
+
+    merged = inv[["item_id_norm", "item_name", "quantity"]].merge(
+        stock[["item_id_norm", "quantity"]],
+        on="item_id_norm",
+        how="inner",
+        suffixes=("_db", "_csv"),
+    )
+    merged["db_qty"] = pd.to_numeric(merged["quantity_db"], errors="coerce")
+    merged["csv_qty"] = pd.to_numeric(merged["quantity_csv"], errors="coerce")
+    merged["diff"] = merged["db_qty"] - merged["csv_qty"]
+    mismatches = merged[abs(merged["diff"]) > 0.01].sort_values("diff", key=abs, ascending=False)
+    for _, row in mismatches.iterrows():
+        if not _is_reconciled_item(row["item_id_norm"]):
+            continue
+        issues.append(
+            f"SQLite vs stock.csv mismatch: {row['item_name']} ({row['item_id_norm']}) "
+            f"db={row['db_qty']:.2f}, csv={row['csv_qty']:.2f}, diff={row['diff']:.2f}"
+        )
 
     return issues
 
 
-def main() -> int:
+def check_sqlite_transactions_reconciliation(db_path: Path) -> list[str]:
+    """Reconcile SQLite inventory against its active transaction log.
+
+    The expected level is derived with the same helper the reports use, so the
+    audit and the dashboard cannot drift apart: the latest Stocktake Baseline
+    anchors each item and every later movement (including adjustments, supplier
+    returns and parent deductions) is applied on top of it.
+    """
+    issues: list[str] = []
+    loaded = _load_sqlite(db_path)
+    if loaded is None:
+        return issues
+    inv, tx = loaded
+    if tx.empty:
+        return issues
+
+    expected = {
+        str(key).lower(): float(value)
+        for key, value in calculate_expected_remaining_series(tx).items()
+    }
+
+    for _, row in inv.iterrows():
+        item = str(row["item_id"]).lower()
+        if not _is_reconciled_item(item):
+            continue
+        actual = float(row["quantity"])
+        exp = expected.get(item, 0.0)
+        if abs(actual - exp) > 0.01:
+            issues.append(
+                f"SQLite inventory vs transactions mismatch: {row['item_name']} ({item}) "
+                f"actual={actual:.2f}, expected_from_tx={exp:.2f}, diff={actual - exp:.2f}"
+            )
+
+    return issues
+
+
+def run_audit(db_path: Path | None = None, csv_dir: Path | None = None) -> dict:
+    """Run every check and return a structured report."""
+    db_path = Path(db_path) if db_path else DEFAULT_DB
+    csv_dir = Path(csv_dir) if csv_dir else _default_csv_dir()
+
+    stock_df = _load_csv(csv_dir / "stock.csv")
+    items_df = _load_csv(csv_dir / "Items.csv")
+    log_df = _load_csv(csv_dir / "transaction_log.csv")
+
+    # The live database is authoritative: when it is present, reconcile the
+    # CSV mirror against the database's transaction history rather than against
+    # an exported log that may be months stale.
+    loaded = _load_sqlite(db_path)
+    if loaded is not None and not loaded[1].empty:
+        log_df = loaded[1]
+
+    notes = [
+        f"Missing CSV: {csv_dir / name}"
+        for name in ("stock.csv", "Items.csv")
+        if not (csv_dir / name).exists()
+    ]
+
+    sections: dict[str, list[str]] = {}
+    sections["duplicate_keys"] = check_duplicate_keys()
+
+    negative: list[str] = []
+    if stock_df is not None:
+        negative.extend(check_negative_stock(stock_df, "stock.csv"))
+    if items_df is not None:
+        negative.extend(check_negative_stock(items_df, "Items.csv"))
+    negative.extend(check_sqlite_negative_stock(db_path))
+    sections["negative_stock"] = negative
+
+    sections["missing_mappings"] = (
+        check_missing_mappings(stock_df) if stock_df is not None else []
+    )
+    sections["csv_consistency"] = (
+        check_csv_consistency(stock_df, items_df)
+        if stock_df is not None and items_df is not None
+        else []
+    )
+    sections["stock_vs_log"] = (
+        check_stock_vs_log(stock_df, log_df)
+        if stock_df is not None and log_df is not None
+        else []
+    )
+    sections["sqlite_vs_csv"] = check_sqlite_inventory_vs_csv(db_path, stock_df)
+    sections["sqlite_reconciliation"] = check_sqlite_transactions_reconciliation(db_path)
+
+    total = sum(len(value) for value in sections.values())
+    return {
+        "db": str(db_path),
+        "csv_dir": str(csv_dir),
+        "db_counts": _db_counts(db_path),
+        "notes": notes,
+        "sections": sections,
+        "issue_count": total,
+    }
+
+
+def reconcile_inventory(db_path: Path | None = None) -> list[str]:
+    """Lightweight health check for app start-up.
+
+    Only checks that live inventory agrees with its own transaction log and
+    that no stock is negative — the failures that silently corrupt every later
+    report. Mapping and CSV checks stay in the full audit.
+    """
+    db_path = Path(db_path) if db_path else DEFAULT_DB
+    issues = check_sqlite_transactions_reconciliation(db_path)
+    issues.extend(check_sqlite_negative_stock(db_path))
+    return issues
+
+
+_SECTION_TITLES = [
+    ("duplicate_keys", "Duplicate keys in mapping dictionaries"),
+    ("negative_stock", "Negative stock"),
+    ("missing_mappings", "Missing mappings"),
+    ("csv_consistency", "stock.csv vs Items.csv consistency"),
+    ("stock_vs_log", "stock.csv vs transaction_log.csv reconciliation"),
+    ("sqlite_vs_csv", "SQLite inventory vs stock.csv"),
+    ("sqlite_reconciliation", "SQLite inventory vs SQLite transactions reconciliation"),
+]
+
+_CAP = 50
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Audit BarStock data health.")
+    parser.add_argument("--db", type=Path, default=None, help="SQLite database to audit.")
+    parser.add_argument(
+        "--csv-dir",
+        type=Path,
+        default=None,
+        help="Directory holding stock.csv / Items.csv / transaction_log.csv.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the report as JSON instead of text.",
+    )
+    parser.add_argument(
+        "--fail-on",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Exit non-zero when more than N issues are found (default: 1).",
+    )
+    args = parser.parse_args(argv)
+
+    report = run_audit(args.db, args.csv_dir)
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 1 if report["issue_count"] >= args.fail_on else 0
+
     print("=" * 70)
     print("BarStock Data Health Audit")
     print("=" * 70)
+    print(f"Database: {report['db']}")
+    print(f"CSV mirror: {report['csv_dir']}")
+    counts = report["db_counts"]
+    if counts:
+        print(
+            f"SQLite: {counts.get('inventory', 0)} inventory, "
+            f"{counts.get('transactions', 0)} active transactions, "
+            f"{counts.get('archived_transactions', 0)} archived"
+        )
+    for note in report.get("notes", []):
+        print(f"Note: {note}")
 
-    stock_path = PROJECT_ROOT / "stock.csv"
-    items_path = PROJECT_ROOT / "Items.csv"
-    log_path = PROJECT_ROOT / "transaction_log.csv"
-
-    stock_df = _load_csv(stock_path)
-    items_df = _load_csv(items_path)
-    log_df = _load_csv(log_path)
-
-    all_issues: list[str] = []
-
-    print("\n1. Duplicate keys in mapping dictionaries")
-    dup_issues = check_duplicate_keys()
-    all_issues.extend(dup_issues)
-    if dup_issues:
-        for issue in dup_issues:
+    for number, (key, title) in enumerate(_SECTION_TITLES, start=1):
+        issues = report["sections"].get(key, [])
+        print(f"\n{number}. {title}")
+        if not issues:
+            print("  No issues ✓")
+            continue
+        for issue in issues[:_CAP]:
             print(f"  {issue}")
-    else:
-        print("  No duplicate keys found ✓")
-
-    print("\n2. Negative stock")
-    neg_issues: list[str] = []
-    if stock_df is not None:
-        neg_issues.extend(check_negative_stock(stock_df, "stock.csv"))
-    if items_df is not None:
-        neg_issues.extend(check_negative_stock(items_df, "Items.csv"))
-    neg_issues.extend(check_sqlite_if_present())
-    all_issues.extend(neg_issues)
-    if neg_issues:
-        for issue in neg_issues:
-            print(f"  {issue}")
-    else:
-        print("  No negative stock found ✓")
-
-    print("\n3. Missing mappings")
-    if stock_df is not None:
-        map_issues = check_missing_mappings(stock_df)
-        all_issues.extend(map_issues)
-        if map_issues:
-            for issue in map_issues:
-                print(f"  {issue}")
-        else:
-            print("  No missing mappings ✓")
-    else:
-        print("  stock.csv not found; skipping")
-
-    print("\n4. stock.csv vs Items.csv consistency")
-    if stock_df is not None and items_df is not None:
-        csv_issues = check_csv_consistency(stock_df, items_df)
-        all_issues.extend(csv_issues)
-        if csv_issues:
-            for issue in csv_issues[:50]:  # cap output
-                print(f"  {issue}")
-            if len(csv_issues) > 50:
-                print(f"  ... and {len(csv_issues) - 50} more")
-        else:
-            print("  CSVs are consistent ✓")
-    else:
-        print("  stock.csv or Items.csv not found; skipping")
-
-    print("\n5. stock.csv vs transaction_log.csv reconciliation")
-    if stock_df is not None and log_df is not None:
-        log_issues = check_stock_vs_log(stock_df, log_df)
-        all_issues.extend(log_issues)
-        if log_issues:
-            for issue in log_issues[:50]:
-                print(f"  {issue}")
-            if len(log_issues) > 50:
-                print(f"  ... and {len(log_issues) - 50} more")
-        else:
-            print("  Stock and transaction log reconcile ✓")
-    else:
-        print("  stock.csv or transaction_log.csv not found; skipping")
-
-    print("\n6. SQLite inventory vs stock.csv")
-    sqlite_csv_issues = check_sqlite_inventory_vs_csv(stock_df)
-    all_issues.extend(sqlite_csv_issues)
-    if sqlite_csv_issues:
-        for issue in sqlite_csv_issues[:50]:
-            print(f"  {issue}")
-        if len(sqlite_csv_issues) > 50:
-            print(f"  ... and {len(sqlite_csv_issues) - 50} more")
-    else:
-        print("  SQLite inventory matches stock.csv ✓")
-
-    print("\n7. SQLite inventory vs SQLite transactions reconciliation")
-    sqlite_tx_issues = check_sqlite_transactions_reconciliation()
-    all_issues.extend(sqlite_tx_issues)
-    if sqlite_tx_issues:
-        for issue in sqlite_tx_issues[:50]:
-            print(f"  {issue}")
-        if len(sqlite_tx_issues) > 50:
-            print(f"  ... and {len(sqlite_tx_issues) - 50} more")
-    else:
-        print("  SQLite inventory reconciles with transactions ✓")
+        if len(issues) > _CAP:
+            print(f"  ... and {len(issues) - _CAP} more")
 
     print("\n" + "=" * 70)
-    print(f"Audit complete: {len(all_issues)} issue(s) found.")
+    print(f"Audit complete: {report['issue_count']} issue(s) found.")
     print("=" * 70)
-
-    return 1 if all_issues else 0
+    return 1 if report["issue_count"] >= args.fail_on else 0
 
 
 if __name__ == "__main__":

@@ -32,6 +32,9 @@ def temp_db_path(monkeypatch):
     import data_manager
     monkeypatch.setattr(data_manager, "_get_connection", mock_get_connection)
     monkeypatch.setattr(data_manager, "DB_PATH", Path(path))
+    # Never let a temporary database migrate or rename the live CSV mirror.
+    monkeypatch.setattr(data_manager, "INVENTORY_FILE", str(Path(path).with_name("stock.csv")))
+    monkeypatch.setattr(data_manager, "LOG_FILE", str(Path(path).with_name("transaction_log.csv")))
 
     initialize_db()
 

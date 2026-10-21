@@ -11,11 +11,14 @@ import sys
 import shutil
 import glob
 import csv
+import logging
 import pandas as pd
 from tkinter import messagebox
 from datetime import datetime
 
 from sales_mapping import SALES_TO_PARENT, normalize_product_name
+
+logger = logging.getLogger(__name__)
 
 # Column constants (must match BarStockApp.py)
 COL_ITEM_ID = 'item_id'
@@ -37,6 +40,9 @@ COL_REORDER_LEVEL = 'reorder_level'
 COL_MEMBER_QTY = 'member_qty'
 COL_NON_MEMBER_QTY = 'non_member_qty'
 COL_OPEN_TAB_ID = 'open_tab_id'
+# SQLite row identifier for transactions. Loaded log frames carry it so saves
+# can update/delete individual rows instead of replacing the whole table.
+COL_ID = 'id'
 
 INVENTORY_COLUMNS = [
     COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE,
@@ -68,6 +74,9 @@ def get_script_directory():
 
 DATA_DIR = get_resource_path()
 DB_PATH = os.path.join(DATA_DIR, 'barstock.db')
+# Bump when a migration changes the schema. The first launch after an upgrade
+# takes a safety backup before any schema change is applied.
+SCHEMA_VERSION = 2
 INVENTORY_FILE = os.path.join(DATA_DIR, 'stock.csv')
 LOG_FILE = os.path.join(DATA_DIR, 'transaction_log.csv')
 
@@ -358,17 +367,65 @@ def _validate_inventory(df):
     return df
 
 
+def _path_is_in_live_data_dir(path):
+    """Return True when ``path`` sits beside the live database."""
+    try:
+        return (os.path.dirname(os.path.abspath(str(path)))
+                == os.path.abspath(DATA_DIR))
+    except Exception:
+        return False
+
+
 def initialize_db():
-    """Initialize the database, migrating from CSV if needed."""
+    """Initialize the database, migrating from CSV if needed.
+
+    A version upgrade takes a safety backup before touching the schema. The
+    backup is skipped for a brand-new database, which has nothing to lose.
+    """
+    conn = None
     try:
         conn = _get_connection()
+        current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current_version < SCHEMA_VERSION:
+            has_inventory = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'inventory'"
+            ).fetchone()[0]
+            if has_inventory:
+                conn.close()
+                conn = None
+                backup_path = create_backup(
+                    f'before_schema_migration_v{SCHEMA_VERSION}'
+                )
+                if not backup_path:
+                    raise RuntimeError(
+                        "Could not create a safety backup before the database "
+                        "upgrade; startup aborted."
+                    )
+                logger.info("Pre-migration backup: %s", backup_path)
+                conn = _get_connection()
+
         _init_db_schema(conn)
-        _migrate_from_csv(conn)
-        _sync_inventory_from_csv(conn)
-        conn.close()
+        # A test or tool database must never consume (and rename) the live
+        # CSV mirrors.  That turned a fresh temporary DB into a copy of live
+        # stock and left the real stock.csv as stock.csv.bak.
+        if _path_is_in_live_data_dir(INVENTORY_FILE) and not _path_is_in_live_data_dir(DB_PATH):
+            logger.info("Skipping CSV migration into non-live database %s", DB_PATH)
+        else:
+            _migrate_from_csv(conn)
+            _sync_inventory_from_csv(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
     except Exception as e:
+        logger.exception("Failed to initialize database")
         messagebox.showerror("Initialization Error", f"Failed to initialize database: {e}")
         raise
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_csv_sync_changes():
@@ -610,24 +667,29 @@ def _sync_inventory_to_csv(df):
         return
 
     script_dir = get_script_directory()
-    # App-support copy is read first by the startup sync.
+    # The app-support copy is read first by the startup sync.
     targets = [INVENTORY_FILE]
-    # Also update the bundled/project copy so dev builds and manual inspection stay current.
-    bundled_path = os.path.join(script_dir, 'stock.csv')
-    if bundled_path != INVENTORY_FILE:
-        targets.append(bundled_path)
+    # In a frozen build script_dir is inside the .app bundle, which is read-only
+    # (and signed), so never write there. In a dev checkout keep the repo copies
+    # current for inspection and diffs.
+    if not getattr(sys, 'frozen', False):
+        bundled_path = os.path.join(script_dir, 'stock.csv')
+        if bundled_path != INVENTORY_FILE:
+            targets.append(bundled_path)
+        items_csv_path = os.path.join(script_dir, 'Items.csv')
+    else:
+        items_csv_path = os.path.join(DATA_DIR, 'Items.csv')
 
     for csv_path in targets:
         try:
             _write_stock_csv(csv_path, df)
         except Exception as e:
-            print(f"Warning: could not write stock.csv to {csv_path}: {e}")
+            logger.warning("Could not write stock.csv to %s: %s", csv_path, e)
 
-    items_csv_path = os.path.join(script_dir, 'Items.csv')
     try:
         _update_items_csv(items_csv_path, df)
     except Exception as e:
-        print(f"Warning: could not update Items.csv: {e}")
+        logger.warning("Could not update Items.csv: %s", e)
 
 
 def _deduct_stock_in_txn(txn, item_id: str, quantity: float) -> None:
@@ -829,6 +891,33 @@ def _apply_inventory_changes(cursor, df, baseline_df):
         cursor.execute("DELETE FROM inventory WHERE item_id = ?", (item_id,))
 
 
+def _log_row_values(row):
+    """Return the 12 mutable transaction fields for a log frame row."""
+    open_tab_id = row.get(COL_OPEN_TAB_ID)
+    return (
+        str(row[COL_ITEM_ID]),
+        str(row[COL_ACTION]),
+        _num(row.get(COL_QUANTITY)),
+        _text(row.get(COL_TIMESTAMP)),
+        _num(row.get(COL_COST_PRICE)),
+        _num(row.get(COL_SELL_PRICE)),
+        _text(row.get(COL_SUPPLIER)),
+        _text(row.get(COL_DATE_RANGE)),
+        _text(row.get(COL_REASON)),
+        _num(row.get(COL_MEMBER_QTY)),
+        _num(row.get(COL_NON_MEMBER_QTY)),
+        int(open_tab_id) if open_tab_id is not None and pd.notna(open_tab_id) else None,
+    )
+
+
+_LOG_INSERT_SQL = """
+    INSERT INTO transactions
+    (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
+     date_range, reason, member_qty, non_member_qty, open_tab_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
 def _replace_log(cursor, df, allow_shrink=False):
     current_count = cursor.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     new_count = 0 if df is None else len(df)
@@ -844,25 +933,76 @@ def _replace_log(cursor, df, allow_shrink=False):
     if df is None:
         return
     for _, row in df.iterrows():
-        cursor.execute("""
-            INSERT INTO transactions
-            (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
-             date_range, reason, member_qty, non_member_qty, open_tab_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            str(row[COL_ITEM_ID]),
-            str(row[COL_ACTION]),
-            _num(row.get(COL_QUANTITY)),
-            _text(row.get(COL_TIMESTAMP)),
-            _num(row.get(COL_COST_PRICE)),
-            _num(row.get(COL_SELL_PRICE)),
-            _text(row.get(COL_SUPPLIER)),
-            _text(row.get(COL_DATE_RANGE)),
-            _text(row.get(COL_REASON)),
-            _num(row.get(COL_MEMBER_QTY)),
-            _num(row.get(COL_NON_MEMBER_QTY)),
-            int(row.get(COL_OPEN_TAB_ID)) if pd.notna(row.get(COL_OPEN_TAB_ID)) and row.get(COL_OPEN_TAB_ID) is not None else None
-        ))
+        cursor.execute(_LOG_INSERT_SQL, _log_row_values(row))
+
+
+def _apply_log_changes(cursor, df, allow_shrink=False, baseline_ids=None):
+    """Write only the rows that differ from the database.
+
+    Log frames loaded by load_log() carry their SQLite row id. Rows with no id
+    are new and are inserted; rows with an id are updated in place.
+
+    baseline_ids is the set of ids the frame was loaded with. Only those rows
+    can be deleted: anything written by another process after the load is not
+    in baseline_ids and is therefore left alone. Without baseline_ids the
+    older behaviour (delete every id missing from the frame) is used, subject
+    to the shrink guard.
+    """
+    if df is None or COL_ID not in getattr(df, 'columns', []):
+        # Manually constructed frames (and legacy callers) have no ids, so the
+        # whole-table path remains the only option.
+        _replace_log(cursor, df, allow_shrink=allow_shrink)
+        return
+
+    existing_ids = {
+        int(row[0]) for row in cursor.execute("SELECT id FROM transactions")
+    }
+    frame_ids = set()
+    new_rows = []
+
+    assignments = ', '.join(f'{col} = ?' for col in LOG_COLUMNS)
+    for _, row in df.iterrows():
+        raw_id = row.get(COL_ID)
+        if raw_id is None or pd.isna(raw_id):
+            new_rows.append(row)
+            continue
+        row_id = int(raw_id)
+        frame_ids.add(row_id)
+        if row_id in existing_ids:
+            cursor.execute(
+                f"UPDATE transactions SET {assignments} WHERE id = ?",
+                _log_row_values(row) + (row_id,),
+            )
+        elif baseline_ids is not None and row_id in baseline_ids:
+            # Deleted underneath this window (e.g. a database restore); do not
+            # resurrect it under a new id.
+            continue
+        else:
+            # The frame carries a row the database has never seen. Keep the
+            # data by inserting it rather than silently dropping it.
+            new_rows.append(row)
+
+    for row in new_rows:
+        cursor.execute(_LOG_INSERT_SQL, _log_row_values(row))
+
+    if baseline_ids is not None:
+        deletes = {row_id for row_id in baseline_ids if row_id not in frame_ids}
+    else:
+        deletes = existing_ids - frame_ids
+
+    if deletes:
+        if not allow_shrink:
+            reference = len(baseline_ids) if baseline_ids is not None else len(existing_ids)
+            allowed_loss = max(5, int(reference * 0.10))
+            if len(deletes) > allowed_loss:
+                raise ValueError(
+                    f"Refusing to delete {len(deletes)} of {reference} "
+                    "transactions; the transaction frame looks incomplete."
+                )
+        cursor.executemany(
+            "DELETE FROM transactions WHERE id = ?",
+            [(row_id,) for row_id in deletes],
+        )
 
 
 def _sync_csv_quietly(df):
@@ -871,7 +1011,7 @@ def _sync_csv_quietly(df):
     except Exception as e:
         # The database is the source of truth; a CSV mirror failure must not
         # roll back a successful write.
-        print(f"CSV sync failed: {e}")
+        logger.warning("CSV sync failed: %s", e)
 
 
 class InventoryDataManager:
@@ -895,6 +1035,7 @@ class InventoryDataManager:
             df = _validate_inventory(df)
             return df
         except Exception as e:
+            logger.exception("Failed to load inventory")
             messagebox.showerror("Error", f"Failed to load inventory: {e}")
             return pd.DataFrame(columns=INVENTORY_COLUMNS)
 
@@ -914,7 +1055,9 @@ class InventoryDataManager:
 
             rows = cursor.fetchall()
             conn.close()
-            df = _rows_to_dataframe(rows, LOG_COLUMNS)
+            # Keep the row id: save_log writes only the rows that changed, so
+            # transactions appended by another process are never overwritten.
+            df = _rows_to_dataframe(rows, LOG_COLUMNS + [COL_ID])
 
             # Add missing columns for backward compatibility
             if COL_DATE_RANGE not in df.columns:
@@ -924,6 +1067,7 @@ class InventoryDataManager:
 
             return df
         except Exception as e:
+            logger.exception("Failed to load transaction log")
             messagebox.showerror("Error", f"Failed to load transaction log: {e}")
             return pd.DataFrame(columns=LOG_COLUMNS)
 
@@ -931,39 +1075,25 @@ class InventoryDataManager:
     def load_full_log(inventory_df=None):
         """Load active and archived transaction log for reporting.
 
-        Includes all transactions except old Stocktake Baseline and Stocktake
-        Adjustment entries from the archive, because the current baseline
-        supersedes them.
+        The inventory_df argument is accepted for backwards compatibility and
+        deliberately ignored: a report for a past period must still see items
+        that have since been delisted or removed from inventory.
+
+        Old Stocktake Baseline rows are excluded from the archive because the
+        current baseline supersedes them. Stocktake Adjustment rows are kept --
+        they carry each stocktake's variance and are required for the expected
+        stock calculation to agree with the physical count.
         """
         try:
             conn = _get_connection()
             cursor = conn.cursor()
 
-            rows = []
-
-            if inventory_df is not None and not inventory_df.empty:
-                valid_items = tuple(inventory_df[COL_ITEM_ID].values)
-                if len(valid_items) == 1:
-                    cursor.execute("SELECT * FROM transactions WHERE item_id = ? ORDER BY timestamp", (valid_items[0],))
-                    rows.extend(cursor.fetchall())
-                    cursor.execute(
-                        "SELECT * FROM transaction_archive WHERE item_id = ? AND action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp",
-                        (valid_items[0],)
-                    )
-                else:
-                    cursor.execute(f"SELECT * FROM transactions WHERE item_id IN ({','.join('?' * len(valid_items))}) ORDER BY timestamp", valid_items)
-                    rows.extend(cursor.fetchall())
-                    cursor.execute(
-                        f"SELECT * FROM transaction_archive WHERE item_id IN ({','.join('?' * len(valid_items))}) AND action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp",
-                        valid_items
-                    )
-            else:
-                cursor.execute("SELECT * FROM transactions ORDER BY timestamp")
-                rows.extend(cursor.fetchall())
-                cursor.execute(
-                    "SELECT * FROM transaction_archive WHERE action NOT IN ('Stocktake Baseline', 'Stocktake Adjustment') ORDER BY timestamp"
-                )
-
+            cursor.execute("SELECT * FROM transactions ORDER BY timestamp")
+            rows = list(cursor.fetchall())
+            cursor.execute(
+                "SELECT * FROM transaction_archive "
+                "WHERE action != 'Stocktake Baseline' ORDER BY timestamp"
+            )
             rows.extend(cursor.fetchall())
             conn.close()
             df = _rows_to_dataframe(rows, LOG_COLUMNS)
@@ -987,6 +1117,7 @@ class InventoryDataManager:
 
             return df
         except Exception as e:
+            logger.exception("Failed to load full transaction log")
             messagebox.showerror("Error", f"Failed to load full transaction log: {e}")
             return pd.DataFrame(columns=LOG_COLUMNS)
 
@@ -1020,6 +1151,7 @@ class InventoryDataManager:
                     conn.rollback()
                 except Exception:
                     pass
+            logger.exception("Failed to save inventory")
             messagebox.showerror("Error", f"Failed to save inventory: {e}")
             return False
         finally:
@@ -1030,19 +1162,21 @@ class InventoryDataManager:
                     pass
 
     @staticmethod
-    def save_log(df, allow_shrink=False):
+    def save_log(df, allow_shrink=False, baseline_ids=None):
         """Save transaction log to SQLite.
 
-        The log is still replaced wholesale, but only when the frame looks
-        complete.  A frame loaded before recent activity (or filtered down)
-        is rejected instead of silently deleting the missing rows.
+        Rows are updated/inserted/deleted individually. When baseline_ids is
+        supplied, only rows that were present when the frame was loaded can be
+        deleted, so transactions written by another process survive. Frames
+        without ids fall back to a guarded wholesale replacement.
         """
         conn = None
         try:
             conn = _get_connection()
             cursor = conn.cursor()
             conn.execute("BEGIN IMMEDIATE")
-            _replace_log(cursor, df, allow_shrink=allow_shrink)
+            _apply_log_changes(cursor, df, allow_shrink=allow_shrink,
+                               baseline_ids=baseline_ids)
             conn.commit()
             return True
         except Exception as e:
@@ -1051,6 +1185,7 @@ class InventoryDataManager:
                     conn.rollback()
                 except Exception:
                     pass
+            logger.exception("Failed to save transaction log")
             messagebox.showerror("Error", f"Failed to save transaction log: {e}")
             return False
         finally:
@@ -1061,7 +1196,8 @@ class InventoryDataManager:
                     pass
 
     @staticmethod
-    def save_all(inventory_df, log_df, baseline_df=None, allow_log_shrink=False):
+    def save_all(inventory_df, log_df, baseline_df=None, allow_log_shrink=False,
+                 baseline_log_ids=None):
         """Write inventory and transaction log in a single transaction.
 
         This replaces the old pattern of saving inventory and then the log in
@@ -1079,7 +1215,8 @@ class InventoryDataManager:
                 _apply_inventory_changes(cursor, inventory_df, baseline_df)
             else:
                 _replace_inventory(cursor, inventory_df)
-            _replace_log(cursor, log_df, allow_shrink=allow_log_shrink)
+            _apply_log_changes(cursor, log_df, allow_shrink=allow_log_shrink,
+                               baseline_ids=baseline_log_ids)
             conn.commit()
             _sync_csv_quietly(inventory_df)
             return True
@@ -1089,6 +1226,7 @@ class InventoryDataManager:
                     conn.rollback()
                 except Exception:
                     pass
+            logger.exception("Failed to save inventory and log")
             messagebox.showerror("Error", f"Failed to save data: {e}")
             return False
         finally:
@@ -1097,6 +1235,25 @@ class InventoryDataManager:
                     conn.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    def export_csv_mirrors(df=None):
+        """Write the live inventory out to stock.csv and Items.csv.
+
+        The database is authoritative; these files are mirrors for inspection
+        and for the bundled app's startup sync. They used to refresh only as a
+        side effect of a save, so a crash could leave them stale for days.
+        """
+        try:
+            if df is None:
+                df = InventoryDataManager.load_inventory()
+            if df is None or df.empty:
+                return False
+            _sync_inventory_to_csv(df)
+            return True
+        except Exception:
+            logger.exception("Failed to export CSV mirrors")
+            return False
 
     @staticmethod
     def get_item_value_safe(df, item_id, column, default=0):
@@ -1467,6 +1624,7 @@ def record_stocktakes(entries, timestamp, note=''):
                     )
         return {'success': True, 'recorded': len(entries)}
     except Exception as e:
+        logger.exception("Failed to record stocktake")
         messagebox.showerror("Error", f"Failed to record stocktake: {e}")
         return {'success': False, 'recorded': 0, 'error': str(e)}
 
@@ -1777,6 +1935,16 @@ def reset_baseline(counted_items, timestamp, note=''):
     if not counted_items:
         return {'success': False, 'error': 'No items were counted'}
 
+    # A baseline reset archives history, so take a verified backup first and
+    # refuse to proceed if it cannot be made.
+    backup_path = create_backup('before_baseline_reset')
+    if not backup_path:
+        return {
+            'success': False,
+            'error': 'Could not create a safety backup; baseline reset cancelled.',
+        }
+    logger.info("Baseline reset backup: %s", backup_path)
+
     conn = None
     try:
         conn = _get_connection()
@@ -1876,6 +2044,7 @@ def reset_baseline(counted_items, timestamp, note=''):
                 conn.close()
             except Exception:
                 pass
+        logger.exception("Failed to reset baseline")
         messagebox.showerror("Error", f"Failed to reset baseline: {e}")
         return {'success': False, 'error': str(e)}
 
@@ -2027,23 +2196,48 @@ def get_backups_dir():
     return backups_dir
 
 
+def _copy_database(dest_path):
+    """Copy the live database consistently and verify the copy."""
+    source = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    target = sqlite3.connect(dest_path)
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+    check = sqlite3.connect(f"file:{dest_path}?mode=ro", uri=True)
+    try:
+        return check.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        check.close()
+
+
 def create_backup(reason=''):
-    """Create a timestamped backup of the database."""
+    """Create a timestamped, integrity-checked backup of the database."""
+    backup_path = None
     try:
         backups_dir = get_backups_dir()
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         reason_slug = reason.replace(' ', '_').replace('/', '_') if reason else 'manual'
         backup_name = f'barstock_backup_{timestamp}_{reason_slug}.db'
         backup_path = os.path.join(backups_dir, backup_name)
-        shutil.copy2(DB_PATH, backup_path)
+        status = _copy_database(backup_path)
+        if status != 'ok':
+            raise RuntimeError(f'backup failed integrity check: {status}')
         cleanup_old_backups()
         return backup_path
-    except Exception as e:
-        print(f'Backup failed: {e}')
+    except Exception:
+        logger.exception('Backup failed')
+        if backup_path and os.path.exists(backup_path):
+            try:
+                os.remove(backup_path)
+            except Exception:
+                pass
         return None
 
 
-def cleanup_old_backups(max_backups=30):
+def cleanup_old_backups(max_backups=20):
     """Remove old backups keeping only the most recent max_backups."""
     try:
         backups_dir = get_backups_dir()
@@ -2055,7 +2249,7 @@ def cleanup_old_backups(max_backups=30):
         for old in backups[max_backups:]:
             os.remove(old)
     except Exception:
-        pass
+        logger.warning("Could not prune old backups", exc_info=True)
 
 
 def list_backups():
@@ -2083,17 +2277,68 @@ def list_backups():
         return []
 
 
-def restore_backup(backup_path):
-    """Restore database from a backup file."""
+def verify_database(path):
+    """Check that a file is a sound BarStock database.
+
+    Returns (ok, message). Checks SQLite integrity and the presence of the two
+    tables the app cannot run without, so a truncated or unrelated file can
+    never replace the live database.
+    """
+    if not path or not os.path.exists(path):
+        return False, 'file not found'
     try:
-        if not os.path.exists(backup_path):
-            return False
-        create_backup('before_restore')
-        shutil.copy2(backup_path, DB_PATH)
-        return True
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            status = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            if status != 'ok':
+                return False, f'integrity check failed: {status}'
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        finally:
+            conn.close()
     except Exception as e:
-        print(f'Restore failed: {e}')
-        return False
+        return False, str(e)
+
+    missing = {'inventory', 'transactions'} - tables
+    if missing:
+        return False, f"missing tables: {', '.join(sorted(missing))}"
+    return True, 'ok'
+
+
+def restore_backup(backup_path):
+    """Restore the database from a backup after verifying both copies."""
+    ok, message = verify_database(backup_path)
+    if not ok:
+        logger.error('Refusing to restore %s: %s', backup_path, message)
+        return False, f'Backup is not usable: {message}'
+
+    # The current database is copied aside first so a failed restore can be
+    # undone by copying it back.
+    pre_restore = create_backup('before_restore')
+    if not pre_restore:
+        return False, 'Could not create a pre-restore backup; restore cancelled.'
+
+    temp_path = f'{DB_PATH}.restore.tmp'
+    try:
+        shutil.copy2(backup_path, temp_path)
+        ok, message = verify_database(temp_path)
+        if not ok:
+            raise RuntimeError(f'restored copy failed verification: {message}')
+        os.replace(temp_path, DB_PATH)
+        logger.info('Restored database from %s (pre-restore backup: %s)',
+                    backup_path, pre_restore)
+        return True, pre_restore
+    except Exception as e:
+        logger.exception('Restore failed')
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        return False, f'Restore failed: {e}'
 
 
 def should_auto_backup():
@@ -2123,7 +2368,9 @@ def create_auto_backup():
         timestamp = datetime.now().strftime('%Y%m%d')
         backup_name = f'barstock_auto_{timestamp}.db'
         backup_path = os.path.join(backups_dir, backup_name)
-        shutil.copy2(DB_PATH, backup_path)
+        status = _copy_database(backup_path)
+        if status != 'ok':
+            raise RuntimeError(f'auto-backup failed integrity check: {status}')
         # Keep only last 7 auto-backups
         auto_backups = sorted(
             glob.glob(os.path.join(backups_dir, 'barstock_auto_*.db')),
@@ -2134,5 +2381,5 @@ def create_auto_backup():
             os.remove(old)
         return backup_path
     except Exception as e:
-        print(f'Auto-backup failed: {e}')
+        logger.exception('Auto-backup failed')
         return None

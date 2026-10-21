@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    # macOS is the target platform and ships a Tk-enabled Python, so the
+    # Tkinter imports used by data_manager work without extra setup.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Data health audit (syntax only, no live DB in CI)
+        run: python -m py_compile audit_data.py data_manager.py reports.py

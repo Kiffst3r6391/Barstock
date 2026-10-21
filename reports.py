@@ -17,7 +17,8 @@ from actions import (
     ACTION_SALES, ACTION_SALES_ONE_UNIT, ACTION_DELIVERY,
     ACTION_WASTAGE, ACTION_LINE_CLEAN, ACTION_COMPLIMENTARY,
     ACTION_OPEN_TAB, ACTION_TAB_CANCELLED, ACTION_PARENT_STOCK_ADJ,
-    ACTION_STOCKTAKE_BASELINE, ACTION_IMPORT, ACTION_SUPPLIER_RETURN,
+    ACTION_STOCKTAKE_BASELINE, ACTION_STOCKTAKE_ADJUSTMENT,
+    ACTION_IMPORT, ACTION_SUPPLIER_RETURN,
 )
 from categories import get_category, should_exclude, is_delisted, CATEGORY_ORDER
 from sales_mapping import is_hidden_from_stock_view
@@ -188,8 +189,14 @@ def calculate_expected_remaining_series(log_df):
     been reset to a physical count.
 
     Formula (post-baseline): baseline + import + delivery + tab_cancelled
+                             + stocktake_adjustment
                              - sales - wastage - line_clean - complimentary
                              - open_tab - supplier_return - parent_adj
+
+    Stocktake Adjustment rows carry the variance (counted - expected) recorded
+    when a stocktake is saved, so including them keeps the expected level in
+    step with the physical count. Omitting them made the variance report and
+    the running surplus disagree with live inventory after every stocktake.
     Returns pd.Series indexed by item_id.
 
     Note: this is a stock-level expected remaining calculation. Open Tab rows are
@@ -230,6 +237,7 @@ def calculate_expected_remaining_series(log_df):
     import_qty = pivot.get(ACTION_IMPORT, 0)
     delivery = pivot.get(ACTION_DELIVERY, 0)
     baseline = pivot.get(ACTION_STOCKTAKE_BASELINE, 0)
+    stocktake_adjustment = pivot.get(ACTION_STOCKTAKE_ADJUSTMENT, 0)
     supplier_return = pivot.get(ACTION_SUPPLIER_RETURN, 0)
 
     # Compute parent adjustments dynamically from child sales instead of relying on log entries
@@ -254,7 +262,8 @@ def calculate_expected_remaining_series(log_df):
     parent_adj = pd.Series({item_id: computed_parent_adj.get(item_id.lower(), 0) for item_id in all_item_ids})
     parent_adj.index.name = COL_ITEM_ID
 
-    result = import_qty + delivery + baseline + tab_cancelled - sales - wastage - comp - open_tab - supplier_return - parent_adj
+    result = (import_qty + delivery + baseline + tab_cancelled + stocktake_adjustment
+              - sales - wastage - comp - open_tab - supplier_return - parent_adj)
 
     # Replace any remaining negative expected remaining with the baseline anchor
     # when a baseline exists, so current_stock - expected_remaining never invents

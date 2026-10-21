@@ -219,10 +219,56 @@ def _print_result(label: str, result: dict) -> None:
             print(f"    {p}")
 
 
-def main() -> None:
+PRICE_BASIS = "ex_vat"
+OPPOSITE_BASIS = "inc_vat"
+
+
+def _read_price_basis() -> str | None:
+    """Return the stored price basis marker, if the database has one."""
+    if not DB_PATH.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'price_basis'"
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+
+
+def _write_price_basis(value: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('price_basis', ?)",
+            (value,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description="Migrate BarStock prices from inc-VAT to ex-VAT.")
     parser.add_argument("--run", action="store_true", help="Apply changes (default is dry-run).")
+    parser.add_argument("--force", action="store_true",
+                        help="Run even if the database already records a price basis.")
     args = parser.parse_args()
+
+    current_basis = _read_price_basis()
+    if current_basis == PRICE_BASIS and not args.force:
+        print("Database is already marked ex-VAT; nothing to do. Use --force to divide again.")
+        return 0
+    if current_basis == OPPOSITE_BASIS and not args.force:
+        print(
+            "Database is marked inc-VAT. Running this script would divide prices a second "
+            "time.\nRe-run with --force only if you are certain."
+        )
+        return 1
 
     dry_run = not args.run
     print(f"Mode: {'DRY-RUN' if dry_run else 'APPLY'}")
@@ -236,8 +282,10 @@ def main() -> None:
     if dry_run:
         print("\nDry-run complete. Pass --run to apply changes.")
     else:
+        _write_price_basis(PRICE_BASIS)
         print("\nMigration complete.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

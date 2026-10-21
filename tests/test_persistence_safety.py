@@ -12,6 +12,7 @@ These cover the failure modes that produced ~£1,539 of phantom shortfall:
 * deleting an item erasing its transaction history.
 """
 
+import os
 import sqlite3
 
 import pandas as pd
@@ -33,6 +34,8 @@ def db(tmp_path, monkeypatch):
     """
     path = tmp_path / "barstock.db"
     monkeypatch.setattr(dm, "DB_PATH", str(path))
+    # Keep backups (baseline resets now take one) inside the temp directory.
+    monkeypatch.setattr(dm, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(dm, "_sync_csv_quietly", lambda df: None)
     monkeypatch.setattr(dm.messagebox, "showerror", lambda *a, **k: None)
     monkeypatch.setattr(dm.messagebox, "showwarning", lambda *a, **k: None)
@@ -363,3 +366,140 @@ def test_load_log_keeps_history_for_items_no_longer_in_inventory(db):
 
     assert len(log) == 2
     assert "deleted_item" in set(log[dm.COL_ITEM_ID])
+
+
+# ---------------------------------------------------------------------------
+# Delta log writes
+# ---------------------------------------------------------------------------
+
+def test_log_save_preserves_rows_written_after_load(db):
+    add_transactions(db, 2)  # ids 1 and 2
+    frame = dm.InventoryDataManager.load_log()
+    assert dm.COL_ID in frame.columns
+    loaded_ids = {int(v) for v in frame[dm.COL_ID]}
+
+    # Another window records a sale after this frame was loaded.
+    add_transaction(db, "tennents_lager", "Sales", 3, "2026-10-21 13:00:00")
+
+    assert dm.InventoryDataManager.save_log(frame, baseline_ids=loaded_ids)
+
+    assert count_of(db, "transactions") == 3
+    conn = connect(db)
+    quantities = [r["quantity"] for r in conn.execute(
+        "SELECT quantity FROM transactions WHERE timestamp = '2026-10-21 13:00:00'"
+    )]
+    conn.close()
+    assert quantities == [3.0]
+
+
+def test_log_save_deletes_rows_removed_from_the_frame(db):
+    for n in range(3):
+        add_transaction(db, "tennents_lager", "Sales", n + 1,
+                        f"2026-10-0{n + 1} 09:00:00")
+    frame = dm.InventoryDataManager.load_log()
+    removed_id = int(frame.iloc[0][dm.COL_ID])
+    frame = frame[frame[dm.COL_ID] != removed_id].reset_index(drop=True)
+
+    assert dm.InventoryDataManager.save_log(frame)
+
+    assert count_of(db, "transactions") == 2
+    conn = connect(db)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE id = ?", (removed_id,)
+    ).fetchone()[0] == 0
+    conn.close()
+
+
+def test_log_save_updates_an_edited_row_in_place(db):
+    add_transaction(db, "tennents_lager", "Delivery", 10, "2026-10-01 09:00:00")
+    frame = dm.InventoryDataManager.load_log()
+    frame.loc[:, dm.COL_QUANTITY] = 12.0
+
+    assert dm.InventoryDataManager.save_log(frame)
+
+    conn = connect(db)
+    row = conn.execute("SELECT id, quantity FROM transactions").fetchone()
+    conn.close()
+    assert row["id"] == int(frame.iloc[0][dm.COL_ID])
+    assert row["quantity"] == 12.0
+
+
+def test_log_save_still_rejects_mass_deletion(db):
+    add_transactions(db, 20)
+    frame = dm.InventoryDataManager.load_log().iloc[0:0]
+
+    assert not dm.InventoryDataManager.save_log(frame)
+    assert count_of(db, "transactions") == 20
+
+
+# ---------------------------------------------------------------------------
+# Reporting history and backups
+# ---------------------------------------------------------------------------
+
+def test_load_full_log_includes_archived_adjustments_and_deleted_items(db):
+    add_item(db, "still_stocked", 10)
+    add_transaction(db, "still_stocked", "Delivery", 10, "2026-10-01 09:00:00")
+
+    conn = connect(db)
+    conn.execute(
+        """
+        INSERT INTO transaction_archive
+        (item_id, action, quantity, timestamp, archived_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("gone_item", "Stocktake Adjustment", -4.0, "2026-09-01 09:00:00",
+         "2026-10-20 09:00:00"),
+    )
+    conn.execute(
+        """
+        INSERT INTO transaction_archive
+        (item_id, action, quantity, timestamp, archived_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("gone_item", "Stocktake Baseline", 50.0, "2026-08-01 09:00:00",
+         "2026-10-20 09:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    full = dm.InventoryDataManager.load_full_log(
+        dm.InventoryDataManager.load_inventory()
+    )
+
+    actions = set(zip(full[dm.COL_ITEM_ID], full[dm.COL_ACTION]))
+    assert ("gone_item", "Stocktake Adjustment") in actions
+    # Old baselines are superseded by the current one and stay out.
+    assert ("gone_item", "Stocktake Baseline") not in actions
+
+
+def test_create_backup_writes_a_verified_copy(db):
+    add_item(db, "tennents_lager", 100)
+    add_transaction(db, "tennents_lager", "Delivery", 100, "2026-10-01 09:00:00")
+
+    path = dm.create_backup("test")
+
+    assert path and os.path.exists(path)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1
+        assert conn.execute("SELECT quantity FROM inventory").fetchone()[0] == 100
+    finally:
+        conn.close()
+
+
+def test_backup_retention_keeps_the_newest(db, monkeypatch):
+    backups_dir = dm.get_backups_dir()
+    for n in range(25):
+        path = os.path.join(backups_dir, f"barstock_backup_202601{n:02d}_x.db")
+        with open(path, "w") as fh:
+            fh.write("x")
+        # Distinct mtimes so ordering is deterministic.
+        os.utime(path, (1_700_000_000 + n, 1_700_000_000 + n))
+
+    dm.cleanup_old_backups(max_backups=20)
+
+    remaining = sorted(os.listdir(backups_dir))
+    assert len(remaining) == 20
+    assert "barstock_backup_20260124_x.db" in remaining
+    assert "barstock_backup_20260100_x.db" not in remaining

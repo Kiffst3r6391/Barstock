@@ -1,121 +1,44 @@
 #!/usr/bin/env python3
+"""Record a physical stocktake and reset the baseline from the command line.
+
+This performs the same operation as the app's
+"Full Stocktake -> Set as New Baseline" flow, using the same audited code path
+(``data_manager.reset_baseline``): it takes a verified backup, records the
+variance snapshot, archives the pre-baseline history for the counted items,
+sets inventory to the physical counts, logs new baseline rows, and writes the
+reset to the ``baseline_resets`` audit table.
+
+Counts are never hardcoded. Supply a CSV with ``name,quantity`` columns (or a
+JSON object mapping name to quantity). Names are matched with the same
+normaliser the uploads use, so shorthand from the count sheet is accepted.
+
+Usage::
+
+    python3 apply_baseline_from_count.py --counts counts.csv          # dry run
+    python3 apply_baseline_from_count.py --counts counts.csv --run    # apply
+
+The script is a dry run unless ``--run`` is passed.
 """
-Helper script to record a stocktake from physical counts, then reset baseline.
 
-This does the same thing as the app's "Full Stocktake → Set as New Baseline" flow,
-but can be run from the command line. It:
+from __future__ import annotations
 
-1. Creates a backup of the live SQLite database
-2. Records a stocktake snapshot showing variance vs expected
-3. Archives all transactions before the reset time
-4. Sets inventory quantities to the physical counts
-5. Logs new Stocktake Baseline entries
-
-After running this, open the app and go to Reports → Stocktake Variance Report
-to see the variance. A second stocktake with the same counts will show zero.
-
-Usage:
-    cd "/Users/kiffy/PGC Barstock"
-    python3 apply_baseline_from_count.py
-
-The physical counts are hardcoded below from the user's supplied list.
-"""
-
+import argparse
+import csv
+import json
 import os
 import sys
-import json
-import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data_manager import DB_PATH, InventoryDataManager, create_backup
 from conversions import STOCK_CONVERSIONS
+from data_manager import InventoryDataManager, reset_baseline
 from sales_mapping import normalize_product_name
 
-# ---------------------------------------------------------------------------
-# Physical counts as provided by the user (raw input units)
-# ---------------------------------------------------------------------------
-PHYSICAL_COUNTS_RAW = {
-    'A/F kopparberg': 23,
-    'Birra moretti zero': 61,
-    'Budeiser': 47,
-    'Corona': 115,
-    'Fever tree SL': 105,
-    'Fever tree': 82,
-    "Inch's": 25,
-    'Kopparberg': 17,
-    'Magnets': 36,
-    'Moretti bottle': 92,
-    'Peroni': 38,
-    'Old bout cider': 30,
-    'Guinness 0.0': 20,
-    'Belhaven best': 2.6,
-    'Birra moretti': 2,
-    'Guinness can': 44,
-    'Joker ima': 2,
-    "Tennent's": 2.6,
-    'Thatchers': 1.8,
-    'Nuts': 44,
-    'Pringles': 69,
-    'Walkers': 102,
-    'Can': 498,
-    'Carton juice': 55,
-    'Coke PM': 3,
-    'Cordial': 580,
-    'Diet Coke PM': 3.5,
-    'J20': 47,
-    'Lemonade PM': 2.5,
-    'Redbull': 37,
-    'Angostura': 1,
-    'Aperol': 3.7,
-    'Bacardi': 1.7,
-    'Baileys': 2.2,
-    'Bombay saphire': 2.5,
-    'Bowmore': 1.8,
-    'Brockmans': 2,
-    'Cointreau': 0.2,
-    'Dead mans fingers': 0.8,
-    'Disaronno': 1.2,
-    'Drambuie': 0.6,
-    'Edinburgh R&G': 2.8,
-    'Glayva': 1.3,
-    'Glen Scotia': 2,
-    'Glenmorangie': 4.1,
-    'Gordons gin': 2.8,
-    'Gordons pink gin': 3.3,
-    'Havana': 0.7,
-    'Highland park': 4,
-    'Jack daniels': 1.5,
-    'Jagermeister': 3.5,
-    'Jura': 2.8,
-    'Kraken': 2.6,
-    'Malibu': 2.3,
-    'Martiell': 2.3,
-    'kahlua': 2,
-    'Morgans': 2,
-    'Peach schnapps': 2.7,
-    'Pimms': 0.2,
-    'Port': 3.2,
-    'Sambuca': 1.4,
-    'Smirnoff': 4.3,
-    'sourz': 2.1,
-    'Southern comfort': 1.3,
-    'Tanqueray': 2.8,
-    'Tanqueray Sevilla': 4,
-    'Tequila': 1.4,
-    'Tequilla rose': 2.2,
-    'Whitley neil': 3,
-    'Culling view': 9,
-    'Prosecco': 20,
-    'Prosecco single serve': 24,
-    'Short mile merlot': 12,
-    'Single serve wine': 278,
-    'Whispering hills white zinfandel': 4,
-    'Wicked lady pinot Grigio': 12,
-    'Zarapito malbec': 16,
-}
-
+# Legacy spelling corrections from the printed count sheets. These only map
+# names the user actually wrote to the canonical inventory name; they do not
+# carry quantities.
 NAME_CORRECTIONS = {
     'Budeiser': 'Budweiser',
     'Fever tree SL': 'Fevertree SL Tonic',
@@ -166,142 +89,141 @@ NAME_CORRECTIONS = {
 }
 
 
-def convert_count_to_system(name, raw_qty):
-    """Convert raw physical count to system units."""
-    corrected = NAME_CORRECTIONS.get(name, name)
-    item_id = normalize_product_name(corrected)
+def load_counts(path: Path) -> dict[str, float]:
+    """Read counts from a CSV (name,quantity) or JSON object file."""
+    if path.suffix.lower() == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("JSON counts file must be an object of name -> quantity")
+        return {str(k): float(v) for k, v in data.items()}
 
-    if item_id in STOCK_CONVERSIONS:
-        return item_id, raw_qty * STOCK_CONVERSIONS[item_id][1]
-    return item_id, raw_qty
+    counts: dict[str, float] = {}
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames:
+            raise ValueError("CSV counts file is empty")
+        name_field = next(
+            (f for f in reader.fieldnames if f.strip().lower() in ("name", "item", "item_name")),
+            reader.fieldnames[0],
+        )
+        qty_field = next(
+            (f for f in reader.fieldnames if f.strip().lower() in ("quantity", "qty", "count")),
+            reader.fieldnames[-1],
+        )
+        for row in reader:
+            name = str(row.get(name_field, "")).strip()
+            raw_qty = str(row.get(qty_field, "")).strip()
+            if not name or not raw_qty:
+                continue
+            counts[name] = float(raw_qty)
+    return counts
 
 
-def main():
+def resolve_counts(raw_counts: dict[str, float], inventory_df) -> tuple[list[dict], list[str]]:
+    """Map printed names to inventory items and convert to system units."""
+    by_name = {}
+    by_id = {}
+    for _, row in inventory_df.iterrows():
+        item_id = str(row["item_id"])
+        by_name[str(row["item_name"]).strip().lower()] = item_id
+        by_id[normalize_product_name(item_id)] = item_id
+        by_id[normalize_product_name(str(row["item_name"]))] = item_id
+
+    entries: list[dict] = []
+    unmatched: list[str] = []
+    for raw_name, raw_qty in raw_counts.items():
+        corrected = NAME_CORRECTIONS.get(raw_name, raw_name)
+        item_id = by_name.get(corrected.strip().lower())
+        if item_id is None:
+            item_id = by_id.get(normalize_product_name(corrected))
+        if item_id is None:
+            unmatched.append(raw_name)
+            continue
+
+        if item_id in STOCK_CONVERSIONS:
+            unit_label, factor = STOCK_CONVERSIONS[item_id][:2]
+            counted_system = float(raw_qty) * float(factor)
+            input_unit = str(unit_label)
+        else:
+            counted_system = float(raw_qty)
+            row = inventory_df[inventory_df["item_id"] == item_id].iloc[0]
+            input_unit = str(row.get("measure", "unit")).lower()
+
+        entries.append({
+            "item_id": item_id,
+            "counted_system": counted_system,
+            "input_value": float(raw_qty),
+            "input_unit": input_unit,
+        })
+    return entries, unmatched
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Record a physical stocktake and reset the baseline."
+    )
+    parser.add_argument(
+        "--counts", type=Path, required=True,
+        help="CSV (name,quantity) or JSON object of physical counts.",
+    )
+    parser.add_argument(
+        "--run", action="store_true",
+        help="Apply the reset. Without this flag the script only previews.",
+    )
+    parser.add_argument("--note", default="", help="Note stored with the reset.")
+    args = parser.parse_args(argv)
+
     print("=" * 70)
     print("Apply Baseline from Physical Count")
     print("=" * 70)
 
-    # 1. Backup
-    backup_path = create_backup('before_baseline_from_count')
-    print(f"\n1. Backup created:\n   {backup_path}")
-
-    # 2. Load data
+    try:
+        raw_counts = load_counts(args.counts)
+    except (OSError, ValueError) as exc:
+        print(f"\nCould not read counts file: {exc}")
+        return 2
     inventory_df = InventoryDataManager.load_inventory()
-    log_df = InventoryDataManager.load_log()
-    from reports import calculate_expected_remaining_series
-    expected_remaining = calculate_expected_remaining_series(log_df)
+    entries, unmatched = resolve_counts(raw_counts, inventory_df)
 
-    name_to_id = {str(row['item_name']).lower(): row['item_id'] for _, row in inventory_df.iterrows()}
+    print(f"\nCounts file: {args.counts}")
+    print(f"Matched: {len(entries)} of {len(raw_counts)} lines")
+    if unmatched:
+        print("Unmatched names (will be skipped):")
+        for name in unmatched:
+            print(f"  • {name}")
 
-    # 3. Convert physical counts and build baseline map
-    baseline_counts = {}
-    skipped = []
-    for raw_name, raw_qty in PHYSICAL_COUNTS_RAW.items():
-        corrected = NAME_CORRECTIONS.get(raw_name, raw_name)
-        item_id = name_to_id.get(corrected.lower())
-        if item_id is None:
-            skipped.append(raw_name)
-            continue
-        _, system_qty = convert_count_to_system(raw_name, raw_qty)
-        baseline_counts[item_id] = system_qty
-
-    print(f"\n2. Matched {len(baseline_counts)} physical count items")
-    if skipped:
-        print(f"   Skipped {len(skipped)} unmatched names: {', '.join(skipped)}")
-
-    # 4. Record stocktake snapshots BEFORE baseline reset (shows variance)
-    snapshot_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Baseline timestamp is 1 second later so it is NOT archived/deleted
-    baseline_timestamp = (datetime.now().replace(microsecond=0) + __import__('datetime').timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    recorded = 0
-    for item_id, counted_qty in baseline_counts.items():
-        inv_row = inventory_df[inventory_df['item_id'] == item_id]
-        if inv_row.empty:
-            continue
-        current_stock = float(inv_row['quantity'].iloc[0])
-        expected_qty = current_stock - float(expected_remaining.get(item_id, 0))
-        variance = counted_qty - expected_qty
-        cursor.execute(
-            """INSERT INTO stocktake_snapshots
-               (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (item_id, counted_qty, expected_qty, variance, snapshot_timestamp,
-             'Pre-baseline stocktake from physical count list')
+    print("\nPreview (counted vs current stock):")
+    for entry in entries:
+        row = inventory_df[inventory_df["item_id"] == entry["item_id"]].iloc[0]
+        current = float(row["quantity"])
+        variance = entry["counted_system"] - current
+        print(
+            f"  {entry['item_id']:<28} {current:>9.2f} -> {entry['counted_system']:>9.2f} "
+            f"({variance:+.2f})"
         )
-        recorded += 1
-    conn.commit()
-    print(f"\n3. Recorded {recorded} stocktake snapshot entries (showing variance)")
 
-    # 5. Archive all transactions BEFORE the baseline timestamp
-    cursor.execute(
-        """INSERT INTO transaction_archive
-           (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
-            date_range, reason, user, member_qty, non_member_qty, open_tab_id, archived_at)
-           SELECT item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
-                  date_range, reason, user, member_qty, non_member_qty, open_tab_id, ?
-           FROM transactions WHERE timestamp < ?""",
-        (baseline_timestamp, baseline_timestamp)
-    )
-    archived_count = cursor.rowcount
-    cursor.execute("DELETE FROM transactions WHERE timestamp < ?", (baseline_timestamp,))
-    conn.commit()
-    print(f"\n4. Archived {archived_count} transactions")
+    if not entries:
+        print("\nNothing to apply.")
+        return 1
 
-    # 6. Set inventory quantities to physical counts
-    updated = 0
-    for item_id, counted_qty in baseline_counts.items():
-        cursor.execute("UPDATE inventory SET quantity = ? WHERE item_id = ?",
-                       (counted_qty, item_id))
-        if cursor.rowcount:
-            updated += 1
-    conn.commit()
-    print(f"\n5. Updated {updated} inventory items to baseline quantities")
+    if not args.run:
+        print("\nDry run only. Pass --run to take a backup and apply the reset.")
+        return 0
 
-    # 7. Log new baseline entries at the later baseline timestamp
-    placeholders = ','.join('?' * len(baseline_counts))
-    cursor.execute(
-        f"""INSERT INTO transactions
-            (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
-             date_range, reason, user, member_qty, non_member_qty, open_tab_id)
-            SELECT item_id, 'Stocktake Baseline', quantity, ?, cost_price, sell_price,
-                   '', '', 'Baseline reset from physical count', '', 0, 0, NULL
-            FROM inventory WHERE item_id IN ({placeholders})""",
-        (baseline_timestamp,) + tuple(baseline_counts.keys())
-    )
-    baseline_logged = cursor.rowcount
-    conn.commit()
-    print(f"\n6. Logged {baseline_logged} new baseline entries")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    result = reset_baseline(entries, timestamp, note=args.note or "CLI baseline reset")
 
-    # 8. Record reset event
-    reset_record = {
-        'timestamp': baseline_timestamp,
-        'items_count': len(baseline_counts),
-        'archived_count': archived_count,
-        'note': 'Baseline from physical count list via apply_baseline_from_count.py',
-    }
-    cursor.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('baseline_resets', ?)",
-        (json.dumps([reset_record]),)
-    )
-    conn.commit()
-    conn.close()
+    if not result.get("success"):
+        print(f"\nBaseline reset failed: {result.get('error', 'unknown error')}")
+        return 1
 
-    print("\n" + "=" * 70)
-    print("DONE")
-    print("=" * 70)
-    print(f"Snapshot time: {snapshot_timestamp}")
-    print(f"Baseline time: {baseline_timestamp}")
-    print("\nNext steps:")
-    print("  1. Open dist/BarStock.app")
-    print("  2. Go to Reports → Stocktake Variance Report")
-    print("     This will show the variance from the stocktake just recorded.")
-    print("  3. Do a second Full Stocktake with the same counts")
-    print("     The variance report will then show zero.")
-    print(f"\nIf anything goes wrong, restore the backup:\n   {backup_path}")
+    print("\nBaseline reset complete.")
+    print(f"  Timestamp: {timestamp}")
+    print(f"  Items reset: {result.get('saved_count', len(entries))}")
+    print(f"  Transactions archived: {result.get('archived_count', 0)}")
+    print(f"  Baseline rows written: {result.get('baseline_logged', 0)}")
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

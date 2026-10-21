@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BarStock"
-version = "1.0.0"
+version = "2.1.0"
 description = "Bar stock management system for Prestonfield Golf Club"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,15 +25,21 @@ dev = ["pytest", "mypy", "ruff"]
 py-modules = [
     "BarStockApp",
     "actions",
+    "app_config",
+    "app_runtime",
     "categories",
     "conversions",
     "data_manager",
+    "inventory_sync",
     "pdf_generator",
     "reports",
+    "retirement",
     "sales_mapping",
     "supplier_mapping",
     "order_sheet_layout",
+    "ui_theme",
 ]
+packages = ["screens"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

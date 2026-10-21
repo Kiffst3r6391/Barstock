@@ -1,13 +1,38 @@
 """Tests for the Booker invoice price-check parser helpers."""
 
+import sqlite3
+
 import pytest
 
 from BarStockApp import BarStockManagementSystem
 
 
 @pytest.fixture
-def app():
+def app(tmp_path, monkeypatch):
     import tkinter as tk
+
+    import data_manager as dm
+    import BarStockApp as ui
+
+    # Never let a test window load or mirror the live data: constructing the
+    # app exports the CSV mirrors at start-up.
+    monkeypatch.setattr(dm, "DB_PATH", str(tmp_path / "barstock.db"))
+    monkeypatch.setattr(dm, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(dm, "INVENTORY_FILE", str(tmp_path / "stock.csv"))
+    monkeypatch.setattr(dm, "LOG_FILE", str(tmp_path / "transaction_log.csv"))
+    monkeypatch.setattr(dm, "_sync_csv_quietly", lambda df: None)
+    monkeypatch.setattr(dm.InventoryDataManager, "export_csv_mirrors",
+                        staticmethod(lambda df=None: True))
+    monkeypatch.setattr(dm, "create_auto_backup", lambda *a, **k: None)
+    for name in ("showerror", "showwarning", "showinfo", "askyesno"):
+        monkeypatch.setattr(dm.messagebox, name, lambda *a, **k: True)
+        monkeypatch.setattr(ui.messagebox, name, lambda *a, **k: None)
+
+    conn = sqlite3.connect(tmp_path / "barstock.db")
+    dm._init_db_schema(conn)
+    conn.commit()
+    conn.close()
+
     root = tk.Tk()
     root.withdraw()
     app = BarStockManagementSystem(root)

@@ -15,8 +15,16 @@ ACTION_OPEN_TAB = 'Open Tab'
 ACTION_TAB_CANCELLED = 'Tab Cancelled'
 ACTION_PARENT_STOCK_ADJ = 'Parent Stock Adj.'
 ACTION_STOCKTAKE_BASELINE = 'Stocktake Baseline'
+ACTION_STOCKTAKE_ADJUSTMENT = 'Stocktake Adjustment'
 ACTION_IMPORT = 'import'
 ACTION_SUPPLIER_RETURN = 'Supplier Return'
+# Price-only audit row written when invoice prices are applied. It carries no
+# stock movement, so reports must not treat it as a delivery.
+ACTION_PRICE_UPDATE = 'Price Update'
+
+# Stocktake rows describe corrections to expected stock rather than sales:
+# Baseline rows reset the expected level, Adjustment rows carry the variance.
+STOCKTAKE_ACTIONS = {ACTION_STOCKTAKE_BASELINE, ACTION_STOCKTAKE_ADJUSTMENT}
 
 SALE_ACTIONS = {ACTION_SALES, ACTION_SALES_ONE_UNIT}
 NEGATIVE_STOCK_ACTIONS = SALE_ACTIONS | {ACTION_WASTAGE, ACTION_LINE_CLEAN, ACTION_COMPLIMENTARY, ACTION_OPEN_TAB, ACTION_SUPPLIER_RETURN}

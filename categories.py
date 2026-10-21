@@ -289,5 +289,17 @@ def should_exclude(item_id):
 
 
 def is_delisted(item_id):
-    """Check if an item has been delisted but should still appear in reports."""
-    return item_id.lower() in DELISTED_ITEMS
+    """Check if an item has been delisted but should still appear in reports.
+
+    Delistings are either declared in ``DELISTED_ITEMS`` or applied at runtime
+    through the app's retire action (stored in the settings table).
+    """
+    key = str(item_id).lower()
+    if key in DELISTED_ITEMS:
+        return True
+    try:
+        import retirement
+        return retirement.is_retired(key)
+    except Exception:
+        # Never let a settings lookup break stock views or reports.
+        return False

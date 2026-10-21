@@ -16,6 +16,22 @@ VAT_RATE = 0.20
 VAT_MULTIPLIER = 1.0 + VAT_RATE
 
 
+def calculate_vat_summary(sales_value, gp, net_profit):
+    """Return the ex-VAT figures and their VAT equivalents.
+
+    VAT is charged on sales, not on profit. GP and net profit are margins and
+    must never be multiplied by the VAT factor -- doing so overstated them by
+    20% on the executive summary.
+    """
+    return {
+        'sales_ex_vat': sales_value,
+        'sales_inc_vat': sales_value * VAT_MULTIPLIER,
+        'gp_ex_vat': gp,
+        'net_profit_ex_vat': net_profit,
+        'vat_on_sales': sales_value * VAT_RATE,
+    }
+
+
 def _pdf_safe(text, max_len=None):
     """Return a Latin-1 safe string for fpdf core fonts.
 
@@ -227,14 +243,13 @@ class PDFReport(FPDF):
                                    has_member_data, has_stocktake, member_discount_pct=10):
         """Generate a compact one-page executive summary for directors.
 
-        All stored figures are ex-VAT. Inc-VAT equivalents are shown at the
-        standard UK rate (20%) so directors can compare against EPOS/till totals.
+        All stored figures are ex-VAT. Sales are also shown inc-VAT at the
+        standard UK rate (20%) so directors can compare against EPOS/till
+        totals. GP and net profit are margins and are only meaningful ex-VAT.
         """
-        # Inc-VAT equivalents for the headline numbers.
-        total_sales_inc_vat = total_sales_value * VAT_MULTIPLIER
-        total_gp_inc_vat = total_gp * VAT_MULTIPLIER
-        total_net_profit_inc_vat = total_net_profit * VAT_MULTIPLIER
-        vat_on_sales = total_sales_value * VAT_RATE
+        vat = calculate_vat_summary(total_sales_value, total_gp, total_net_profit)
+        total_sales_inc_vat = vat['sales_inc_vat']
+        vat_on_sales = vat['vat_on_sales']
         overall_gp_pct = (total_gp / total_sales_value * 100) if total_sales_value > 0 else 0
 
         self.add_page()
@@ -250,7 +265,7 @@ class PDFReport(FPDF):
             ('Total GP (ex-VAT)', f"£{total_gp:.2f}"),
             ('Overall GP Margin', f"{overall_gp_pct:.1f}%"),
             ('Total Sales (inc-VAT)', f"£{total_sales_inc_vat:.2f}"),
-            ('Total GP (inc-VAT)', f"£{total_gp_inc_vat:.2f}"),
+            ('VAT on Sales (20%)', f"£{vat_on_sales:.2f}"),
         ]
 
         box_width = 61
@@ -282,8 +297,8 @@ class PDFReport(FPDF):
         self.set_text_color(0, 51, 102)
         self.cell(0, 6, 'Division Performance', 0, 1, 'L')
 
-        div_headers = ['Division', 'Items', 'Stock Value', 'Sales ex-VAT', 'Sales inc-VAT', 'GP ex-VAT', 'GP inc-VAT', 'GP%']
-        div_widths = [38, 10, 22, 24, 24, 22, 22, 16]
+        div_headers = ['Division', 'Items', 'Stock Value', 'Sales ex-VAT', 'Sales inc-VAT', 'GP ex-VAT', 'GP%']
+        div_widths = [44, 10, 22, 24, 24, 24, 16]
         div_rows = []
         for division, totals in division_totals.items():
             gp_pct = (totals['gp'] / totals['sales_value'] * 100) if totals['sales_value'] > 0 else 0
@@ -294,7 +309,6 @@ class PDFReport(FPDF):
                 f"£{totals['sales_value']:.2f}",
                 f"£{totals['sales_value'] * VAT_MULTIPLIER:.2f}",
                 f"£{totals['gp']:.2f}",
-                f"£{totals['gp'] * VAT_MULTIPLIER:.2f}",
                 f"{gp_pct:.1f}%",
             ])
         div_total = [
@@ -304,7 +318,6 @@ class PDFReport(FPDF):
             f"£{total_sales_value:.2f}",
             f"£{total_sales_inc_vat:.2f}",
             f"£{total_gp:.2f}",
-            f"£{total_gp_inc_vat:.2f}",
             f"{overall_gp_pct:.1f}%",
         ]
         self.render_table_block(None, div_headers, div_widths, div_rows,
@@ -319,7 +332,6 @@ class PDFReport(FPDF):
         metric_rows = [
             ['Cost of Sales (ex-VAT)', f"£{total_cost_of_sales:.2f}"],
             ['Net Profit (ex-VAT)', f"£{total_net_profit:.2f}"],
-            ['Net Profit (inc-VAT)', f"£{total_net_profit_inc_vat:.2f}"],
             ['VAT @ 20% on Sales', f"£{vat_on_sales:.2f}"],
             ['Wastage & Line Clean (ex-VAT)', f"£{total_wastage_value + total_line_clean_value:.2f}"],
             ['Supplier Returns (ex-VAT)', f"£{total_supplier_return_value:.2f}"],

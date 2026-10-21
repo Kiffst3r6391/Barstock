@@ -2,23 +2,81 @@
 """
 Build script to create a launchable macOS app from the Bar Stock Management System.
 
-This script will attempt multiple methods to build the app:
-1. PyInstaller (recommended - most reliable)
-2. py2app (alternative - more native macOS feel)
+The bundle configuration lives in BarStock.spec (datas, hidden imports, icon,
+entitlements, version); this script just drives the build and verifies the
+result.
 
 Usage:
     python3 build_app.py
 
 Requirements:
     pip3 install pyinstaller pandas
-    or
-    pip3 install py2app pandas
 """
 
 import os
+import re
 import sys
 import subprocess
 import shutil
+
+
+def project_version():
+    """Read the version from pyproject.toml so the bundle matches the code."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pyproject.toml')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            match = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.MULTILINE)
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    return '0.0.0'
+
+
+def verify_bundle(app_dir, expected_version):
+    """Check the built bundle: version, signature, and no bundled live data."""
+    plist = os.path.join(app_dir, 'Contents', 'Info.plist')
+    ok = True
+
+    if not os.path.exists(plist):
+        print(f"✗ {plist} not found")
+        return False
+
+    result = subprocess.run(
+        ['/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', plist],
+        capture_output=True, text=True,
+    )
+    version = result.stdout.strip()
+    if version == expected_version:
+        print(f"✓ Bundle version {version}")
+    else:
+        print(f"✗ Bundle version is {version!r}, expected {expected_version!r}")
+        ok = False
+
+    sign = subprocess.run(
+        ['codesign', '--verify', '--deep', '--strict', app_dir],
+        capture_output=True, text=True,
+    )
+    if sign.returncode == 0:
+        print("✓ Code signature valid")
+    else:
+        print(f"✗ Code signature invalid: {sign.stderr.strip()}")
+        ok = False
+
+    live_data = {'stock.csv', 'Items.csv', 'transaction_log.csv'}
+    leaked = [
+        os.path.relpath(os.path.join(root, name), app_dir)
+        for root, _dirs, files in os.walk(app_dir)
+        for name in files
+        if name in live_data
+    ]
+    if leaked:
+        print(f"✗ Live data bundled into the app: {', '.join(leaked)}")
+        ok = False
+    else:
+        print("✓ No live data files in the bundle")
+
+    return ok
 
 
 def check_dependencies():
@@ -72,7 +130,7 @@ def create_entitlements_file():
 
 
 def build_with_pyinstaller():
-    """Build the app using PyInstaller (most reliable method)."""
+    """Build the app from BarStock.spec, the single source of truth for the bundle."""
     print("\n" + "=" * 60)
     print("Building with PyInstaller...")
     print("=" * 60 + "\n")
@@ -86,79 +144,9 @@ def build_with_pyinstaller():
     # Ensure entitlements file exists and targets the correct directory
     create_entitlements_file()
 
-    # Signing identity from environment, if provided
-    codesign_identity = os.environ.get('CODESIGN_IDENTITY', None)
-
-    # Create the PyInstaller command
-    cmd = [
-        'pyinstaller',
-        '--name', 'BarStock',
-        '--windowed',  # macOS GUI app (no console)
-        '--onedir',    # Directory mode (better for macOS .app bundles)
-        '--noconfirm', # Overwrite existing
-        '--clean',
-        # Data files
-        '--add-data', 'stock.csv:.',
-        '--add-data', 'transaction_log.csv:.',
-        '--add-data', 'Items.csv:.',
-        '--add-data', 'categories.py:.',
-        '--add-data', 'conversions.py:.',
-        '--add-data', 'sales_mapping.py:.',
-        '--add-data', 'supplier_mapping.py:.',
-        '--add-data', 'order_sheet_layout.py:.',
-        '--add-data', 'actions.py:.',
-        '--add-data', 'data_manager.py:.',
-        '--add-data', 'pdf_generator.py:.',
-        '--add-data', 'reports.py:.',
-        '--add-data', 'inventory_sync.py:.',
-        # Hidden imports
-        '--hidden-import', 'pandas',
-        '--hidden-import', 'numpy',
-        '--hidden-import', 'tkinter',
-        '--hidden-import', 'tkinter.messagebox',
-        '--hidden-import', 'tkinter.ttk',
-        '--hidden-import', 'ttkthemes',
-        '--hidden-import', 'fpdf',
-        '--hidden-import', 'fpdf.FPDF',
-        '--hidden-import', 'defusedxml',
-        '--hidden-import', 'PIL',
-        '--hidden-import', 'tkcalendar',
-        '--collect-all', 'tkcalendar',
-        '--hidden-import', 'babel',
-        '--hidden-import', 'babel.numbers',
-        '--collect-all', 'babel',
-        '--hidden-import', 'matplotlib',
-        '--hidden-import', 'matplotlib.pyplot',
-        '--hidden-import', 'matplotlib.backends.backend_tkagg',
-        '--hidden-import', 'matplotlib.dates',
-        '--hidden-import', 'categories',
-        '--hidden-import', 'conversions',
-        '--hidden-import', 'sales_mapping',
-        '--hidden-import', 'supplier_mapping',
-        '--hidden-import', 'order_sheet_layout',
-        '--hidden-import', 'actions',
-        '--hidden-import', 'data_manager',
-        '--hidden-import', 'pdf_generator',
-        '--hidden-import', 'reports',
-        '--hidden-import', 'inventory_sync',
-        '--hidden-import', 'pdfplumber',
-        '--collect-all', 'pdfplumber',
-        # Exclude unnecessary packages
-        '--exclude-module', 'scipy',
-        '--exclude-module', 'sphinx',
-        '--exclude-module', 'PyQt5',
-        '--exclude-module', 'PyQt6',
-        '--exclude-module', 'wx',
-        # macOS app bundle
-        '--osx-bundle-identifier', 'com.prestonfield.barstock',
-        '--osx-entitlements-file', 'entitlements.plist',
-        # Icon
-        '--icon', 'assets/icon.icns',
-        'BarStockApp.py'
-    ]
-
-    if codesign_identity:
-        cmd.extend(['--codesign-identity', codesign_identity])
+    # Building from the spec keeps every flag in one place and stops PyInstaller
+    # regenerating the spec (which used to overwrite local edits).
+    cmd = ['pyinstaller', '--noconfirm', '--clean', 'BarStock.spec']
 
     print(f"Running: {' '.join(cmd)}\n")
 
@@ -181,42 +169,6 @@ def build_with_pyinstaller():
         return False
 
 
-def build_with_py2app():
-    """Build the app using py2app (alternative method)."""
-    print("\n" + "=" * 60)
-    print("Building with py2app...")
-    print("=" * 60 + "\n")
-
-    try:
-        import py2app
-    except ImportError:
-        print("py2app is not installed. Install with:")
-        print("  pip3 install py2app")
-        return False
-
-    # Clean previous builds
-    for folder in ['build', 'dist']:
-        if os.path.exists(folder):
-            print(f"Cleaning {folder}/...")
-            shutil.rmtree(folder)
-
-    cmd = ['python3', 'setup.py', 'py2app']
-    print(f"Running: {' '.join(cmd)}\n")
-
-    result = subprocess.run(cmd, capture_output=False)
-
-    if result.returncode == 0:
-        print("\n" + "=" * 60)
-        print("✓ Build successful!")
-        print("=" * 60)
-        print("\nYour app is available at:")
-        print("  dist/BarStock.app")
-        return True
-    else:
-        print("\n✗ Build failed!")
-        return False
-
-
 def create_launch_script():
     """Create a simple launcher script as a fallback."""
     script_content = '''#!/bin/bash
@@ -232,6 +184,9 @@ python3 BarStockApp.py
 
 def main():
     """Main build process."""
+    # Relative paths in the spec and entitlements assume the project root.
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
     print("=" * 60)
     print("Bar Stock Management - App Builder")
     print("=" * 60)
@@ -240,25 +195,36 @@ def main():
         print("\nPlease install missing dependencies and try again.")
         sys.exit(1)
 
-    # Try PyInstaller first (most reliable)
-    if build_with_pyinstaller():
-        # Create a DMG or ZIP for distribution
-        print("\n" + "=" * 60)
-        print("Creating distribution archive...")
-        print("=" * 60)
+    app_dir = os.path.join('dist', 'BarStock.app')
+    version = project_version()
 
-        # Create ZIP
-        zip_name = "BarStockManagement-macOS"
-        if os.path.exists(f"{zip_name}.zip"):
-            os.remove(f"{zip_name}.zip")
+    if not build_with_pyinstaller():
+        print("\n✗ Build failed. Check the output above for errors.")
+        print("Creating simple launcher script as fallback...")
+        create_launch_script()
+        print("\nYou can run the app with: ./launch.sh")
+        sys.exit(1)
 
-        shutil.make_archive(zip_name, 'zip', root_dir='dist', base_dir='BarStock.app')
-        print(f"\n✓ Created {zip_name}.zip for distribution")
+    if not verify_bundle(app_dir, version):
+        print("\n✗ The built app failed verification; no archive was created.")
+        sys.exit(1)
 
-        print("\n" + "=" * 60)
-        print("BUILD COMPLETE!")
-        print("=" * 60)
-        print(f"""
+    # Create a ZIP for distribution
+    print("\n" + "=" * 60)
+    print("Creating distribution archive...")
+    print("=" * 60)
+
+    zip_name = "BarStockManagement-macOS"
+    if os.path.exists(f"{zip_name}.zip"):
+        os.remove(f"{zip_name}.zip")
+
+    shutil.make_archive(zip_name, 'zip', root_dir='dist', base_dir='BarStock.app')
+    print(f"\n✓ Created {zip_name}.zip for distribution")
+
+    print("\n" + "=" * 60)
+    print("BUILD COMPLETE!")
+    print("=" * 60)
+    print(f"""
 Files created:
   - dist/BarStock.app (launchable app)
   - {zip_name}.zip (distribution archive)
@@ -270,12 +236,7 @@ To use:
 
 Your database will be created automatically in
 ~/Library/Application Support/BarStockManagement/barstock.db on first run.
-        """)
-    else:
-        print("\n✗ Build failed. Check the output above for errors.")
-        print("Creating simple launcher script as fallback...")
-        create_launch_script()
-        print("\nYou can run the app with: ./launch.sh")
+""")
 
 
 if __name__ == "__main__":
