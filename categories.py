@@ -13,6 +13,16 @@ EXCLUDED_ITEMS = {
     'belhaven_best_half_p',
     'carton_juice_half',
     'joker_ipa_half',
+    'poretti_half',
+    'poretti_shandy',
+    'innis_and_gunn_half',
+    'innis_and_gunn_shandy',
+    'orchard_pig_half',
+    'orchard_pig_shandy',
+    'guinness_half',
+    'guinness_shandy',
+    'caledonian_best_half',
+    'caledonian_best_shandy',
     'orange_lemonade',
     'orange_lemonade_half',
     'coke_half',
@@ -56,6 +66,12 @@ EXCLUDED_ITEMS = {
     'lemonade_half_pint',
     'tennants_shandy_half_pint',
     'cart_koppa',
+    'tg_best',
+    'aperol_spritz',
+    'angostura',
+    'simply_fruity',
+    'soda_water',
+    'tonic',
 }
 
 # Items excluded from the physical stock count sheet but still tracked in sales uploads.
@@ -66,6 +82,17 @@ SALES_INCLUDED_EXCLUDED_ITEMS = {
     'barista_coffee',
     'specialist_tea',
     'coffee_machine',
+}
+
+# Items that have been removed from active stock but must still appear in
+# reports (with sales history preserved). They are shown with zero stock and
+# a "DELISTED" marker. Remove an item from this set when it should no longer
+# appear in reports at all.
+DELISTED_ITEMS = {
+    'belhaven_best',
+    'birra_moretti',
+    'thatchers',
+    'merlot',
 }
 
 # Category mapping based on item_id or item_name patterns
@@ -89,8 +116,17 @@ CATEGORY_MAP = {
     'tennents_lager_half': 'Beers',
     'birra_moretti_half': 'Beers',
     'joker_ipa_half': 'Beers',
+    'poretti_half': 'Beers',
+    'innis_and_gunn_half': 'Beers',
+    'orchard_pig_half': 'Beers',
+    'guinness_half': 'Beers',
+    'caledonian_best_half': 'Beers',
     'pint': 'Beers',
     'half_pint': 'Beers',
+    'poretti': 'Beers',
+    'innis_and_gunn': 'Beers',
+    'orchard_pig': 'Beers',
+    'caledonian_best': 'Beers',
     # Ciders
     'inchs': 'Ciders',
     'inch_s': 'Ciders',
@@ -219,6 +255,11 @@ CATEGORY_MAP = {
     'belhaven_best_shandy': 'Beers',
     'birra_moretti_shandy': 'Beers',
     'joker_ipa_shandy': 'Beers',
+    'poretti_shandy': 'Beers',
+    'innis_and_gunn_shandy': 'Beers',
+    'orchard_pig_shandy': 'Beers',
+    'guinness_shandy': 'Beers',
+    'caledonian_best_shandy': 'Beers',
     'thatchers_shandy': 'Beers',
     'thatchers_half': 'Ciders',
 }
@@ -245,3 +286,8 @@ def get_category(item_id):
 def should_exclude(item_id):
     """Check if an item should be excluded from the stock count sheet."""
     return item_id.lower() in EXCLUDED_ITEMS
+
+
+def is_delisted(item_id):
+    """Check if an item has been delisted but should still appear in reports."""
+    return item_id.lower() in DELISTED_ITEMS

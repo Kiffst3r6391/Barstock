@@ -50,6 +50,13 @@ INVOICE_TO_ITEM = {
     'walkers crisps ready salted': 'walkers',
     'walkers prawn cocktail 32.5g': 'walkers',
     'walkers salt & vinegar 32.5g': 'walkers',
+    'kp dry roasted peanut p card 21 50g': 'nuts',
+    'kp original saltd pnut card 21 50g': 'nuts',
+    'sunpride orange juice 12 1ltr': 'carton_juice',
+    'apple juice': 'carton_juice',
+    'orange juice': 'carton_juice',
+    'cranberry juice': 'carton_juice',
+    'pineapple juice': 'carton_juice',
     'pringles bbq': 'pringles',
     'pringles original': 'pringles',
     'pringles salt & vinegar': 'pringles',
@@ -122,11 +129,26 @@ INVOICE_TO_ITEM = {
     'kahlua coffee liqueur': 'kahlua',
     'tanqueray sevilla': 'tanqueray_sevilla',
     'magners 4x500ml': 'magners',
+    # Booker draught kegs
+    'poretti': 'poretti',
+    'innis and gunn': 'innis_and_gunn',
+    'innis & gunn': 'innis_and_gunn',
+    'orchard pig': 'orchard_pig',
+    'guinness keg': 'guinness',
+    'guinness draught': 'guinness',
+    'caledonian best': 'caledonian_best',
 }
 
 CAN_AVERAGE_GROUP = [
     'coca cola can', 'diet coke can', 'irn bru', 'irn bru sugar free',
     'coke zero', 'fanta lemon', 'sprite can', 'old jamaica ginger beer',
+]
+
+CARTON_JUICE_AVERAGE_GROUP = [
+    'apple juice',
+    'orange juice',
+    'cranberry juice',
+    'pineapple juice',
 ]
 
 SKIP_KEYWORDS = [
@@ -179,11 +201,13 @@ def parse_booker_invoice_line(line: str):
     return full_description, invoice_qty, case_size, unit_price, vat_code
 
 
-def invoice_price_with_vat(unit_price_ex: float, vat_code: str) -> float:
-    """Mirror of BarStockApp._invoice_price_with_vat."""
-    if vat_code and vat_code.upper() == 'A':
-        return unit_price_ex
-    return unit_price_ex * 1.2
+def invoice_price_ex_vat(unit_price_ex: float, vat_code: str) -> float:
+    """Mirror of BarStockApp._invoice_price_ex_vat.
+
+    The system now stores prices ex-VAT, so the invoice ex-VAT price is used
+    directly without adding VAT.
+    """
+    return unit_price_ex
 
 
 def units_per_case_from_desc(desc: str, case_size: int) -> int:
@@ -229,19 +253,43 @@ def is_can_average_description(desc: str) -> bool:
     return any(desc_lower.startswith(key) or key in desc_lower for key in CAN_AVERAGE_GROUP)
 
 
+def is_carton_juice_average_description(desc: str) -> bool:
+    """Mirror of BarStockApp._is_carton_juice_average_description."""
+    desc_lower = desc.lower().strip()
+    return any(desc_lower.startswith(key) or key in desc_lower for key in CARTON_JUICE_AVERAGE_GROUP)
+
+
 def compute_can_average_cost(invoice_lines: list) -> tuple[float, int]:
     """Mirror of BarStockApp._compute_can_average_cost."""
-    total_inc_value = 0.0
+    total_ex_value = 0.0
     total_units = 0
     for desc, qty, case_size, price, vat_code in invoice_lines:
         if not is_can_average_description(desc):
             continue
         upc = units_per_case_from_desc(desc, case_size)
         total_units += qty * upc
-        total_inc_value += qty * invoice_price_with_vat(price, vat_code)
+        total_ex_value += qty * invoice_price_ex_vat(price, vat_code)
     if total_units == 0:
         return 0.0, 0
-    return total_inc_value / total_units, total_units
+    return total_ex_value / total_units, total_units
+
+
+def compute_carton_juice_average_cost(invoice_lines: list) -> tuple[float, int]:
+    """Mirror of BarStockApp._compute_carton_juice_average_cost."""
+    from conversions import PINTS_PER_LITRE
+    total_ex_value = 0.0
+    total_litres = 0
+    for desc, qty, case_size, price, vat_code in invoice_lines:
+        if not is_carton_juice_average_description(desc):
+            continue
+        upc = units_per_case_from_desc(desc, case_size)
+        total_litres += qty * upc
+        total_ex_value += qty * invoice_price_ex_vat(price, vat_code)
+    if total_litres == 0:
+        return 0.0, 0
+    per_litre = total_ex_value / total_litres
+    per_pint = per_litre / PINTS_PER_LITRE
+    return per_pint, total_litres
 
 
 def backup_files(timestamp: str) -> Path:
@@ -334,6 +382,22 @@ def main() -> None:
         })
         mapped_item_ids_seen.add('can')
 
+    carton_juice_avg, total_litres = compute_carton_juice_average_cost(invoice_lines)
+    if total_litres > 0 and 'carton_juice' in inventory_ids:
+        current = cost_by_id.get('carton_juice', 0.0)
+        comparison_rows.append({
+            'item_id': 'carton_juice',
+            'item_name': name_by_id.get('carton_juice', 'Carton Juice'),
+            'invoice_desc': f"Weighted average across {total_litres:.0f} litres (Apple/Orange/Cranberry/Pineapple mix, converted to £/pint)",
+            'measure': measure_by_id.get('carton_juice', ''),
+            'invoice_unit': 'pint',
+            'current_cost': current,
+            'invoice_cost': carton_juice_avg,
+            'diff': carton_juice_avg - current,
+            'diff_pct': (carton_juice_avg - current) / current * 100 if current else 0.0,
+        })
+        mapped_item_ids_seen.add('carton_juice')
+
     for desc, data in aggregated.items():
         item_id = map_invoice_description_to_item_id(desc, inventory_ids)
 
@@ -352,23 +416,23 @@ def main() -> None:
         if item_id == 'tea':
             continue
 
-        # Can-average lines are handled once above
-        if is_can_average_description(desc):
-            mapped_item_ids_seen.add(item_id)  # mark as seen even if cost goes to 'can'
+        # Can-average and carton-juice lines are handled once above
+        if is_can_average_description(desc) or is_carton_juice_average_description(desc):
+            mapped_item_ids_seen.add(item_id)  # mark as seen even if cost goes to group
             continue
 
         mapped_item_ids_seen.add(item_id)
         measure = measure_by_id.get(item_id, '')
         invoice_unit = measure or 'unit'
         upc = units_per_case_from_desc(desc, data['case_size'])
-        case_inc = invoice_price_with_vat(data['price'], data['vat_code'])
+        case_ex = invoice_price_ex_vat(data['price'], data['vat_code'])
 
         conv = get_conversion(item_id)
         if conv and invoice_unit_matches_conversion(desc, conv[0]):
-            invoice_per_unit = (case_inc / upc) / conv[1]
+            invoice_per_unit = (case_ex / upc) / conv[1]
             invoice_unit = conv[2]
         else:
-            invoice_per_unit = case_inc / upc
+            invoice_per_unit = case_ex / upc
             if conv and not invoice_unit_matches_conversion(desc, conv[0]):
                 invoice_unit = f"case/{upc}"
 

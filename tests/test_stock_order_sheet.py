@@ -35,8 +35,8 @@ def order_inventory():
             ["corona", "Corona", 5.0, 0.95, 4.3, "Bottle", "Bottle", 15.0],
             # Parents - Tennents
             ["tennents_lager", "Tennents Lager", 50.0, 1.52, 5.2, "Pint", "Draught", 100.0],
-            # Parents - Belhaven
-            ["belhaven_best", "Belhaven Best", 30.0, 1.15, 5.1, "Pint", "Draught", 80.0],
+            # Parents - Delisted (no longer reordered; mapped to Booker for reports)
+            ["belhaven_best", "Belhaven Best", 0.0, 1.15, 5.1, "Pint", "Draught", 80.0],
             # Child items (should be excluded)
             ["tennents_lager_half", "Tennents Lager - Half", 0.0, 0.76, 3.26, "Half Pint", "Draught", 0.0],
             ["belhaven_best_half_pint", "Belhaven Best - Half", 0.0, 0.8, 2.0, "Half Pint", "Draught", 0.0],
@@ -115,14 +115,14 @@ class TestStockOrderSheetData:
         assert by_id["budweiser"][COL_SUPPLIER] == "Booker"
         assert by_id["corona"][COL_SUPPLIER] == "Booker"
         assert by_id["tennents_lager"][COL_SUPPLIER] == "Tennents"
-        assert by_id["belhaven_best"][COL_SUPPLIER] == "Belhaven"
+        assert by_id["belhaven_best"][COL_SUPPLIER] == "Booker"
         assert by_id["nuts"][COL_SUPPLIER] == "Booker"
 
     def test_sort_order_supplier_then_category_then_name(self, order_inventory, empty_log):
         report_data = build_stock_order_sheet_data(order_inventory, empty_log)
         suppliers = [row[COL_SUPPLIER] for row in report_data]
 
-        assert suppliers == sorted(suppliers, key=lambda s: ("Booker", "Tennents", "Belhaven", "Unknown").index(s))
+        assert suppliers == sorted(suppliers, key=lambda s: ("Booker", "Tennents", "Unknown").index(s))
 
     def test_suggested_order_calculation(self, order_inventory, empty_log):
         report_data = build_stock_order_sheet_data(order_inventory, empty_log)

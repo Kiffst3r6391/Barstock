@@ -33,7 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from conversions import STOCK_CONVERSIONS
 from categories import CATEGORY_MAP
 from order_sheet_layout import get_order_sheet_layout
-from sales_mapping import SALES_TO_PARENT
+from sales_mapping import SALES_TO_PARENT, normalize_product_name
 from actions import (
     ACTION_SALES,
     ACTION_SALES_ONE_UNIT,
@@ -173,15 +173,7 @@ def check_csv_consistency(stock_df: pd.DataFrame, items_df: pd.DataFrame) -> lis
 
     # Build item_id columns consistently with sales_mapping.normalize_product_name
     items_df = items_df.copy()
-    items_df["item_id"] = (
-        items_df["Name"]
-        .astype(str)
-        .str.lower()
-        .str.replace(" ", "_", regex=False)
-        .str.replace("'", "", regex=False)
-        .str.replace(".", "", regex=False)
-        .str.replace("/", "_", regex=False)
-    )
+    items_df["item_id"] = items_df["Name"].astype(str).apply(normalize_product_name)
 
     stock_ids = set(stock_df["item_id"].astype(str).str.lower())
     item_ids = set(items_df["item_id"])

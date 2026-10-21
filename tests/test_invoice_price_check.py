@@ -58,15 +58,15 @@ class TestParseBookerInvoiceLine:
         assert app._parse_booker_invoice_line(line) is None
 
 
-class TestInvoicePriceWithVat:
-    def test_vat_code_b_adds_twenty_percent(self, app):
-        assert app._invoice_price_with_vat(10.00, "B") == 12.00
+class TestInvoicePriceExVat:
+    def test_vat_code_b_returns_ex_vat_price(self, app):
+        assert app._invoice_price_ex_vat(10.00, "B") == 10.00
 
-    def test_vat_code_a_is_exempt(self, app):
-        assert app._invoice_price_with_vat(10.00, "A") == 10.00
+    def test_vat_code_a_returns_ex_vat_price(self, app):
+        assert app._invoice_price_ex_vat(10.00, "A") == 10.00
 
-    def test_missing_vat_code_defaults_to_b(self, app):
-        assert app._invoice_price_with_vat(10.00, "") == 12.00
+    def test_missing_vat_code_returns_ex_vat_price(self, app):
+        assert app._invoice_price_ex_vat(10.00, "") == 10.00
 
 
 class TestUnitsPerCaseFromDesc:
@@ -101,7 +101,7 @@ class TestMapInvoiceDescription:
         assert app._map_invoice_description_to_item_id("Coca Cola Original BIB 1 7Ltr", inventory_ids) == "coke_pm"
 
     def test_returns_none_for_unmapped(self, app):
-        assert app._map_invoice_description_to_item_id("Sunpride Orange Juice 12 1ltr", {"gordons_gin"}) is None
+        assert app._map_invoice_description_to_item_id("Unknown Widget 12 1ltr", {"gordons_gin"}) is None
 
 
 class TestCanAveragePricing:
@@ -123,9 +123,9 @@ class TestCanAveragePricing:
         ]
         avg, total_cans = app._compute_can_average_cost({}, lines)
         expected_total_cans = 2 * 24 + 1 * 24
-        expected_inc_value = 2 * 10.50 * 1.2 + 1 * 8.50 * 1.2
+        expected_ex_value = 2 * 10.50 + 1 * 8.50
         assert total_cans == expected_total_cans
-        assert round(avg, 4) == round(expected_inc_value / expected_total_cans, 4)
+        assert round(avg, 4) == round(expected_ex_value / expected_total_cans, 4)
 
     def test_non_can_items_ignored_in_average(self, app):
         lines = [
@@ -134,7 +134,7 @@ class TestCanAveragePricing:
         ]
         avg, total_cans = app._compute_can_average_cost({}, lines)
         assert total_cans == 24
-        assert round(avg, 4) == round(10.50 * 1.2 / 24, 4)
+        assert round(avg, 4) == round(10.50 / 24, 4)
 
     def test_no_can_lines_returns_zero(self, app):
         lines = [
@@ -145,7 +145,7 @@ class TestCanAveragePricing:
         assert avg == 0.0
 
 
-class TestInvoiceCostStorageIsIncVat:
+class TestInvoiceCostStorageIsExVat:
     def test_invoice_parser_returns_ex_vat_price(self, app):
         line = "282574 Coca Cola Can 24 330ml 1 10.50 TC 21.00 B 1.49 64.8%"
         _, _, _, price, vat_code = app._parse_booker_invoice_line(line)

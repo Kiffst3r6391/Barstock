@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data_manager import DB_PATH, InventoryDataManager, create_backup
 from conversions import STOCK_CONVERSIONS
+from sales_mapping import normalize_product_name
 
 # ---------------------------------------------------------------------------
 # Physical counts as provided by the user (raw input units)
@@ -168,15 +169,7 @@ NAME_CORRECTIONS = {
 def convert_count_to_system(name, raw_qty):
     """Convert raw physical count to system units."""
     corrected = NAME_CORRECTIONS.get(name, name)
-    # Build item_id using the same rules as normalize_product_name in sales_mapping
-    item_id = corrected.lower()
-    for char in ('&', '/', "'", '"', '.'):
-        item_id = item_id.replace(char, '')
-    for char in (' ', '-'):
-        item_id = item_id.replace(char, '_')
-    while '__' in item_id:
-        item_id = item_id.replace('__', '_')
-    item_id = item_id.strip('_')
+    item_id = normalize_product_name(corrected)
 
     if item_id in STOCK_CONVERSIONS:
         return item_id, raw_qty * STOCK_CONVERSIONS[item_id][1]

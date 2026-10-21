@@ -10,12 +10,12 @@ import os
 import sys
 import shutil
 import glob
+import csv
 import pandas as pd
 from tkinter import messagebox
 from datetime import datetime
 
-from conversions import convert_to_system
-from sales_mapping import SALES_TO_PARENT
+from sales_mapping import SALES_TO_PARENT, normalize_product_name
 
 # Column constants (must match BarStockApp.py)
 COL_ITEM_ID = 'item_id'
@@ -236,8 +236,9 @@ def _migrate_from_csv(conn):
 
                 for _, row in df.iterrows():
                     item_id = str(row[COL_ITEM_ID])
-                    # Convert initial stock from input units (bottles/boxes) to system units (measures/pints)
-                    system_quantity = convert_to_system(item_id, float(row[COL_QUANTITY]))
+                    # The bundled stock.csv stores quantities in system units (pints,
+                    # measures, etc.), so no conversion is needed on migration.
+                    system_quantity = float(row[COL_QUANTITY])
                     cursor.execute("""
                         INSERT OR REPLACE INTO inventory
                         (item_id, item_name, quantity, cost_price, sell_price, measure, category, price_locked, allow_negative, reorder_level, division)
@@ -277,12 +278,9 @@ def _migrate_from_csv(conn):
                 for _, row in df.iterrows():
                     item_id = str(row[COL_ITEM_ID])
                     action = str(row[COL_ACTION])
-                    raw_qty = float(row[COL_QUANTITY])
-                    # Convert deliveries from input units to system units; sales/wastage/etc are already in system units
-                    if action.lower() == 'delivery':
-                        system_qty = convert_to_system(item_id, raw_qty)
-                    else:
-                        system_qty = raw_qty
+                    # The bundled transaction_log.csv stores quantities in system
+                    # units (pints, measures, etc.), so no conversion is needed.
+                    system_qty = float(row[COL_QUANTITY])
                     cursor.execute("""
                         INSERT INTO transactions
                         (item_id, action, quantity, timestamp, cost_price, sell_price, supplier, date_range, reason, member_qty, non_member_qty)
@@ -366,10 +364,270 @@ def initialize_db():
         conn = _get_connection()
         _init_db_schema(conn)
         _migrate_from_csv(conn)
+        _sync_inventory_from_csv(conn)
         conn.close()
     except Exception as e:
         messagebox.showerror("Initialization Error", f"Failed to initialize database: {e}")
         raise
+
+
+def get_csv_sync_changes():
+    """Return cost changes that would be applied by a CSV sync without applying them."""
+    try:
+        conn = _get_connection()
+        _init_db_schema(conn)
+        changes = _sync_inventory_from_csv(conn)
+        conn.rollback()
+        conn.close()
+        return changes
+    except Exception as e:
+        print(f"Warning: Could not preview CSV sync changes: {e}")
+        return []
+
+
+def _sync_inventory_from_csv(conn):
+    """Update the SQLite inventory table from the bundled stock.csv.
+
+    After the one-time CSV migration, the live database can drift from the
+    bundled CSV (e.g. updated invoice prices or new items). This function
+    reconciles CSV into the database on every startup when running as a bundled
+    app (PyInstaller). Unit tests run unfrozen and use a temporary DB, so they
+    are skipped to avoid polluting the test database with the real stock.csv.
+
+      - Existing items are updated for metadata/prices (name, cost/sell,
+        measure, category, division, price_locked, allow_negative,
+        reorder_level). The live quantity is intentionally left untouched
+        because it is transaction-driven; overwriting it from a bundled CSV
+        would silently undo sales, deliveries and wastage.
+      - Items present in CSV but missing from DB are inserted, using the CSV
+        quantity as their starting stock.
+      - Items present in DB but missing from CSV are left untouched (they may
+        be historical/retired items needed for old transactions).
+
+    Returns a list of (item_id, old_cost, new_cost) tuples for items whose
+    cost_price changed, so the UI can show a startup summary.
+    """
+    # Only sync in the bundled app, not during unfrozen development/tests.
+    if not getattr(sys, 'frozen', False):
+        return []
+
+    csv_path = INVENTORY_FILE
+    if not os.path.exists(csv_path):
+        # In a bundled app the CSV is copied alongside the executable; fall back
+        # to the script/app directory if the app-support copy does not exist.
+        script_dir = get_script_directory()
+        csv_path = os.path.join(script_dir, 'stock.csv')
+        if not os.path.exists(csv_path):
+            return []
+
+    try:
+        df = pd.read_csv(csv_path)
+        if df.empty:
+            return []
+
+        # Backwards compatibility columns
+        if COL_PRICE_LOCKED not in df.columns:
+            df[COL_PRICE_LOCKED] = False
+        if COL_ALLOW_NEGATIVE not in df.columns:
+            df[COL_ALLOW_NEGATIVE] = True
+        if COL_REORDER_LEVEL not in df.columns:
+            df[COL_REORDER_LEVEL] = 0
+        if COL_DIVISION not in df.columns:
+            df[COL_DIVISION] = ''
+
+        df = _validate_inventory(df)
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_id FROM inventory")
+        db_item_ids = {row[0] for row in cursor.fetchall()}
+
+        synced = 0
+        cost_changes = []
+        for _, row in df.iterrows():
+            item_id = str(row[COL_ITEM_ID])
+            # The bundled stock.csv now stores quantities in system units (pints,
+            # measures, etc.) rather than input units (barrels/bottles), so no
+            # conversion is needed when syncing into the live database.
+            # Quantity is only used when inserting a brand-new item; existing
+            # items keep their transaction-driven quantity to avoid the bundled
+            # CSV silently undoing sales, deliveries and wastage.
+            new_item_quantity = float(row[COL_QUANTITY])
+            values = {
+                'item_name': str(row[COL_ITEM_NAME]),
+                'cost_price': float(row[COL_COST_PRICE]),
+                'sell_price': float(row[COL_SELL_PRICE]),
+                'measure': str(row.get(COL_MEASURE, '')),
+                'category': str(row.get(COL_CATEGORY, '')),
+                'price_locked': int(bool(row[COL_PRICE_LOCKED])),
+                'allow_negative': int(bool(row.get(COL_ALLOW_NEGATIVE, True))),
+                'reorder_level': float(row.get(COL_REORDER_LEVEL, 0)),
+                'division': str(row.get(COL_DIVISION, '')),
+            }
+
+            if item_id in db_item_ids:
+                # Update only metadata/prices; leave transaction-driven quantity alone.
+                cursor.execute(
+                    f"SELECT {', '.join(values.keys())} FROM inventory WHERE item_id = ?",
+                    (item_id,)
+                )
+                db_row = cursor.fetchone()
+                if db_row:
+                    old_cost = float(db_row['cost_price'])
+                    needs_update = any(
+                        float(db_row[k]) != float(v) if isinstance(v, (int, float)) else str(db_row[k]) != str(v)
+                        for k, v in values.items()
+                    )
+                    if needs_update:
+                        set_clause = ', '.join(f"{k} = ?" for k in values.keys())
+                        cursor.execute(
+                            f"UPDATE inventory SET {set_clause} WHERE item_id = ?",
+                            (*values.values(), item_id)
+                        )
+                        synced += 1
+                        if abs(old_cost - values['cost_price']) > 0.0001:
+                            cost_changes.append((item_id, old_cost, values['cost_price']))
+            else:
+                values_with_qty = {**values, 'quantity': new_item_quantity}
+                columns = ['item_id'] + list(values_with_qty.keys())
+                placeholders = ', '.join('?' for _ in columns)
+                cursor.execute(
+                    f"INSERT INTO inventory ({', '.join(columns)}) VALUES ({placeholders})",
+                    (item_id, *values_with_qty.values())
+                )
+                synced += 1
+                cost_changes.append((item_id, 0.0, values['cost_price']))
+
+        if synced:
+            conn.commit()
+            print(f"Synced {synced} inventory item(s) from stock.csv")
+        return cost_changes
+    except Exception as e:
+        print(f"Warning: Could not sync inventory from CSV: {e}")
+        return []
+
+
+
+def _normalise_name(name):
+    """Normalise an item name to match item_id conventions."""
+    return normalize_product_name(name)
+
+
+def _write_stock_csv(csv_path, df):
+    """Write the inventory DataFrame to stock.csv format."""
+    def _cell(value):
+        """Return a CSV-safe value, preserving booleans and empty strings."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return ''
+        if isinstance(value, bool):
+            return 'True' if value else 'False'
+        return value
+
+    rows = []
+    for _, row in df.iterrows():
+        rows.append([
+            _cell(row[COL_ITEM_ID]),
+            _cell(row[COL_ITEM_NAME]),
+            _cell(float(row[COL_QUANTITY])),
+            _cell(float(row[COL_COST_PRICE])),
+            _cell(float(row[COL_SELL_PRICE])),
+            _cell(row.get(COL_MEASURE, '')),
+            _cell(row.get(COL_CATEGORY, '')),
+            _cell(bool(row.get(COL_PRICE_LOCKED, False))),
+            _cell(bool(row.get(COL_ALLOW_NEGATIVE, False))),
+            _cell(float(row.get(COL_REORDER_LEVEL, 0))),
+            _cell(row.get(COL_DIVISION, ''))
+        ])
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(INVENTORY_COLUMNS)
+        writer.writerows(rows)
+
+
+def _update_items_csv(items_csv_path, df):
+    """Update Items.csv Total Stock/Total Value from the live inventory."""
+    if not os.path.exists(items_csv_path):
+        return
+    header, rows = [], []
+    with open(items_csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        lines = list(reader)
+        if not lines:
+            return
+        header = lines[0]
+        rows = lines[1:]
+
+    if 'Name' not in header or 'Total Stock' not in header or 'Total Value' not in header:
+        return
+
+    name_col = header.index('Name')
+    stock_col = header.index('Total Stock')
+    value_col = header.index('Total Value')
+
+    # Map item_id -> quantity, cost, plus a name-based fallback for names
+    # that don't follow the default normalisation (e.g. "Innis & Gunn").
+    inv_map = {}
+    name_map = {}
+    for _, row in df.iterrows():
+        item_id = str(row[COL_ITEM_ID]).lower()
+        qty = float(row[COL_QUANTITY])
+        cost = float(row[COL_COST_PRICE])
+        inv_map[item_id] = (qty, cost)
+        item_name = str(row[COL_ITEM_NAME]).strip().lower()
+        if item_name:
+            name_map[item_name] = (qty, cost)
+
+    for row in rows:
+        if not row:
+            continue
+        name = row[name_col] if len(row) > name_col else ''
+        item_id = _normalise_name(name)
+        name_key = name.strip().lower()
+        if item_id in inv_map:
+            qty, cost = inv_map[item_id]
+        elif name_key in name_map:
+            qty, cost = name_map[name_key]
+        else:
+            continue
+        value = qty * cost
+        while len(row) <= value_col:
+            row.append('')
+        row[stock_col] = f"{qty:.2f}"
+        row[value_col] = f"{value:.2f}"
+
+    with open(items_csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(header)
+        writer.writerows(row for row in rows if row)
+
+
+def _sync_inventory_to_csv(df):
+    """Mirror the live inventory back to bundled CSV files.
+
+    This keeps stock.csv and Items.csv in sync with the SQLite database so the
+    bundled app does not overwrite live changes on its next launch.
+    """
+    if df.empty:
+        return
+
+    script_dir = get_script_directory()
+    # App-support copy is read first by the startup sync.
+    targets = [INVENTORY_FILE]
+    # Also update the bundled/project copy so dev builds and manual inspection stay current.
+    bundled_path = os.path.join(script_dir, 'stock.csv')
+    if bundled_path != INVENTORY_FILE:
+        targets.append(bundled_path)
+
+    for csv_path in targets:
+        try:
+            _write_stock_csv(csv_path, df)
+        except Exception as e:
+            print(f"Warning: could not write stock.csv to {csv_path}: {e}")
+
+    items_csv_path = os.path.join(script_dir, 'Items.csv')
+    try:
+        _update_items_csv(items_csv_path, df)
+    except Exception as e:
+        print(f"Warning: could not update Items.csv: {e}")
 
 
 def _deduct_stock_in_txn(txn, item_id: str, quantity: float) -> None:
@@ -422,6 +680,200 @@ def _restore_stock_in_txn(txn, item_id: str, quantity: float) -> None:
         txn.update_inventory_quantity(parent_items, parent_current + float(quantity) * float(factors))
 
 
+INVENTORY_METADATA_COLUMNS = [
+    COL_ITEM_NAME, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY,
+    COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_DIVISION,
+]
+
+
+def _num(value, default=0.0):
+    """Coerce a DataFrame cell to float, treating NaN/None as default."""
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _flag(value):
+    """Coerce a DataFrame cell to 0/1, treating NaN/None as False."""
+    try:
+        if value is None or pd.isna(value):
+            return 0
+        return 1 if bool(value) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _text(value):
+    """Coerce a DataFrame cell to a plain string, treating NaN/None as ''."""
+    try:
+        if value is None or pd.isna(value):
+            return ''
+        return str(value)
+    except (TypeError, ValueError):
+        return ''
+
+
+def _inventory_changes(df, baseline_df):
+    """Compare the in-memory inventory with the snapshot it was loaded from.
+
+    Returns (updates, inserts, deletes).  updates is a list of
+    (item_id, quantity_delta, {column: value}).
+
+    Writing deltas rather than absolute values is what makes a stale window
+    harmless: an untouched row has delta 0 and leaves whatever is in the
+    database alone, so a delivery or stocktake written by another process can
+    no longer be overwritten by an old in-memory frame.
+    """
+    current = {str(r[COL_ITEM_ID]): r for _, r in (df.iterrows() if df is not None else [])}
+    baseline = (
+        {str(r[COL_ITEM_ID]): r for _, r in baseline_df.iterrows()}
+        if baseline_df is not None and not baseline_df.empty
+        else {}
+    )
+
+    updates = []
+    inserts = []
+    for item_id, row in current.items():
+        if item_id not in baseline:
+            inserts.append(row)
+            continue
+        old = baseline[item_id]
+        delta = round(_num(row.get(COL_QUANTITY)) - _num(old.get(COL_QUANTITY)), 6)
+        fields = {}
+        for col in INVENTORY_METADATA_COLUMNS:
+            new_val = row.get(col)
+            old_val = old.get(col)
+            if col in (COL_COST_PRICE, COL_SELL_PRICE, COL_REORDER_LEVEL):
+                if abs(_num(new_val) - _num(old_val)) > 1e-9:
+                    fields[col] = _num(new_val)
+            elif col in (COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE):
+                if _flag(new_val) != _flag(old_val):
+                    fields[col] = _flag(new_val)
+            elif _text(new_val) != _text(old_val):
+                fields[col] = _text(new_val)
+        if abs(delta) > 1e-9 or fields:
+            updates.append((item_id, delta, fields))
+
+    deletes = [item_id for item_id in baseline if item_id not in current]
+    return updates, inserts, deletes
+
+
+def _insert_inventory_row(cursor, row):
+    cursor.execute("""
+        INSERT INTO inventory
+        (item_id, item_name, quantity, cost_price, sell_price, measure, category,
+         price_locked, allow_negative, reorder_level, division)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(item_id) DO UPDATE SET
+            item_name = excluded.item_name,
+            cost_price = excluded.cost_price,
+            sell_price = excluded.sell_price,
+            measure = excluded.measure,
+            category = excluded.category,
+            price_locked = excluded.price_locked,
+            allow_negative = excluded.allow_negative,
+            reorder_level = excluded.reorder_level,
+            division = excluded.division
+    """, (
+        str(row[COL_ITEM_ID]),
+        _text(row.get(COL_ITEM_NAME)),
+        _num(row.get(COL_QUANTITY)),
+        _num(row.get(COL_COST_PRICE)),
+        _num(row.get(COL_SELL_PRICE)),
+        _text(row.get(COL_MEASURE)),
+        _text(row.get(COL_CATEGORY)),
+        _flag(row.get(COL_PRICE_LOCKED)),
+        _flag(row.get(COL_ALLOW_NEGATIVE)),
+        _num(row.get(COL_REORDER_LEVEL)),
+        _text(row.get(COL_DIVISION)),
+    ))
+
+
+def _replace_inventory(cursor, df):
+    cursor.execute("DELETE FROM inventory")
+    for _, row in df.iterrows():
+        _insert_inventory_row(cursor, row)
+
+
+def _apply_inventory_changes(cursor, df, baseline_df):
+    updates, inserts, deletes = _inventory_changes(df, baseline_df)
+
+    # A truncated/filtered frame must never be able to empty the inventory.
+    if baseline_df is not None and not baseline_df.empty:
+        max_deletes = max(5, int(len(baseline_df) * 0.10))
+        if len(deletes) > max_deletes:
+            raise ValueError(
+                f"Refusing to remove {len(deletes)} of {len(baseline_df)} inventory "
+                "items in one save; the inventory frame looks incomplete."
+            )
+
+    for item_id, delta, fields in updates:
+        assignments = ["quantity = ROUND(COALESCE(quantity, 0) + ?, 6)"]
+        params = [delta]
+        for col, value in fields.items():
+            assignments.append(f"{col} = ?")
+            params.append(value)
+        params.append(item_id)
+        cursor.execute(
+            f"UPDATE inventory SET {', '.join(assignments)} WHERE item_id = ?",
+            params,
+        )
+
+    for row in inserts:
+        _insert_inventory_row(cursor, row)
+
+    for item_id in deletes:
+        cursor.execute("DELETE FROM inventory WHERE item_id = ?", (item_id,))
+
+
+def _replace_log(cursor, df, allow_shrink=False):
+    current_count = cursor.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    new_count = 0 if df is None else len(df)
+    if current_count and not allow_shrink:
+        allowed_loss = max(5, int(current_count * 0.10))
+        if new_count < current_count - allowed_loss:
+            raise ValueError(
+                f"Refusing to replace {current_count} transactions with {new_count}; "
+                "the transaction frame looks like it was loaded before recent activity."
+            )
+
+    cursor.execute("DELETE FROM transactions")
+    if df is None:
+        return
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT INTO transactions
+            (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
+             date_range, reason, member_qty, non_member_qty, open_tab_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(row[COL_ITEM_ID]),
+            str(row[COL_ACTION]),
+            _num(row.get(COL_QUANTITY)),
+            _text(row.get(COL_TIMESTAMP)),
+            _num(row.get(COL_COST_PRICE)),
+            _num(row.get(COL_SELL_PRICE)),
+            _text(row.get(COL_SUPPLIER)),
+            _text(row.get(COL_DATE_RANGE)),
+            _text(row.get(COL_REASON)),
+            _num(row.get(COL_MEMBER_QTY)),
+            _num(row.get(COL_NON_MEMBER_QTY)),
+            int(row.get(COL_OPEN_TAB_ID)) if pd.notna(row.get(COL_OPEN_TAB_ID)) and row.get(COL_OPEN_TAB_ID) is not None else None
+        ))
+
+
+def _sync_csv_quietly(df):
+    try:
+        _sync_inventory_to_csv(df)
+    except Exception as e:
+        # The database is the source of truth; a CSV mirror failure must not
+        # roll back a successful write.
+        print(f"CSV sync failed: {e}")
+
+
 class InventoryDataManager:
     """Handles all data persistence operations using SQLite."""
 
@@ -448,19 +900,17 @@ class InventoryDataManager:
 
     @staticmethod
     def load_log(inventory_df=None):
-        """Load transaction log from SQLite into a DataFrame."""
+        """Load the full active transaction log from SQLite into a DataFrame.
+
+        The inventory_df argument is accepted for backwards compatibility but
+        deliberately ignored.  Filtering the log to currently stocked items
+        meant that deleting an item and then saving the log silently erased
+        that item's entire history.
+        """
         try:
             conn = _get_connection()
             cursor = conn.cursor()
-
-            if inventory_df is not None and not inventory_df.empty:
-                valid_items = tuple(inventory_df[COL_ITEM_ID].values)
-                if len(valid_items) == 1:
-                    cursor.execute("SELECT * FROM transactions WHERE item_id = ? ORDER BY timestamp", (valid_items[0],))
-                else:
-                    cursor.execute(f"SELECT * FROM transactions WHERE item_id IN ({','.join('?' * len(valid_items))}) ORDER BY timestamp", valid_items)
-            else:
-                cursor.execute("SELECT * FROM transactions ORDER BY timestamp")
+            cursor.execute("SELECT * FROM transactions ORDER BY timestamp")
 
             rows = cursor.fetchall()
             conn.close()
@@ -518,6 +968,17 @@ class InventoryDataManager:
             conn.close()
             df = _rows_to_dataframe(rows, LOG_COLUMNS)
 
+            # The same transaction can exist in both the active table and the
+            # archive (e.g. if a baseline reset archived rows that were also
+            # kept/re-imported). Drop exact duplicates so reports don't double
+            # count sales, wastage, deliveries, etc.
+            if not df.empty:
+                dedup_cols = [COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP,
+                              COL_COST_PRICE, COL_SELL_PRICE]
+                # Preserve rows that have extra context (reason, supplier, etc.)
+                # by keeping the last occurrence.
+                df = df.drop_duplicates(subset=dedup_cols, keep='last')
+
             # Add missing columns for backward compatibility
             if COL_DATE_RANGE not in df.columns:
                 df[COL_DATE_RANGE] = ""
@@ -530,35 +991,28 @@ class InventoryDataManager:
             return pd.DataFrame(columns=LOG_COLUMNS)
 
     @staticmethod
-    def save_inventory(df):
-        """Save inventory DataFrame to SQLite (replaces all rows atomically)."""
+    def save_inventory(df, baseline_df=None):
+        """Save inventory to SQLite.
+
+        When baseline_df is supplied (the frame the UI actually loaded), only
+        the difference between it and df is written.  This makes a stale
+        window safe: unchanged rows contribute a delta of zero and never
+        overwrite newer database values.
+        """
         conn = None
         try:
+            if df is None or df.empty:
+                raise ValueError("Refusing to save an empty inventory frame.")
             conn = _get_connection()
             cursor = conn.cursor()
             conn.execute("BEGIN IMMEDIATE")
-            cursor.execute("DELETE FROM inventory")
-
-            for _, row in df.iterrows():
-                cursor.execute("""
-                    INSERT INTO inventory
-                    (item_id, item_name, quantity, cost_price, sell_price, measure, category, price_locked, allow_negative, reorder_level, division)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    str(row[COL_ITEM_ID]),
-                    str(row[COL_ITEM_NAME]),
-                    float(row[COL_QUANTITY]),
-                    float(row[COL_COST_PRICE]),
-                    float(row[COL_SELL_PRICE]),
-                    str(row.get(COL_MEASURE, '')),
-                    str(row.get(COL_CATEGORY, '')),
-                    int(bool(row.get(COL_PRICE_LOCKED, False))),
-                    int(bool(row.get(COL_ALLOW_NEGATIVE, False))),
-                    float(row.get(COL_REORDER_LEVEL, 0)),
-                    str(row.get(COL_DIVISION, ''))
-                ))
-
+            if baseline_df is not None and not baseline_df.empty:
+                _apply_inventory_changes(cursor, df, baseline_df)
+            else:
+                _replace_inventory(cursor, df)
             conn.commit()
+            # Keep bundled CSVs in sync so the next app launch doesn't overwrite live data.
+            _sync_csv_quietly(df)
             return True
         except Exception as e:
             if conn:
@@ -576,35 +1030,19 @@ class InventoryDataManager:
                     pass
 
     @staticmethod
-    def save_log(df):
-        """Save transaction log DataFrame to SQLite (replaces all rows atomically)."""
+    def save_log(df, allow_shrink=False):
+        """Save transaction log to SQLite.
+
+        The log is still replaced wholesale, but only when the frame looks
+        complete.  A frame loaded before recent activity (or filtered down)
+        is rejected instead of silently deleting the missing rows.
+        """
         conn = None
         try:
             conn = _get_connection()
             cursor = conn.cursor()
             conn.execute("BEGIN IMMEDIATE")
-            cursor.execute("DELETE FROM transactions")
-
-            for _, row in df.iterrows():
-                cursor.execute("""
-                    INSERT INTO transactions
-                    (item_id, action, quantity, timestamp, cost_price, sell_price, supplier, date_range, reason, member_qty, non_member_qty, open_tab_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    str(row[COL_ITEM_ID]),
-                    str(row[COL_ACTION]),
-                    float(row[COL_QUANTITY]),
-                    str(row[COL_TIMESTAMP]),
-                    float(row.get(COL_COST_PRICE, 0)),
-                    float(row.get(COL_SELL_PRICE, 0)),
-                    str(row.get(COL_SUPPLIER, '')),
-                    str(row.get(COL_DATE_RANGE, '')),
-                    str(row.get(COL_REASON, '')),
-                    float(row.get(COL_MEMBER_QTY, 0) or 0),
-                    float(row.get(COL_NON_MEMBER_QTY, 0) or 0),
-                    int(row.get(COL_OPEN_TAB_ID)) if pd.notna(row.get(COL_OPEN_TAB_ID)) and row.get(COL_OPEN_TAB_ID) is not None else None
-                ))
-
+            _replace_log(cursor, df, allow_shrink=allow_shrink)
             conn.commit()
             return True
         except Exception as e:
@@ -614,6 +1052,44 @@ class InventoryDataManager:
                 except Exception:
                     pass
             messagebox.showerror("Error", f"Failed to save transaction log: {e}")
+            return False
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def save_all(inventory_df, log_df, baseline_df=None, allow_log_shrink=False):
+        """Write inventory and transaction log in a single transaction.
+
+        This replaces the old pattern of saving inventory and then the log in
+        two separate commits, which could leave stock changed without its log
+        rows (or vice versa) if the second write failed.
+        """
+        conn = None
+        try:
+            if inventory_df is None or inventory_df.empty:
+                raise ValueError("Refusing to save an empty inventory frame.")
+            conn = _get_connection()
+            cursor = conn.cursor()
+            conn.execute("BEGIN IMMEDIATE")
+            if baseline_df is not None and not baseline_df.empty:
+                _apply_inventory_changes(cursor, inventory_df, baseline_df)
+            else:
+                _replace_inventory(cursor, inventory_df)
+            _replace_log(cursor, log_df, allow_shrink=allow_log_shrink)
+            conn.commit()
+            _sync_csv_quietly(inventory_df)
+            return True
+        except Exception as e:
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            messagebox.showerror("Error", f"Failed to save data: {e}")
             return False
         finally:
             if conn:
@@ -842,7 +1318,9 @@ class AtomicTransaction:
     def __enter__(self):
         self.conn = _get_connection()
         self.cursor = self.conn.cursor()
-        self.conn.execute("BEGIN TRANSACTION")
+        # IMMEDIATE takes the write lock up front, so a deferred transaction
+        # cannot fail later while trying to upgrade a read lock.
+        self.conn.execute("BEGIN IMMEDIATE")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -858,7 +1336,10 @@ class AtomicTransaction:
             self.conn.rollback()
             self.conn.close()
             messagebox.showerror("Transaction Error", f"Failed to commit transaction: {e}")
-            return False
+            # Returning False here would be ignored by the with-statement and
+            # the caller would still report success.  Raise so the failure is
+            # visible to the caller's except block.
+            raise RuntimeError(f"Failed to commit transaction: {e}") from e
 
     def update_inventory_quantity(self, item_id, new_quantity):
         """Update an item's quantity."""
@@ -948,33 +1429,57 @@ def set_setting(key, value):
 
 # Stocktake snapshot helpers
 
-def record_stocktake(item_id, counted_quantity, expected_quantity, variance, timestamp, note=''):
-    """Record a stocktake snapshot entry, update inventory, and log adjustment transaction."""
+def record_stocktakes(entries, timestamp, note=''):
+    """Record several stocktake entries in one database transaction.
+
+    entries: list of dicts with item_id, counted_quantity, expected_quantity,
+             variance.
+
+    Recording each item in its own transaction (the old behaviour) meant a
+    failure halfway through left a partially applied stocktake.  This writes
+    all snapshots, quantities and adjustment rows together or not at all.
+    """
+    entries = list(entries or [])
+    if not entries:
+        return {'success': True, 'recorded': 0}
     try:
         with AtomicTransaction() as txn:
-            # Record snapshot
-            txn.cursor.execute("""
-                INSERT INTO stocktake_snapshots (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (str(item_id), float(counted_quantity), float(expected_quantity), float(variance), str(timestamp), str(note)))
+            for entry in entries:
+                item_id = str(entry['item_id'])
+                counted = float(entry['counted_quantity'])
+                expected = float(entry['expected_quantity'])
+                variance = float(entry['variance'])
 
-            # Update inventory to counted quantity
-            txn.update_inventory_quantity(item_id, float(counted_quantity))
+                txn.cursor.execute("""
+                    INSERT INTO stocktake_snapshots (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (item_id, counted, expected, variance, str(timestamp), str(note)))
 
-            # Log adjustment transaction for audit trail
-            if variance != 0:
-                txn.log_transaction(
-                    item_id=item_id,
-                    action='Stocktake Adjustment',
-                    quantity=float(variance),
-                    timestamp=timestamp,
-                    reason=note
-                )
+                txn.update_inventory_quantity(item_id, counted)
 
-        return True
+                if variance != 0:
+                    txn.log_transaction(
+                        item_id=item_id,
+                        action='Stocktake Adjustment',
+                        quantity=variance,
+                        timestamp=timestamp,
+                        reason=note
+                    )
+        return {'success': True, 'recorded': len(entries)}
     except Exception as e:
         messagebox.showerror("Error", f"Failed to record stocktake: {e}")
-        return False
+        return {'success': False, 'recorded': 0, 'error': str(e)}
+
+
+def record_stocktake(item_id, counted_quantity, expected_quantity, variance, timestamp, note=''):
+    """Record a single stocktake entry. Kept for backwards compatibility."""
+    result = record_stocktakes([{
+        'item_id': item_id,
+        'counted_quantity': counted_quantity,
+        'expected_quantity': expected_quantity,
+        'variance': variance,
+    }], timestamp, note)
+    return result['success']
 
 
 def get_stocktake_history(item_id=None, limit=50):
@@ -1252,13 +1757,16 @@ def add_baseline_reset(timestamp, items_count, archived_count, note='', snapshot
 def reset_baseline(counted_items, timestamp, note=''):
     """Reset inventory baseline from a stocktake.
 
-    This performs the full baseline reset in one SQLite transaction:
-      1. Archives all transactions before the baseline timestamp.
+    This performs the baseline reset in one SQLite transaction:
+      1. Archives transactions before the baseline timestamp for the items
+         being reset.  Items that were not counted keep their history and
+         their current stock.
       2. Removes any stale Stocktake Adjustment / Baseline rows at the baseline timestamp.
-      3. Inserts stocktake snapshots.
-      4. Sets inventory quantities to the counted amounts.
-      5. Logs new Stocktake Baseline transactions.
-      6. Records the reset in the baseline_resets audit table.
+      3. Records the physical-count variance snapshot (so it contributes to running surplus).
+      4. Records the new baseline snapshot with zero variance.
+      5. Sets inventory quantities to the counted amounts.
+      6. Logs new Stocktake Baseline transactions.
+      7. Records the reset in the baseline_resets audit table.
 
     counted_items: list of dicts with keys: item_id, counted_system, input_value, input_unit
     timestamp: baseline timestamp string (YYYY-MM-DD HH:MM:SS)
@@ -1266,24 +1774,35 @@ def reset_baseline(counted_items, timestamp, note=''):
 
     Returns a dict with success, archived_count, baseline_logged, saved_count, error.
     """
-    import json
+    if not counted_items:
+        return {'success': False, 'error': 'No items were counted'}
+
     conn = None
     try:
         conn = _get_connection()
         cursor = conn.cursor()
 
-        # 1. Archive old transactions before the baseline timestamp.
+        # 1. Archive old transactions before the baseline timestamp, but only
+        #    for the items actually being reset.  The previous version archived
+        #    every item while resetting only the counted ones, so counting a
+        #    filtered search wiped the history of every other item.
+        counted_ids = [str(item['item_id']) for item in counted_items]
+        placeholders = ','.join('?' * len(counted_ids))
         archived_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
+        cursor.execute(f"""
             INSERT INTO transaction_archive
             (item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
              date_range, reason, user, member_qty, non_member_qty, open_tab_id, archived_at)
             SELECT item_id, action, quantity, timestamp, cost_price, sell_price, supplier,
                    date_range, reason, user, member_qty, non_member_qty, open_tab_id, ?
-            FROM transactions WHERE timestamp < ?
-        """, (archived_at, str(timestamp)))
+            FROM transactions
+            WHERE timestamp < ? AND item_id IN ({placeholders})
+        """, (archived_at, str(timestamp), *counted_ids))
         archived_count = cursor.rowcount
-        cursor.execute("DELETE FROM transactions WHERE timestamp < ?", (str(timestamp),))
+        cursor.execute(
+            f"DELETE FROM transactions WHERE timestamp < ? AND item_id IN ({placeholders})",
+            (str(timestamp), *counted_ids)
+        )
 
         # 2. Clean up any stale baseline rows already stamped with this timestamp.
         cursor.execute("""
@@ -1300,6 +1819,23 @@ def reset_baseline(counted_items, timestamp, note=''):
             input_value = float(item['input_value'])
             input_unit = str(item['input_unit'])
 
+            # Capture the variance BEFORE we overwrite inventory, so the running
+            # surplus can still see the physical-count shortfall/surplus from this
+            # stocktake. Use the current inventory quantity as the expected value.
+            cursor.execute("SELECT quantity FROM inventory WHERE item_id = ?", (item_id,))
+            row = cursor.fetchone()
+            expected_before = float(row[0]) if row else counted
+            variance = counted - expected_before
+
+            # Variance snapshot for running surplus (non-baseline note)
+            if variance != 0:
+                variance_note = f"{note}: variance before baseline reset" if note else "Variance before baseline reset"
+                cursor.execute("""
+                    INSERT INTO stocktake_snapshots (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (item_id, counted, expected_before, variance, str(timestamp), variance_note))
+
+            # Baseline snapshot with zero variance
             cursor.execute("""
                 INSERT INTO stocktake_snapshots (item_id, counted_quantity, expected_quantity, variance, timestamp, note)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -1347,10 +1883,12 @@ def reset_baseline(counted_items, timestamp, note=''):
 def roll_forward_and_clean():
     """Clean up old snapshot/audit clutter after a baseline reset.
 
-    This is the safe 'Option B' cleanup: it removes duplicate historical
-    stocktake snapshots and old baseline_resets audit rows, but leaves
-    the current inventory, current-period transactions, and the full
-    transaction_archive untouched. A backup is created first.
+    This is the safe cleanup: it removes duplicate and stale baseline
+    snapshots, but PRESERVES genuine variance snapshots from historical
+    stocktakes so the all-time running surplus/shortfall stays intact.
+    Old baseline_resets audit rows are removed, but the latest remains.
+    The current inventory, current-period transactions, and the full
+    transaction_archive are left untouched. A backup is created first.
 
     Returns a dict with success flag and counts of removed rows.
     """
@@ -1377,14 +1915,37 @@ def roll_forward_and_clean():
             return {'success': True, 'snapshots_removed': 0, 'resets_removed': 0}
         latest_ts = row["timestamp"]
 
-        # Remove stocktake snapshots from any earlier baseline/stocktake
+        # 1. Delete baseline snapshots from any timestamp OTHER than the latest.
+        #    Keep all variance snapshots (notes that do not contain 'Baseline').
         cursor.execute("""
             DELETE FROM stocktake_snapshots
-            WHERE timestamp != ?
+            WHERE timestamp != ? AND (
+                note LIKE '%Baseline%' OR note IS NULL OR note = ''
+            )
         """, (latest_ts,))
-        snapshots_removed = cursor.rowcount
+        stale_baseline_removed = cursor.rowcount
 
-        # Keep only the latest baseline_resets audit row
+        # 2. At the latest timestamp, keep only the newest baseline snapshot per item
+        #    and remove exact duplicates. Variance snapshots are left alone.
+        cursor.execute("""
+            DELETE FROM stocktake_snapshots
+            WHERE id IN (
+                SELECT id FROM stocktake_snapshots s1
+                WHERE s1.timestamp = ?
+                  AND s1.note LIKE '%Baseline%'
+                  AND s1.id NOT IN (
+                      SELECT MAX(id) FROM stocktake_snapshots s2
+                      WHERE s2.timestamp = s1.timestamp
+                        AND s2.item_id = s1.item_id
+                        AND s2.note LIKE '%Baseline%'
+                  )
+            )
+        """, (latest_ts,))
+        duplicate_baseline_removed = cursor.rowcount
+
+        snapshots_removed = stale_baseline_removed + duplicate_baseline_removed
+
+        # 3. Keep only the latest baseline_resets audit row
         cursor.execute("""
             DELETE FROM baseline_resets
             WHERE timestamp != ?

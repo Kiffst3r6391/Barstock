@@ -20,6 +20,7 @@ sys.path.insert(0, PROJECT_ROOT)
 import pandas as pd
 from sales_mapping import (
     normalize_product_name,
+    resolve_epos_item_id,
     apply_sale_to_parent,
     check_apply_sale_to_parent,
     has_parent_stock,
@@ -39,10 +40,25 @@ class TestProductNameNormalization(unittest.TestCase):
     def test_basic_names(self):
         self.assertEqual(normalize_product_name("Tennents Lager"), "tennents_lager")
         self.assertEqual(normalize_product_name("Birra Morettiu"), "birra_moretti")
-        self.assertEqual(normalize_product_name("Orange & Lemonade"), "orange_lemonade")
+        # Spaced ampersands become "_and_" to match item_ids like innis_and_gunn.
+        self.assertEqual(normalize_product_name("Orange & Lemonade"), "orange_and_lemonade")
+        # Aliases map the natural normalisation back to the stock item_id.
+        self.assertEqual(resolve_epos_item_id("orange_and_lemonade"), "orange_lemonade")
         self.assertEqual(normalize_product_name("Carton Juice - Half"), "carton_juice_half")
         self.assertEqual(normalize_product_name("Inch's"), "inchs")
         self.assertEqual(normalize_product_name("Fevertree Tonic"), "fevertree_tonic")
+
+    def test_ampersand_and_slash_edge_cases(self):
+        # Standalone ampersands are preserved (e.g. Edinburgh R&G, R&B).
+        self.assertEqual(normalize_product_name("Edinburgh R&G"), "edinburgh_r&g")
+        # Slashes become underscores.
+        self.assertEqual(normalize_product_name("A/F Koppaberg"), "a_f_koppaberg")
+        # Spaced ampersand becomes _and_.
+        self.assertEqual(normalize_product_name("Innis & Gunn"), "innis_and_gunn")
+        self.assertEqual(resolve_epos_item_id("innis_gunn"), "innis_and_gunn")
+        # Complex mixed name.
+        self.assertEqual(normalize_product_name("Cart Roll & Tea/Coffee"), "cart_roll_and_tea_coffee")
+        self.assertEqual(resolve_epos_item_id("cart_roll_and_tea_coffee"), "cart_roll_tea_coffee")
 
 
 class TestParentStockDeduction(unittest.TestCase):
@@ -219,6 +235,55 @@ class TestSalesUploadSimulation(unittest.TestCase):
         if not (effective_sell_price > 0 and csv_revenue is not None):
             effective_sell_price = sell_price
         self.assertAlmostEqual(effective_sell_price, 4.0)
+
+
+class TestEposOverrideNotOverriddenByFuzzyMatch(unittest.TestCase):
+    """Regression: explicit EPOS name overrides must not be overridden by fuzzy name matching."""
+
+    def setUp(self):
+        self.inventory = pd.DataFrame([
+            {
+                COL_ITEM_ID: 'guinness',
+                COL_ITEM_NAME: 'Guinness',
+                COL_QUANTITY: 0.0,
+                COL_COST_PRICE: 1.94,
+                COL_SELL_PRICE: 5.65,
+                COL_ALLOW_NEGATIVE: False,
+            },
+            {
+                COL_ITEM_ID: 'guinness_can',
+                COL_ITEM_NAME: 'Guinness Can',
+                COL_QUANTITY: 62.0,
+                COL_COST_PRICE: 3.13,
+                COL_SELL_PRICE: 3.96,
+                COL_ALLOW_NEGATIVE: False,
+            },
+        ])
+
+    def _resolve_item_id(self, product_name):
+        """Mirror the resolution logic in BarStockApp sales upload."""
+        from sales_mapping import normalize_product_name, resolve_epos_item_id
+        normalized_id = normalize_product_name(product_name)
+        item_id = resolve_epos_item_id(normalized_id)
+        explicit_override = item_id != normalized_id
+
+        if item_id not in self.inventory[COL_ITEM_ID].values:
+            if explicit_override:
+                return None
+            for inv_id in self.inventory[COL_ITEM_ID].values:
+                inv_name = str(self.inventory.loc[self.inventory[COL_ITEM_ID] == inv_id, COL_ITEM_NAME].values[0]).lower()
+                if product_name.lower() in inv_name or inv_name in product_name.lower():
+                    return inv_id
+            return None
+        return item_id
+
+    def test_guinness_epos_name_maps_to_draught_not_can(self):
+        resolved = self._resolve_item_id('Guinness')
+        self.assertEqual(resolved, 'guinness')
+
+    def test_guinness_can_epos_name_maps_to_can(self):
+        resolved = self._resolve_item_id('Guinness Can')
+        self.assertEqual(resolved, 'guinness_can')
 
 
 class TestFourTupleParentMapping(unittest.TestCase):

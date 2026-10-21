@@ -14,9 +14,9 @@ from typing import Dict, List, Tuple, Any, Optional
 import pandas as pd
 
 from conversions import STOCK_CONVERSIONS
-from categories import CATEGORY_MAP, should_exclude
+from categories import CATEGORY_MAP, should_exclude, DELISTED_ITEMS
 from order_sheet_layout import get_order_sheet_layout
-from sales_mapping import SALES_TO_PARENT, is_hidden_from_stock_view
+from sales_mapping import SALES_TO_PARENT, is_hidden_from_stock_view, normalize_product_name
 
 COL_ITEM_ID = 'item_id'
 COL_ITEM_NAME = 'item_name'
@@ -61,7 +61,7 @@ def find_untracked_items_on_order_sheet(inventory_df: pd.DataFrame) -> List[Tupl
     none_items = _collect_order_sheet_none_items()
     result = []
     for supplier, category, display_name in none_items:
-        normalized = display_name.lower().replace(" ", "_").replace("'", "")
+        normalized = normalize_product_name(display_name)
         # Heuristic: if a name-normalized id exists in inventory and has stock,
         # it should probably be linked.
         if normalized in stocked_ids:
@@ -118,7 +118,11 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
         if item_lower not in category_ids and not has_sales_parent and not is_hidden_or_excluded:
             missing_category.append(info)
 
-        if item_lower not in order_sheet_ids:
+        # Order sheet: hidden/excluded/retired/delisted items don't need to appear
+        # on the printable order sheet, so don't flag them at startup.
+        if (item_lower not in order_sheet_ids
+                and not is_hidden_or_excluded
+                and item_lower not in DELISTED_ITEMS):
             missing_order_sheet.append(info)
 
     return {
@@ -187,10 +191,15 @@ def _load_items_csv_ids(script_dir: str) -> set:
         df = pd.read_csv(items_csv_path)
         if 'Name' not in df.columns:
             return set()
-        names = df['Name'].dropna().astype(str).str.lower()
-        return set(names.str.replace(' ', '_').str.replace("'", '').str.replace('.', '', regex=False).str.replace('/', '_', regex=False))
+        # Use the same canonical normalisation as sales uploads.
+        return set(df['Name'].dropna().astype(str).str.lower().apply(normalize_product_name))
     except Exception:
         return set()
+
+
+def _normalise_name(name: str) -> str:
+    """Normalise an item name to match the standard item_id convention."""
+    return normalize_product_name(name)
 
 
 def find_items_csv_inventory_mismatches(
@@ -201,20 +210,65 @@ def find_items_csv_inventory_mismatches(
 
     Returns dict with keys:
       - 'in_inventory_not_csv': item_ids in DB but not Items.csv
-      - 'in_csv_not_inventory': names in Items.csv but not DB
+      - 'in_csv_not_inventory': names in Items.csv but not live inventory
+
+    Excludes child/sales items and ignored/retired Items.csv entries so the
+    dashboard only flags genuine mismatches.
     """
     if inventory_df.empty:
         return {'in_inventory_not_csv': [], 'in_csv_not_inventory': []}
 
-    inventory_ids = {str(i).lower() for i in inventory_df[COL_ITEM_ID].values}
-    csv_ids = _load_items_csv_ids(script_dir)
+    from categories import EXCLUDED_ITEMS
+    from sales_mapping import get_hidden_items
 
-    in_inventory_not_csv = sorted([i for i in inventory_df[COL_ITEM_ID].values if str(i).lower() not in csv_ids])
-    in_csv_not_inventory = sorted(csv_ids - inventory_ids)
+    hidden_or_excluded = set(EXCLUDED_ITEMS) | set(get_hidden_items())
+
+    # Build lookup from item_id and item_name to inventory row.
+    inventory_ids = {str(i).lower() for i in inventory_df[COL_ITEM_ID].values
+                     if str(i).lower() not in hidden_or_excluded}
+    inventory_name_map = {}
+    for _, row in inventory_df.iterrows():
+        item_id = str(row[COL_ITEM_ID]).lower()
+        if item_id in hidden_or_excluded:
+            continue
+        name_key = str(row[COL_ITEM_NAME]).strip().lower()
+        inventory_name_map[_normalise_name(name_key)] = item_id
+        inventory_name_map[name_key] = item_id
+
+    items_csv_path = os.path.join(script_dir, 'Items.csv')
+    in_csv_not_inventory = []
+    csv_matched_ids = set()
+    if os.path.exists(items_csv_path):
+        try:
+            df = pd.read_csv(items_csv_path)
+            if 'Name' in df.columns:
+                for name in df['Name'].dropna().astype(str):
+                    name_key = name.strip().lower()
+                    norm_id = _normalise_name(name_key)
+                    if norm_id in hidden_or_excluded:
+                        continue
+                    matched_inventory_id = None
+                    if norm_id in inventory_ids:
+                        matched_inventory_id = norm_id
+                    elif name_key in inventory_name_map:
+                        matched_inventory_id = inventory_name_map[name_key]
+                    elif norm_id in inventory_name_map:
+                        matched_inventory_id = inventory_name_map[norm_id]
+
+                    if matched_inventory_id:
+                        csv_matched_ids.add(matched_inventory_id)
+                    else:
+                        in_csv_not_inventory.append(norm_id)
+        except Exception:
+            pass
+
+    in_inventory_not_csv = sorted([i for i in inventory_df[COL_ITEM_ID].values
+                                   if str(i).lower() in inventory_ids
+                                   and str(i).lower() not in csv_matched_ids])
 
     return {
         'in_inventory_not_csv': in_inventory_not_csv,
-        'in_csv_not_inventory': in_csv_not_inventory,
+        'in_csv_not_inventory': sorted(in_csv_not_inventory),
     }
 
 

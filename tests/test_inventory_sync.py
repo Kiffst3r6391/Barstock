@@ -20,6 +20,8 @@ from inventory_sync import (
     append_item_to_items_csv,
     find_items_csv_inventory_mismatches,
 )
+from categories import EXCLUDED_ITEMS, DELISTED_ITEMS
+from sales_mapping import SALES_TO_PARENT, get_hidden_items, resolve_epos_item_id, normalize_product_name
 
 COL_ITEM_ID = 'item_id'
 COL_ITEM_NAME = 'item_name'
@@ -139,6 +141,38 @@ class TestCsvInventoryMismatches(unittest.TestCase):
         result = find_items_csv_inventory_mismatches(inventory, self.tmpdir)
         self.assertIn('not_in_csv', result['in_inventory_not_csv'])
         self.assertIn('missing_from_db', result['in_csv_not_inventory'])
+
+
+class TestRealCsvAlignment(unittest.TestCase):
+    """Verify the bundled Items.csv and stock.csv stay aligned after edits."""
+
+    def test_items_csv_names_resolve_to_stock_or_are_excluded(self):
+        """Every row in Items.csv must map to a live stock item_id, a child item,
+        or an explicitly excluded/delisted item. This prevents upload mismatches."""
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        stock_path = os.path.join(project_root, 'stock.csv')
+        items_path = os.path.join(project_root, 'Items.csv')
+        self.assertTrue(os.path.exists(stock_path), "stock.csv must exist")
+        self.assertTrue(os.path.exists(items_path), "Items.csv must exist")
+
+        stock_df = pd.read_csv(stock_path)
+        items_df = pd.read_csv(items_path)
+        stock_ids = {str(i).lower() for i in stock_df['item_id'].values}
+        hidden_or_excluded = set(EXCLUDED_ITEMS) | set(get_hidden_items()) | set(DELISTED_ITEMS)
+
+        unresolved = []
+        for name in items_df['Name'].dropna().astype(str):
+            norm = normalize_product_name(name)
+            resolved = resolve_epos_item_id(norm)
+            if resolved.lower() in stock_ids or norm.lower() in stock_ids:
+                continue
+            if resolved.lower() in hidden_or_excluded or norm.lower() in hidden_or_excluded:
+                continue
+            unresolved.append((name, norm, resolved))
+
+        if unresolved:
+            lines = "\n".join(f"  {name!r} -> {norm!r} (resolved: {resolved!r})" for name, norm, resolved in unresolved)
+            self.fail(f"Items.csv rows with no stock/excluded mapping:\n{lines}")
 
 
 if __name__ == '__main__':

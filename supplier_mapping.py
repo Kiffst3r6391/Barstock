@@ -14,7 +14,6 @@ from __future__ import annotations
 SUPPLIER_ORDER = [
     'Booker',
     'Tennents',
-    'Belhaven',
     'Unknown',
 ]
 
@@ -28,12 +27,22 @@ ITEM_SUPPLIER_MAP = {
     'tennants_shandy_half_pint': 'Tennents',
     'tg_tennents': 'Tennents',
 
-    # Belhaven products
-    'belhaven_best': 'Belhaven',
-    'belhaven_best_half_pint': 'Belhaven',
-    'belhaven_best_shandy': 'Belhaven',
-    'best_shandy': 'Belhaven',
-    'tb_best': 'Belhaven',
+    # Tennents draught kegs
+    'poretti': 'Tennents',
+    'poretti_half': 'Tennents',
+    'poretti_shandy': 'Tennents',
+    'innis_and_gunn': 'Tennents',
+    'innis_and_gunn_half': 'Tennents',
+    'innis_and_gunn_shandy': 'Tennents',
+    'orchard_pig': 'Tennents',
+    'orchard_pig_half': 'Tennents',
+    'orchard_pig_shandy': 'Tennents',
+    'guinness': 'Tennents',
+    'guinness_half': 'Tennents',
+    'guinness_shandy': 'Tennents',
+    'caledonian_best': 'Tennents',
+    'caledonian_best_half': 'Tennents',
+    'caledonian_best_shandy': 'Tennents',
 }
 
 # Default supplier for whole product types. Anything not listed here and not

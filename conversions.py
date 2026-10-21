@@ -66,10 +66,21 @@ STOCK_CONVERSIONS = {
     'birra_moretti': ('barrel', 88.0, 'pint'),
     'joker_ipa': ('barrel', 88.0, 'pint'),
     'thatchers': ('barrel', 88.0, 'pint'),
+    'poretti': ('barrel', 88.0, 'pint'),
+    'innis_and_gunn': ('barrel', 88.0, 'pint'),
+    'orchard_pig': ('barrel', 88.0, 'pint'),
+    'guinness': ('barrel', 88.0, 'pint'),
+    'caledonian_best': ('barrel', 88.0, 'pint'),
 }
 
 
 from datetime import datetime
+
+# Volume conversion constants
+ML_PER_PINT = 568.261
+ML_PER_LITRE = 1000.0
+PINTS_PER_LITRE = ML_PER_LITRE / ML_PER_PINT  # ~1.75975
+LITRES_PER_PINT = ML_PER_PINT / ML_PER_LITRE  # ~0.568261
 
 # User-facing date format used throughout the UI.
 DATE_FORMAT_DISPLAY = '%d-%m-%Y'

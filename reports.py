@@ -5,6 +5,7 @@ All functions accept inventory_df, log_df, and optional date filtering.
 Returns raw data structures (dicts, DataFrames) for UI rendering.
 """
 
+import json
 import os
 import sqlite3
 import pandas as pd
@@ -18,7 +19,7 @@ from actions import (
     ACTION_OPEN_TAB, ACTION_TAB_CANCELLED, ACTION_PARENT_STOCK_ADJ,
     ACTION_STOCKTAKE_BASELINE, ACTION_IMPORT, ACTION_SUPPLIER_RETURN,
 )
-from categories import get_category, should_exclude, CATEGORY_ORDER
+from categories import get_category, should_exclude, is_delisted, CATEGORY_ORDER
 from sales_mapping import is_hidden_from_stock_view
 from supplier_mapping import get_supplier, get_supplier_order, supplier_rank
 from order_sheet_layout import get_order_sheet_layout
@@ -151,12 +152,14 @@ def filter_log_by_date(log_df, start_date=None, end_date=None):
                     return None
                 dr_start = parse_display_date(parts[0].strip())
                 dr_end = parse_display_date(parts[1].strip())
-                # For CSV-uploaded periods, require the whole CSV period to fall
-                # inside the selected range. This stops a previous CSV that
-                # overlaps by a single day from being pulled into a report.
-                if start_date is not None and dr_start < start_date:
+                # For CSV-uploaded periods, include the row if the CSV period
+                # overlaps the report range at all. Previously the whole CSV
+                # period had to fall inside the report range, which excluded
+                # weekly CSVs that straddled a month boundary (e.g. 31 Aug -
+                # 6 Sept when reporting on September).
+                if start_date is not None and dr_end < start_date:
                     return False
-                if end_date is not None and dr_end > end_date:
+                if end_date is not None and dr_start > end_date:
                     return False
                 return True
             except Exception:
@@ -178,8 +181,15 @@ def filter_log_by_date(log_df, start_date=None, end_date=None):
 def calculate_expected_remaining_series(log_df):
     """Calculate expected remaining stock for all items from transaction log.
 
-    Formula: import + delivery + stocktake_baseline + tab_cancelled
-              - sales - wastage - line_clean - complimentary - open_tab - parent_adj
+    A Stocktake Baseline row acts as a reset: expected stock at the baseline
+    timestamp equals the baseline quantity, and only transactions at or after
+    that baseline are applied. This prevents pre-baseline archive history from
+    producing negative opening-stock figures when the current inventory has
+    been reset to a physical count.
+
+    Formula (post-baseline): baseline + import + delivery + tab_cancelled
+                             - sales - wastage - line_clean - complimentary
+                             - open_tab - supplier_return - parent_adj
     Returns pd.Series indexed by item_id.
 
     Note: this is a stock-level expected remaining calculation. Open Tab rows are
@@ -190,7 +200,26 @@ def calculate_expected_remaining_series(log_df):
     if log_df.empty:
         return pd.Series(dtype=float)
 
-    grouped = log_df.groupby([COL_ITEM_ID, COL_ACTION]).agg({COL_QUANTITY: 'sum'}).reset_index()
+    # Find the latest baseline timestamp per item. Rows before that timestamp
+    # are ignored because the baseline supersedes earlier history.
+    baseline_rows = log_df[log_df[COL_ACTION] == ACTION_STOCKTAKE_BASELINE]
+    latest_baseline_ts = None
+    baseline_quantities = pd.Series(dtype=float)
+    if not baseline_rows.empty:
+        latest_baseline_ts = baseline_rows.groupby(COL_ITEM_ID)[COL_TIMESTAMP].max()
+        baseline_quantities = baseline_rows.groupby(COL_ITEM_ID)[COL_QUANTITY].last()
+
+    if latest_baseline_ts is not None and not latest_baseline_ts.empty:
+        def _after_baseline(row):
+            item_id = row[COL_ITEM_ID]
+            if item_id not in latest_baseline_ts.index:
+                return True
+            return str(row[COL_TIMESTAMP]) >= str(latest_baseline_ts[item_id])
+        effective_log = log_df[log_df.apply(_after_baseline, axis=1)].copy()
+    else:
+        effective_log = log_df.copy()
+
+    grouped = effective_log.groupby([COL_ITEM_ID, COL_ACTION]).agg({COL_QUANTITY: 'sum'}).reset_index()
     pivot = grouped.pivot(index=COL_ITEM_ID, columns=COL_ACTION, values=COL_QUANTITY).fillna(0)
 
     sales = pivot.get(ACTION_SALES, 0) + pivot.get(ACTION_SALES_ONE_UNIT, 0)
@@ -210,7 +239,7 @@ def calculate_expected_remaining_series(log_df):
         if not mapping:
             continue
         parent_items, factors, _ = mapping[:3]
-        child_log = log_df[log_df[COL_ITEM_ID].str.lower() == child_id]
+        child_log = effective_log[effective_log[COL_ITEM_ID].str.lower() == child_id]
         sales_qty = child_log[child_log[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])][COL_QUANTITY].sum()
         comp_qty = child_log[child_log[COL_ACTION] == ACTION_COMPLIMENTARY][COL_QUANTITY].sum()
         total = sales_qty + comp_qty
@@ -225,7 +254,17 @@ def calculate_expected_remaining_series(log_df):
     parent_adj = pd.Series({item_id: computed_parent_adj.get(item_id.lower(), 0) for item_id in all_item_ids})
     parent_adj.index.name = COL_ITEM_ID
 
-    return import_qty + delivery + baseline + tab_cancelled - sales - wastage - comp - open_tab - supplier_return - parent_adj
+    result = import_qty + delivery + baseline + tab_cancelled - sales - wastage - comp - open_tab - supplier_return - parent_adj
+
+    # Replace any remaining negative expected remaining with the baseline anchor
+    # when a baseline exists, so current_stock - expected_remaining never invents
+    # a negative opening stock.
+    if not baseline_quantities.empty:
+        for item_id in result.index:
+            if item_id in baseline_quantities.index and result[item_id] < 0:
+                result[item_id] = float(baseline_quantities[item_id])
+
+    return result
 
 
 def normalize_division_name(name):
@@ -699,7 +738,34 @@ def _get_currently_open_tab_ids():
         return set()
 
 
-def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10, stocktake_map=None, closing_stock_map=None):
+def _get_latest_baseline_snapshot():
+    """Load the most recent baseline reset snapshot from the audit table.
+
+    Returns (timestamp_str, snapshot_dict) where snapshot_dict maps item_id to
+    the counted system quantity at baseline. Returns (None, {}) if no baseline
+    reset audit record exists.
+    """
+    db_path = os.path.expanduser('~/Library/Application Support/BarStockManagement/barstock.db')
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT timestamp, snapshot_json FROM baseline_resets
+            ORDER BY timestamp DESC, id DESC LIMIT 1
+        """)
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row['snapshot_json']:
+            return None, {}
+        snapshot_list = json.loads(row['snapshot_json'])
+        snapshot = {item['item_id']: float(item.get('counted_system', 0)) for item in snapshot_list}
+        return str(row['timestamp']), snapshot
+    except Exception:
+        return None, {}
+
+
+def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10, stocktake_map=None, closing_stock_map=None, use_current_cost_for_gp=False):
     """Build data for Comprehensive PDF Report.
 
     Returns list of dicts, one per inventory item.
@@ -713,6 +779,11 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
         closing_stock_map: Optional dict mapping item_id -> stock quantity at the end of the
                            report period. When provided, overrides live current_stock for
                            historical date-range consistency.
+        use_current_cost_for_gp: When True, GP is calculated using the current inventory
+                                 cost_price for every sold unit, ignoring historical
+                                 transaction costs. This gives a trading GP% based on
+                                 latest delivered costs rather than the cost at the
+                                 time each sale was recorded.
     """
     report_data = []
     if inventory_df.empty:
@@ -837,6 +908,25 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
 
     excluded_item_ids = {k for k in excluded_items if k not in hidden_item_ids}
 
+    # Load the latest baseline reset snapshot. When a baseline reset exists,
+    # use it as the authoritative opening stock anchor so the report never
+    # invents negative opening stock from pre-baseline archive history.
+    latest_baseline_ts, baseline_snapshot = _get_latest_baseline_snapshot()
+    has_baseline_snapshot = bool(latest_baseline_ts) and baseline_snapshot
+
+    # If a baseline reset exists, ignore any transactions that pre-date it.
+    # The full history is still preserved in transaction_archive for all-time
+    # reports; the comprehensive report shows the current period from baseline.
+    # Only apply the baseline cut-off when the selected log period starts at or
+    # after the baseline. If the period includes pre-baseline history (e.g. an
+    # all-time report, or an older date range), keep the full log so sales/GP
+    # history is preserved. Also skip the cut-off for purely synthetic unit tests.
+    if (has_baseline_snapshot and not log_df.empty and COL_TIMESTAMP in log_df.columns):
+        log_timestamps = log_df[COL_TIMESTAMP].astype(str)
+        if (log_timestamps.max() >= str(latest_baseline_ts) and
+                log_timestamps.min() >= str(latest_baseline_ts)):
+            log_df = log_df[log_timestamps >= str(latest_baseline_ts)].copy()
+
     # Pre-compute unified expected remaining for opening stock derivation
     expected_remaining_series = calculate_expected_remaining_series(log_df)
 
@@ -910,8 +1000,17 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
             # Surplus = counted - system expected at stocktake, valued at cost price
             surplus_value = variance * cost_price
         else:
-            # Derive opening stock from unified formula: opening = current - expected_remaining
-            opening_stock = current_stock - expected_remaining_series.get(item_id, 0)
+            # Derive opening stock. Prefer the latest baseline snapshot when one
+            # exists, so post-baseline reports never invent negative opening stock
+            # from pre-baseline archive history.
+            if has_baseline_snapshot and item_id in baseline_snapshot:
+                opening_stock = baseline_snapshot[item_id]
+            else:
+                opening_stock = current_stock - expected_remaining_series.get(item_id, 0)
+                # Guard against negative opening stock when archive history
+                # predates the current inventory state.
+                if opening_stock < 0:
+                    opening_stock = 0.0
             expected_closing = opening_stock + total_delivery_qty - expected_consumption
             actual_consumption = None
             consumption_variance = None
@@ -961,6 +1060,17 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
 
         current_stock_value = current_stock * cost_price
 
+        # Capture physical (live DB) stock value for delisted items before zeroing
+        # it out, so it can be reported separately without affecting totals.
+        delisted_stock_value = 0.0
+        if is_delisted(item_id):
+            delisted_stock_value = current_stock * cost_price
+            current_stock = 0.0
+            current_stock_value = 0.0
+            opening_stock = 0.0
+            expected_closing = 0.0
+            item_name = f"{item_name} (DELISTED)"
+
         # Use actual transaction-level sums for totals
         actual_total_revenue = member_sales_value + non_member_sales_value
         actual_total_cost = member_cost + non_member_cost
@@ -1006,7 +1116,8 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
             'surplus_value': surplus_value,
             'is_draught': is_draught,
             'yield_pct': yield_pct,
-            'is_hidden': is_hidden
+            'is_hidden': is_hidden,
+            'delisted_stock_value': delisted_stock_value,
         })
 
     return report_data
@@ -1157,7 +1268,11 @@ def build_custom_stock_order_sheet_data(inventory_df, _log_df=None):
 
     Items that are not tracked in inventory (item_id is None) are still
     included so the order form matches the user's requested layout.
+
+    Delisted items are omitted from the order sheet so they are not reordered.
     """
+    from categories import is_delisted
+
     report_data = []
     if inventory_df.empty:
         inventory_by_id = {}
@@ -1175,6 +1290,9 @@ def build_custom_stock_order_sheet_data(inventory_df, _log_df=None):
             sorted_items = sorted(items, key=lambda x: str(x[0]).lower())
 
             for display_name, item_id in sorted_items:
+                if item_id is not None and is_delisted(str(item_id)):
+                    continue
+
                 if item_id is None:
                     report_data.append({
                         COL_ITEM_ID: '',
@@ -1315,6 +1433,11 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
             current_stock = inv_row[COL_QUANTITY]
             cost_price = inv_row[COL_COST_PRICE]
 
+            # Delisted items report zero stock but keep their sales history.
+            if is_delisted(item_id):
+                current_stock = 0.0
+                item_name = f"{item_name} (DELISTED)"
+
             # Opening stock = current stock - expected remaining (from transactions)
             expected = current_stock - expected_remaining.get(item_id, 0)
             # Variance is unknown without a stocktake count
@@ -1337,6 +1460,12 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
             item_id = inv_row[COL_ITEM_ID]
             item_name = inv_row[COL_ITEM_NAME]
             cost_price = inv_row[COL_COST_PRICE]
+            current_stock = inv_row[COL_QUANTITY]
+
+            # Delisted items report zero stock but keep their sales history.
+            if is_delisted(item_id):
+                current_stock = 0.0
+                item_name = f"{item_name} (DELISTED)"
 
             st = stocktake_by_item.get(item_id)
             if st:
@@ -1348,7 +1477,7 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
                 report_data.append({
                     'item_id': item_id,
                     'item_name': item_name,
-                    'current_stock': inv_row[COL_QUANTITY],
+                    'current_stock': current_stock,
                     'expected_quantity': expected,
                     'counted_quantity': counted,
                     'variance': variance,
@@ -1361,7 +1490,7 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
                 report_data.append({
                     'item_id': item_id,
                     'item_name': item_name,
-                    'current_stock': inv_row[COL_QUANTITY],
+                    'current_stock': current_stock,
                     'expected_quantity': None,
                     'counted_quantity': None,
                     'variance': None,

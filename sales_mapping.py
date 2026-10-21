@@ -12,6 +12,11 @@ SALES_TO_PARENT = {
     'birra_moretti_half': ('birra_moretti', 0.5, 'Birra Moretti Half Pint'),
     'joker_ipa_half': ('joker_ipa', 0.5, 'Joker IPA Half Pint'),
     'thatchers_half': ('thatchers', 0.5, 'Thatchers Half Pint'),
+    'poretti_half': ('poretti', 0.5, 'Poretti Half Pint'),
+    'innis_and_gunn_half': ('innis_and_gunn', 0.5, 'Innis & Gunn Half Pint'),
+    'orchard_pig_half': ('orchard_pig', 0.5, 'Orchard Pig Half Pint'),
+    'guinness_half': ('guinness', 0.5, 'Guinness Half Pint'),
+    'caledonian_best_half': ('caledonian_best', 0.5, 'Caledonian Best Half Pint'),
     'carton_juice_half': ('carton_juice', 0.5, 'Carton Juice Half'),
 
     # DASH -> deduct from Coke PM (0.15% of a pint)
@@ -24,6 +29,11 @@ SALES_TO_PARENT = {
     'belhaven_best_shandy': (['belhaven_best', 'lemonade'], [0.5, 0.5], 'Belhaven Best Shandy'),
     'birra_moretti_shandy': (['birra_moretti', 'lemonade'], [0.5, 0.5], 'Birra Moretti Shandy'),
     'joker_ipa_shandy': (['joker_ipa', 'lemonade'], [0.5, 0.5], 'Joker IPA Shandy'),
+    'poretti_shandy': (['poretti', 'lemonade'], [0.5, 0.5], 'Poretti Shandy'),
+    'innis_and_gunn_shandy': (['innis_and_gunn', 'lemonade'], [0.5, 0.5], 'Innis & Gunn Shandy'),
+    'orchard_pig_shandy': (['orchard_pig', 'lemonade'], [0.5, 0.5], 'Orchard Pig Shandy'),
+    'guinness_shandy': (['guinness', 'lemonade'], [0.5, 0.5], 'Guinness Shandy'),
+    'caledonian_best_shandy': (['caledonian_best', 'lemonade'], [0.5, 0.5], 'Caledonian Best Shandy'),
     'thatchers_shandy': (['thatchers', 'lemonade'], [0.5, 0.5], 'Thatchers Shandy'),
 
     # ORANGE & LEMONADE -> 50/50 from carton juice + lemonade
@@ -50,7 +60,7 @@ SALES_TO_PARENT = {
 
     # TG (Table/Golf) PREMIUM ITEMS -> deduct from parent stock at 1:1, visible in Manage Stock
     'tg_tennents': ('tennents_lager', 1.0, 'TG Tennents', True),
-    'tg_best': ('belhaven_best', 1.0, 'TG Best', True),
+    'tg_best': ('caledonian_best', 1.0, 'TG Best', True),
     'tb_best': ('belhaven_best', 1.0, 'TB Best', True),
     'tg_can': ('can', 1.0, 'TG Can', True),
     'tg_single_serve_wine': ('single_serve_wine', 1.0, 'TG Single Serve Wine', True),
@@ -90,11 +100,26 @@ SALES_TO_PARENT = {
 # EPOS report product names -> inventory item_id overrides
 # Fixes fuzzy-match issues where EPOS names don't convert cleanly to item IDs
 EPOS_NAME_TO_ITEM_ID = {
-    # Case fixes
+    # Case fixes: these two legacy item_ids keep their original casing.
     'cointreau': 'Cointreau',
+    'moretti_bottle': 'Moretti_Bottle',
 
-    # Guinness draught in EPOS means Guinness Can (per user request)
-    'guinness': 'guinness_can',
+    # Draught Guinness and Guinness Can are now separate EPOS products.
+    # "Guinness" goes to the draught keg; "Guinness Can" stays on cans.
+    'guinness': 'guinness',
+    'guinness_can': 'guinness_can',
+
+    # New draught kegs are not auto-matched from EPOS names; use explicit item IDs
+    # when adding their sales if needed.
+    'poretti': 'poretti',
+    'innis_and_gunn': 'innis_and_gunn',
+    'innis_gunn': 'innis_and_gunn',
+    'orchard_pig': 'orchard_pig',
+    'caledonian_best': 'caledonian_best',
+    # EPOS typo: Calidonian -> Caledonian (missing 'e' before 'd')
+    'calidonian_best': 'caledonian_best',
+    'calidonian_best_half_pint': 'caledonian_best_half',
+    'calidonian_best_shandy': 'caledonian_best_shandy',
 
     # Thatchers PINT/HALF should match Thatchers, not generic pint
     'thatchers_pint': 'thatchers',
@@ -127,21 +152,63 @@ EPOS_NAME_TO_ITEM_ID = {
     'teacoffee_urn': 'tea',
     # EPOS "Nuts small pack" is the tracked Nuts item
     'nuts_small_pack': 'nuts',
+    # EPOS "Archers" is Peach Schnapps
+    'archers': 'peach_schnapps',
+
+    # Ampersand normalisation fallbacks. The canonical normaliser converts
+    # "X & Y" to "X_and_Y", but several stock item_ids omit the _and_.
+    'orange_and_lemonade': 'orange_lemonade',
+    'orange_and_lemonade_half': 'orange_lemonade_half',
+    'orange_and_soda': 'orange_soda',
+    'orange_and_soda_half': 'orange_soda_half',
+    'cart_roll_and_tea_coffee': 'cart_roll_tea_coffee',
+
+    # Slash/ampersand edge cases where the old normaliser stripped characters.
+    # These aliases protect legacy CSV uploads and third-party EPOS reports.
+    'edinburgh_rg': 'edinburgh_r&g',
+    'af_koppaberg': 'a_f_koppaberg',
+
+    # Short/common EPOS names that don't normalise to the stock item_id.
+    'baileys': 'baileys_50ml',
+    'gordons': 'gordons_gin',
+    'bombay': 'bombay_sapphire',
+    'kraken': 'kraken_rum',
+    'old_mout': 'old_mout_cider',
+    'j2o_apple_mango': 'j2o',
+    'j2o_orange_passion': 'j2o',
+    'prosecco_doc': 'prosecco',
+    'single_serve_red': 'single_serve_wine',
+    'single_serve_white': 'single_serve_wine',
+    'single_serve_rose': 'single_serve_wine',
+
+    # Item_name normalisation fallbacks where the display name diverges from item_id.
+    'belhaven_best_half': 'belhaven_best_half_pint',
+    'guinness_00': 'guinness_0_0',
+    'sourz': 'sours',
 }
 
 
 def normalize_product_name(name):
     """Normalize a product name from a CSV report to an item_id-style string.
 
-    Matches the conversion used in the sales/complimentary upload logic.
+    Matches the convention used for item_ids in stock.csv and Items.csv:
+      - "Innis & Gunn"        -> "innis_and_gunn"
+      - "Edinburgh R&G"        -> "edinburgh_r&g"
+      - "A/F Koppaberg"       -> "a_f_koppaberg"
+      - "Orange & Lemonade"    -> "orange_and_lemonade"
+      - "Cart Roll & Tea/Coffee" -> "cart_roll_and_tea_coffee"
     """
     if not isinstance(name, str):
         name = str(name)
+    # Common Booker/EPOS typo
     name = name.replace('Morettiu', 'Moretti')
     item_id = name.lower()
-    for char in ('&', '/', "'", '"', '.'):
+    # Convert spaced ampersands to _and_ so "Innis & Gunn" becomes innis_and_gunn.
+    # Standalone ampersands (e.g. "R&G") are preserved.
+    item_id = item_id.replace(' & ', '_and_')
+    for char in ("'", '"', '.'):
         item_id = item_id.replace(char, '')
-    for char in (' ', '-'):
+    for char in ('/', ' ', '-'):
         item_id = item_id.replace(char, '_')
     while '__' in item_id:
         item_id = item_id.replace('__', '_')

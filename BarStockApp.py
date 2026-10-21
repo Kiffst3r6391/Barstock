@@ -136,7 +136,7 @@ THEME_FONT = '-apple-system, BlinkMacSystemFont, SF Pro, Segoe UI, Arial'
 from data_manager import (
     InventoryDataManager, get_setting, set_setting, AtomicTransaction,
     COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_MEMBER_QTY, COL_NON_MEMBER_QTY, COL_DIVISION,
-    record_stocktake, get_stocktake_history,
+    record_stocktake, record_stocktakes, get_stocktake_history,
     clear_stocktake_snapshots, clear_transaction_archive,
     get_upload_hashes, add_upload_hash, is_duplicate_upload
 )
@@ -366,6 +366,10 @@ class BarStockManagementSystem:
         # Load data
         self.inventory_df = InventoryDataManager.load_inventory()
         self.log_df = InventoryDataManager.load_log()
+        # Snapshot of what was loaded. Saves write the difference between this
+        # and the current frame, so a window that is left open cannot clobber
+        # newer stock movements written by another process.
+        self._inventory_snapshot = self.inventory_df.copy()
 
         # Daily auto-backup check
         try:
@@ -385,6 +389,25 @@ class BarStockManagementSystem:
                 self.startup_sync_report = format_sync_report(missing)
         except Exception as e:
             print(f"Startup sync check failed: {e}")
+
+        # Capture any cost-price changes applied from the bundled stock.csv so the
+        # dashboard banner can report them on startup.
+        self.startup_price_sync_report = None
+        try:
+            from data_manager import get_csv_sync_changes
+            csv_changes = get_csv_sync_changes()
+            if csv_changes:
+                lines = ["Prices updated from stock.csv:"]
+                for item_id, old_cost, new_cost in csv_changes:
+                    diff = new_cost - old_cost
+                    pct = (diff / old_cost * 100) if old_cost > 0 else 0.0
+                    lines.append(
+                        f"  • {item_id}: £{old_cost:.4f} → £{new_cost:.4f} "
+                        f"({diff:+.4f}, {pct:+.1f}%)"
+                    )
+                self.startup_price_sync_report = "\n".join(lines)
+        except Exception as e:
+            print(f"Startup price sync check failed: {e}")
 
         self.create_widgets()
 
@@ -505,14 +528,14 @@ class BarStockManagementSystem:
         return panel
 
     def on_exit(self):
-        """Save data and confirm before exiting the application."""
-        # Save all data before exiting
-        if not self.inventory_df.empty:
-            InventoryDataManager.save_inventory(self.inventory_df)
-        if not self.log_df.empty:
-            InventoryDataManager.save_log(self.log_df)
+        """Confirm before exiting the application.
 
-        if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit?\n\nAll data has been saved."):
+        Nothing is saved here.  Every stock movement is written to SQLite at
+        the moment it is recorded, so an exit-time save could only ever write
+        stale in-memory frames over newer data (this is what silently undid a
+        stocktake, and could revert deliveries made while the window was open).
+        """
+        if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit?"):
             self.root.quit()
 
     def create_widgets(self):
@@ -941,6 +964,9 @@ class BarStockManagementSystem:
         # Sync/setup banner (non-blocking, shown only when there are real issues)
         self._render_sync_alert(self.main_menu)
 
+        # Price-sync banner (non-blocking, shown when stock.csv changed costs)
+        self._render_price_sync_alert(self.main_menu)
+
         # Stat cards
         self.update_dashboard_stats(self.main_menu)
 
@@ -1077,6 +1103,40 @@ class BarStockManagementSystem:
 
         def dismiss():
             self.startup_sync_report = None
+            banner.destroy()
+
+        self.styled_button(banner, 'Dismiss', dismiss, width=12, variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
+
+    def _render_price_sync_alert(self, parent=None):
+        """Show a non-blocking banner when stock.csv cost prices were synced at startup."""
+        if parent is None:
+            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
+                return
+            parent = self.main_menu
+
+        if not hasattr(self, 'startup_price_sync_report') or not self.startup_price_sync_report:
+            return
+
+        report_text = self.startup_price_sync_report.strip()
+        lines = report_text.splitlines()
+        if len(lines) > 12:
+            report_text = "\n".join(lines[:12]) + f"\n... and {len(lines) - 12} more items"
+
+        banner = tk.Frame(parent, bg='#1f3d2e', bd=1, relief='solid',
+                          highlightbackground=THEME_ACCENT, highlightthickness=1)
+        banner.pack(fill='x', pady=(0, 18), padx=2)
+
+        tk.Label(banner, text='ℹ Price Sync from stock.csv',
+                 font=(THEME_FONT, 11, 'bold'), fg=THEME_ACCENT, bg='#1f3d2e',
+                 anchor='w').pack(fill='x', padx=12, pady=(10, 2))
+
+        detail = tk.Label(banner, text=report_text,
+                          font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#1f3d2e',
+                          anchor='w', justify='left', wraplength=700)
+        detail.pack(fill='x', padx=12, pady=(0, 4))
+
+        def dismiss():
+            self.startup_price_sync_report = None
             banner.destroy()
 
         self.styled_button(banner, 'Dismiss', dismiss, width=12, variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
@@ -1270,7 +1330,7 @@ class BarStockManagementSystem:
         self.create_card(cards_frame, "Period Sales", f"£{snap['period_sales']:,.2f}",
                          snap['period_label'])
         self.create_card(cards_frame, "Stock Holding", f"£{snap['stock_holding']:,.2f}",
-                         "At cost price (inc VAT)")
+                         "At cost price (ex VAT)")
         recent_uploads_text = "\n".join(
             [f"{u['period']}" for u in snap['recent_sales_uploads']]
         ) or "No recent uploads"
@@ -1615,9 +1675,35 @@ class BarStockManagementSystem:
             widget.destroy()
 
     def refresh_data(self):
-        """Reload data from CSV files."""
+        """Reload data from SQLite and reset the save baseline."""
         self.inventory_df = InventoryDataManager.load_inventory()
-        self.log_df = InventoryDataManager.load_log(self.inventory_df)
+        self.log_df = InventoryDataManager.load_log()
+        self._inventory_snapshot = self.inventory_df.copy()
+
+    def _persist(self):
+        """Write inventory deltas and the log in one transaction, then reload.
+
+        Returns True on success.  On success the in-memory frames are reloaded
+        from SQLite so the next save's baseline is accurate.
+        """
+        ok = InventoryDataManager.save_all(
+            self.inventory_df,
+            self.log_df,
+            baseline_df=self._inventory_snapshot,
+        )
+        if ok:
+            self.refresh_data()
+        return ok
+
+    def _save_inventory(self):
+        """Write inventory-only deltas (item add/edit/delete), then reload."""
+        ok = InventoryDataManager.save_inventory(
+            self.inventory_df,
+            baseline_df=self._inventory_snapshot,
+        )
+        if ok:
+            self.refresh_data()
+        return ok
 
     def format_currency(self, value):
         """Format value as currency."""
@@ -1860,7 +1946,7 @@ class BarStockManagementSystem:
                                     columns=[COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_DIVISION])
             self.inventory_df = pd.concat([self.inventory_df, new_item], ignore_index=True)
 
-            if InventoryDataManager.save_inventory(self.inventory_df):
+            if self._save_inventory():
                 # Keep master Items.csv in sync so new items survive database rebuilds
                 try:
                     script_dir = get_script_directory()
@@ -2058,7 +2144,7 @@ class BarStockManagementSystem:
                                   [COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_DIVISION]] = \
                 [new_name, new_quantity, new_cost_price, new_sell_price, new_measure, new_category, new_price_locked, new_allow_negative, new_reorder_level, new_division]
 
-            if InventoryDataManager.save_inventory(self.inventory_df):
+            if self._save_inventory():
                 self.load_stock_into_tree()
                 self.update_dashboard_stats()
                 top.destroy()
@@ -2183,7 +2269,7 @@ class BarStockManagementSystem:
 
         if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete item '{item_name}' (ID: {item_id})?\n\nThis action cannot be undone."):
             self.inventory_df = self.inventory_df[self.inventory_df[COL_ITEM_ID] != item_id]
-            if InventoryDataManager.save_inventory(self.inventory_df):
+            if self._save_inventory():
                 self.load_stock_into_tree()
                 self.update_dashboard_stats()
                 messagebox.showinfo("Success", f"Item '{item_name}' deleted successfully.")
@@ -2209,7 +2295,7 @@ class BarStockManagementSystem:
                  fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
         supplier_var = tk.StringVar(value="Booker")
         supplier_dropdown = ttk.Combobox(field_frame, textvariable=supplier_var,
-                                          values=["Booker", "Tennents", "Belhaven"],
+                                          values=["Booker", "Tennents"],
                                           width=40, state="readonly")
         supplier_dropdown.pack(fill='x', pady=(4, 0))
         supplier_dropdown.set("Select supplier...")
@@ -2393,7 +2479,7 @@ class BarStockManagementSystem:
 
         cost_frame = tk.Frame(qty_cost_row, bg=THEME_CARD)
         cost_frame.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
-        cost_label = tk.Label(cost_frame, text="Cost Price (inc VAT) (£)", font=(THEME_FONT, 10, 'bold'),
+        cost_label = tk.Label(cost_frame, text="Cost Price (ex VAT) (£)", font=(THEME_FONT, 10, 'bold'),
                               fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w')
         cost_label.pack(fill='x')
         entry_cost_price = tk.Entry(cost_frame, width=15, font=(THEME_FONT, 12))
@@ -2478,7 +2564,7 @@ class BarStockManagementSystem:
                         conversion_label.config(text=f"1 {input_unit} = {factor} {output_unit}s")
                         selected_factor[0] = factor
                         selected_has_conversion[0] = True
-                        cost_label.config(text="Pack Cost Price (inc VAT) (£):")
+                        cost_label.config(text="Pack Cost Price (ex VAT) (£):")
                         entry_cost_price.delete(0, tk.END)
                         entry_cost_price.insert(0, f"{last_delivery_cost_per_unit[0] * factor:.2f}")
                     else:
@@ -2487,7 +2573,7 @@ class BarStockManagementSystem:
                         conversion_label.config(text="")
                         selected_factor[0] = 1.0
                         selected_has_conversion[0] = False
-                        cost_label.config(text="Cost Price (inc VAT) (£):")
+                        cost_label.config(text="Cost Price (ex VAT) (£):")
                         entry_cost_price.delete(0, tk.END)
                         entry_cost_price.insert(0, f"{last_delivery_cost_per_unit[0]:.2f}")
                     update_gp_label()
@@ -2670,7 +2756,7 @@ class BarStockManagementSystem:
                     new_log_df = pd.DataFrame(log_entries, columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON])
                     self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
 
-                if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+                if self._persist():
                     from conversions import requires_conversion, get_conversion
                     success_msg = f"Delivery from {supplier} saved successfully!\n\n"
                     success_msg += f"Items added: {len(delivery_items)}\n"
@@ -3562,7 +3648,7 @@ class BarStockManagementSystem:
                     new_log_df = pd.DataFrame(log_entries, columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON])
                     self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
 
-                if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+                if self._persist():
                     msg = f"{action} saved!\n\n{len(transaction_items)} items:\n"
                     msg += "\n".join([f"  {name}: {qty:.1f}" for _, name, qty, _, _ in transaction_items])
                     messagebox.showinfo("Success", msg)
@@ -3668,7 +3754,7 @@ class BarStockManagementSystem:
                 errors.append(f"{item_name}: {e}")
 
         # Save changes (both inventory and log)
-        if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+        if self._persist():
             success_msg = f"Line Clean recorded successfully!\n\n{len(items_recorded)} items:\n"
             success_msg += "\n".join(items_recorded[:10])  # Show first 10
             if len(items_recorded) > 10:
@@ -3867,7 +3953,7 @@ class BarStockManagementSystem:
                 self.log_df = pd.concat([self.log_df, new_log_entry], ignore_index=True)
 
                 # Save both files
-                if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+                if self._persist():
                     success_msg = f"{quantity:.1f} units of item '{item_id}' recorded as {action}.{conversion_msg}"
 
                     # Add parent adjustment info if applicable
@@ -4120,7 +4206,7 @@ class BarStockManagementSystem:
                 item_name = row[COL_ITEM_NAME]
                 current_stock = row[COL_QUANTITY]
 
-                if is_hidden_from_stock_view(item_id):
+                if is_hidden_from_stock_view(item_id) or should_exclude(item_id):
                     continue
 
                 if search_text and search_text not in item_name.lower() and search_text not in item_id.lower():
@@ -4171,6 +4257,36 @@ class BarStockManagementSystem:
             update_editor(item_entries[0]['iid'], focus=True)
         search_entry.bind('<KeyRelease>', lambda e: build_table())
 
+        def count_map():
+            """Every stock-countable item, independent of the search filter.
+
+            Counts are stored in the `counts` dict keyed by item_id, so a count
+            entered before the user typed a search term is still included when
+            saving.  The old code iterated the filtered table, which silently
+            dropped counts that were no longer on screen.
+            """
+            from conversions import requires_conversion, get_conversion
+            mapping = {}
+            for _, row in self.inventory_df.iterrows():
+                item_id = str(row[COL_ITEM_ID])
+                if is_hidden_from_stock_view(item_id) or should_exclude(item_id):
+                    continue
+                if requires_conversion(item_id):
+                    conversion = get_conversion(item_id)
+                    if conversion:
+                        input_unit, factor = conversion[0], conversion[1]
+                    else:
+                        input_unit, factor = row[COL_MEASURE], 1
+                else:
+                    input_unit, factor = row[COL_MEASURE], 1
+                mapping[item_id] = {
+                    'item_id': item_id,
+                    'factor': factor,
+                    'input_unit': input_unit,
+                    'expected_system': float(row[COL_QUANTITY]),
+                }
+            return mapping
+
         def save_stocktake():
             from data_manager import create_backup
             backup_path = create_backup('before_stocktake')
@@ -4179,65 +4295,84 @@ class BarStockManagementSystem:
 
             note = note_entry.get().strip()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            recorded = 0
-            skipped = 0
+            mapping = count_map()
+            entries = []
             errors = 0
 
-            for item in item_entries:
-                val = counts.get(item['item_id'], '').strip()
+            for item_id, text in counts.items():
+                val = (text or '').strip()
                 if not val:
-                    skipped += 1
+                    continue
+                item = mapping.get(str(item_id))
+                if item is None:
                     continue
                 try:
                     counted_input = float(val)
-                    if counted_input < 0:
-                        errors += 1
-                        continue
-                    counted_system = counted_input * item['factor']
-                    variance = counted_system - item['expected_system']
-                    success = record_stocktake(
-                        item['item_id'], counted_system, item['expected_system'],
-                        variance, timestamp, note
-                    )
-                    if success:
-                        recorded += 1
-                    else:
-                        errors += 1
                 except ValueError:
                     errors += 1
+                    continue
+                if counted_input < 0:
+                    errors += 1
+                    continue
+                counted_system = counted_input * item['factor']
+                entries.append({
+                    'item_id': item['item_id'],
+                    'counted_quantity': counted_system,
+                    'expected_quantity': item['expected_system'],
+                    'variance': counted_system - item['expected_system'],
+                })
 
-            if recorded > 0:
-                msg = f"Stocktake saved successfully!\n\nRecorded: {recorded} items\nSkipped (blank): {skipped} items"
-                if errors > 0:
-                    msg += f"\nErrors: {errors} items"
-                messagebox.showinfo("Success", msg)
-                self.show_dashboard()
-            else:
+            skipped = max(0, len(mapping) - len(entries) - errors)
+
+            if not entries:
                 if errors > 0:
                     messagebox.showwarning("No Valid Entries", f"No valid counted quantities entered.\nErrors: {errors} items")
                 else:
                     messagebox.showwarning("No Entries", "No counted quantities entered. Please enter at least one count.")
+                return
+
+            # All snapshots, quantities and adjustment rows are written in one
+            # transaction, so a failure cannot leave a half-recorded stocktake.
+            result = record_stocktakes(entries, timestamp, note)
+            if not result.get('success'):
+                messagebox.showerror("Error", f"Stocktake was not saved:\n{result.get('error', 'unknown error')}")
+                return
+
+            msg = f"Stocktake saved successfully!\n\nRecorded: {result['recorded']} items\nSkipped (blank): {skipped} items"
+            if errors > 0:
+                msg += f"\nErrors: {errors} items"
+            messagebox.showinfo("Success", msg)
+
+            # Reload before showing the dashboard.  Without this the in-memory
+            # frames still held pre-stocktake quantities, and any later save
+            # (especially the old exit-time save) wrote them back over the
+            # stocktake.
+            self.refresh_data()
+            self.show_dashboard()
 
         def collect_counted_items():
-            """Return a list of valid counted items from the table."""
+            """Return every valid count, regardless of the current search filter."""
             counted_items = []
-            for item in item_entries:
-                val = counts.get(item['item_id'], '').strip()
+            mapping = count_map()
+            for item_id, text in counts.items():
+                val = (text or '').strip()
                 if not val:
+                    continue
+                item = mapping.get(str(item_id))
+                if item is None:
                     continue
                 try:
                     counted_input = float(val)
-                    if counted_input < 0:
-                        continue
-                    counted_system = counted_input * item['factor']
-                    counted_items.append({
-                        'item_id': item['item_id'],
-                        'counted_system': counted_system,
-                        'input_value': counted_input,
-                        'input_unit': item['input_unit']
-                    })
                 except ValueError:
                     continue
+                if counted_input < 0:
+                    continue
+                counted_items.append({
+                    'item_id': item['item_id'],
+                    'counted_system': counted_input * item['factor'],
+                    'input_value': counted_input,
+                    'input_unit': item['input_unit'],
+                })
             return counted_items
 
         def confirm_unit_warning(counted_items):
@@ -4271,14 +4406,14 @@ class BarStockManagementSystem:
 
             if not messagebox.askyesno(
                 "Confirm Baseline Reset",
-                f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} items).\n\n"
+                f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} of {len(count_map())} stock items).\n\n"
                 f"This will:\n"
                 f"  1. Save the stocktake snapshot\n"
-                f"  2. Archive ALL transactions before {timestamp}\n"
+                f"  2. Archive transactions before {timestamp} for the counted items only\n"
                 f"  3. Set inventory to your counted quantities\n"
                 f"  4. Log ACTION_STOCKTAKE_BASELINE transactions as the new starting point\n\n"
-                f"Old transactions will be preserved in an archive table for audit purposes.\n\n"
-                f"Reports from now on will only consider transactions from today onward.\n\n"
+                f"Items you did not count keep their current stock and history.\n\n"
+                f"Old transactions for counted items are preserved in an archive table for audit purposes.\n\n"
                 f"Are you sure you want to proceed?"
             ):
                 return
@@ -4318,14 +4453,14 @@ class BarStockManagementSystem:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if not messagebox.askyesno(
                 "Confirm Baseline Reset",
-                f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} items).\n\n"
+                f"You are about to set a NEW BASELINE using today's stocktake ({len(counted_items)} of {len(count_map())} stock items).\n\n"
                 f"This will:\n"
                 f"  1. Save the stocktake snapshot\n"
-                f"  2. Archive ALL transactions before {timestamp}\n"
+                f"  2. Archive transactions before {timestamp} for the counted items only\n"
                 f"  3. Set inventory to your counted quantities\n"
                 f"  4. Log ACTION_STOCKTAKE_BASELINE transactions as the new starting point\n\n"
-                f"Old transactions will be preserved in an archive table for audit purposes.\n\n"
-                f"Reports from now on will only consider transactions from today onward.\n\n"
+                f"Items you did not count keep their current stock and history.\n\n"
+                f"Old transactions for counted items are preserved in an archive table for audit purposes.\n\n"
                 f"Are you sure you want to proceed?"
             ):
                 return
@@ -4429,9 +4564,9 @@ class BarStockManagementSystem:
                 if not category or category == 'Unknown':
                     category = get_category(item_id)
 
-                # Transaction-based expected = current stock - expected remaining
-                # (this is the opening stock / what stock should be before any new transactions)
-                txn_expected = row[COL_QUANTITY] - expected_remaining.get(item_id, 0)
+                # Expected stock on the count sheet is simply the current system stock.
+                # The user physically counts against this; variance is Counted - Expected.
+                txn_expected = row[COL_QUANTITY]
 
                 inventory_data.append({
                     'item_id': item_id,
@@ -4709,7 +4844,7 @@ class BarStockManagementSystem:
                         self.log_df.loc[item_mask, COL_QUANTITY] = new_qty
                         self.log_df.loc[item_mask, COL_COST_PRICE] = new_cost
 
-                if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+                if self._persist():
                     messagebox.showinfo("Success", "Delivery updated successfully.", parent=top)
                     top.destroy()
                     self.view_delivery_history()
@@ -4741,7 +4876,7 @@ class BarStockManagementSystem:
             mask = (self.log_df[COL_TIMESTAMP] == timestamp) & (self.log_df[COL_ACTION] == ACTION_DELIVERY)
             self.log_df = self.log_df[~mask].reset_index(drop=True)
 
-            if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+            if self._persist():
                 messagebox.showinfo("Success", "Delivery deleted successfully.")
             else:
                 messagebox.showerror("Error", "Failed to save after deletion.")
@@ -5339,7 +5474,13 @@ class BarStockManagementSystem:
             if stocktake_rows:
                 data = [dict(row) for row in stocktake_rows]
                 stocktake_df = pd.DataFrame(data)
-                # Keep only the most recent entry per item_id
+                # Baseline-reset snapshots represent the new starting point, not a
+                # physical variance, so exclude them before picking the latest
+                # meaningful stocktake per item.
+                stocktake_df = stocktake_df[
+                    ~stocktake_df['note'].astype(str).str.contains('Baseline', case=False, na=False)
+                ]
+                # Keep only the most recent non-baseline entry per item_id
                 stocktake_df = stocktake_df.sort_values('timestamp', ascending=False)
                 stocktake_df = stocktake_df.drop_duplicates(subset='item_id', keep='first')
 
@@ -6293,10 +6434,11 @@ class BarStockManagementSystem:
             stocktake_data = None
             if stocktake_rows:
                 st_df = pd.DataFrame([dict(row) for row in stocktake_rows])
-                st_df = st_df.sort_values('timestamp', ascending=False)
-                st_df = st_df.drop_duplicates(subset='item_id', keep='first')
                 # Variance/surplus should only reflect true stocktake counts, not baselines
                 variance_st_df = st_df[~st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)]
+                # Then keep the latest meaningful (non-baseline) snapshot per item
+                variance_st_df = variance_st_df.sort_values('timestamp', ascending=False)
+                variance_st_df = variance_st_df.drop_duplicates(subset='item_id', keep='first')
                 # Bound stocktakes to the selected report date range. A stocktake taken before
                 # the period is not a surplus/shortfall for this report; one taken after the
                 # period belongs to a later report.
@@ -6460,8 +6602,8 @@ class BarStockManagementSystem:
                     if not item_name:
                         continue
 
-                    # Create item_id from name (lowercase, no spaces)
-                    item_id = item_name.lower().replace(' ', '_').replace('-', '_')
+                    # Create item_id using the same canonical normaliser as uploads.
+                    item_id = normalize_product_name(item_name)
 
                     # Calculate cost price per unit (if total_value and total_stock are valid)
                     if total_stock > 0 and total_value > 0:
@@ -6513,9 +6655,12 @@ class BarStockManagementSystem:
                                 [item_name, total_stock, cost_price, sell_price, measure, category, division]
                         items_updated += 1
                     else:
-                        # Add new item (price_locked defaults to False)
-                        new_item = pd.DataFrame([[item_id, item_name, total_stock, cost_price, sell_price, measure, category, False, division]],
-                                              columns=[COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_PRICE_LOCKED, COL_DIVISION])
+                        # Add new item with every inventory column populated.
+                        # Leaving allow_negative/reorder_level out produced NaN,
+                        # and bool(np.nan) is True, so imported items silently
+                        # became allowed to go negative.
+                        new_item = pd.DataFrame([[item_id, item_name, total_stock, cost_price, sell_price, measure, category, False, False, 0, division]],
+                                              columns=[COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_DIVISION])
                         self.inventory_df = pd.concat([self.inventory_df, new_item], ignore_index=True)
                         items_added += 1
 
@@ -6523,7 +6668,7 @@ class BarStockManagementSystem:
                     errors.append(f"Error processing '{row.get('Name', 'Unknown')}': {item_error}")
 
             # Save inventory
-            if InventoryDataManager.save_inventory(self.inventory_df):
+            if self._save_inventory():
                 self.update_dashboard_stats()
                 success_msg = f"Stock initialization complete!\n\n"
                 success_msg += f"Items added: {items_added}\n"
@@ -6621,7 +6766,7 @@ class BarStockManagementSystem:
                                                 COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON, COL_MEMBER_QTY, COL_NON_MEMBER_QTY])
 
             # Save the empty log and clear historical data
-            log_saved = InventoryDataManager.save_log(self.log_df)
+            log_saved = InventoryDataManager.save_log(self.log_df, allow_shrink=True)
             snapshots_cleared = clear_stocktake_snapshots()
             archive_cleared = clear_transaction_archive()
 
@@ -6822,10 +6967,15 @@ class BarStockManagementSystem:
                     except:
                         non_member_qty = None
 
-                    item_id = normalize_product_name(product_name)
-                    item_id = resolve_epos_item_id(item_id)
+                    normalized_id = normalize_product_name(product_name)
+                    item_id = resolve_epos_item_id(normalized_id)
+                    explicit_override = item_id != normalized_id
 
                     if item_id not in self.inventory_df[COL_ITEM_ID].values:
+                        if explicit_override:
+                            # Explicit EPOS mapping points to an item not in inventory; skip rather than guess.
+                            skipped_items.append(product_name)
+                            continue
                         match_found = False
                         for inv_id in self.inventory_df[COL_ITEM_ID].values:
                             inv_name = str(self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == inv_id, COL_ITEM_NAME].values[0]).lower()
@@ -6847,14 +6997,15 @@ class BarStockManagementSystem:
                     current_qty = item_row[COL_QUANTITY]
                     projected = current_qty - quantity
 
-                    # Use the CSV's own gross total (after discount, incl. VAT) for revenue.
-                    # This matches the EPOS 'Totals' column the user expects.
+                    # The CSV gross total is inc-VAT from the EPOS. The system now stores
+                    # revenue ex-VAT, so divide by 1.2 before recording.
                     csv_total = row.get('Totals')
                     try:
-                        csv_revenue = float(csv_total) if pd.notna(csv_total) else None
+                        csv_revenue_inc = float(csv_total) if pd.notna(csv_total) else None
                     except Exception:
-                        csv_revenue = None
-                    line_revenue = csv_revenue if csv_revenue is not None and csv_revenue >= 0 else quantity * sell_price
+                        csv_revenue_inc = None
+                    csv_revenue = csv_revenue_inc / 1.2 if csv_revenue_inc is not None and csv_revenue_inc >= 0 else None
+                    line_revenue = csv_revenue if csv_revenue is not None else quantity * sell_price
 
                     preview_items.append({
                         'item_id': item_id,
@@ -7057,7 +7208,7 @@ class BarStockManagementSystem:
 
                 transactions.append(f"{p['name']}: {quantity:.1f} units")
 
-            if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+            if self._persist():
                 self.update_dashboard_stats()
                 add_upload_hash(file_hash, os.path.basename(filepath), datetime.now().isoformat(), date_range_str, total_row_count, 'sales')
 
@@ -7140,10 +7291,15 @@ class BarStockManagementSystem:
                     if quantity <= 0:
                         continue
 
-                    item_id = normalize_product_name(product_name)
-                    item_id = resolve_epos_item_id(item_id)
+                    normalized_id = normalize_product_name(product_name)
+                    item_id = resolve_epos_item_id(normalized_id)
+                    explicit_override = item_id != normalized_id
 
                     if item_id not in self.inventory_df[COL_ITEM_ID].values:
+                        if explicit_override:
+                            # Explicit EPOS mapping points to an item not in inventory; skip rather than guess.
+                            skipped_items.append(product_name)
+                            continue
                         match_found = False
                         for inv_id in self.inventory_df[COL_ITEM_ID].values:
                             inv_name = str(self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == inv_id, COL_ITEM_NAME].values[0]).lower()
@@ -7317,7 +7473,7 @@ class BarStockManagementSystem:
 
                 transactions.append(f"{p['name']}: {quantity:.1f} units")
 
-            if InventoryDataManager.save_inventory(self.inventory_df) and InventoryDataManager.save_log(self.log_df):
+            if self._persist():
                 self.update_dashboard_stats()
                 add_upload_hash(file_hash, os.path.basename(filepath), datetime.now().isoformat(), date_range_str, total_row_count, 'complimentary')
 
@@ -7393,11 +7549,14 @@ class BarStockManagementSystem:
         return full_description, invoice_qty, case_size, unit_price, vat_code
 
     @staticmethod
-    def _invoice_price_with_vat(unit_price_ex: float, vat_code: str) -> float:
-        """Convert an ex-VAT invoice price to inc-VAT using the Booker VAT code."""
-        if vat_code and vat_code.upper() == 'A':
-            return unit_price_ex  # VAT exempt
-        return unit_price_ex * 1.2
+    def _invoice_price_ex_vat(unit_price_ex: float, vat_code: str) -> float:
+        """Return the ex-VAT invoice price.
+
+        The system now stores all prices ex-VAT, so no VAT multiplier is applied.
+        VAT-exempt items (code A) are returned unchanged; standard items (code B)
+        are already excluding VAT in the invoice extract.
+        """
+        return unit_price_ex
 
     def _units_per_case_from_desc(self, desc, case_size):
         """Infer actual stock units in a case from a Booker description."""
@@ -7421,6 +7580,13 @@ class BarStockManagementSystem:
             'walkers crisps ready salted': 'walkers',
             'walkers prawn cocktail 32.5g': 'walkers',
             'walkers salt & vinegar 32.5g': 'walkers',
+            'kp dry roasted peanut p card 21 50g': 'nuts',
+            'kp original saltd pnut card 21 50g': 'nuts',
+            'sunpride orange juice 12 1ltr': 'carton_juice',
+            'apple juice': 'carton_juice',
+            'orange juice': 'carton_juice',
+            'cranberry juice': 'carton_juice',
+            'pineapple juice': 'carton_juice',
             'pringles bbq': 'pringles',
             'pringles original': 'pringles',
             'pringles salt & vinegar': 'pringles',
@@ -7464,7 +7630,7 @@ class BarStockManagementSystem:
             'brockmans gin': 'brockmans_gin',
             'kraken spiced rum 70cl': 'kraken_rum',
             'bacardi carta blanca': 'bacardi',
-            'cointreau': 'cointreau',
+            'cointreau': 'Cointreau',
             'dead mans fingers spiced rum': 'dead_mans_fingers',
             'fever tree prem indian tonic': 'tonic',
             'f/tree refreshingly lghttnic': 'tonic',
@@ -7484,7 +7650,7 @@ class BarStockManagementSystem:
             'coca cola original bib': 'coke_pm',
             'diet coke bag in box': 'diet_coke_pm',
             'birra moretti 0%': 'birra_moretti_zero',
-            'birra moretti nrb uk': 'moretti_bottle',
+            'birra moretti nrb uk': 'Moretti_Bottle',
             'aperol': 'aperol',
             'baileys irish cream': 'baileys_50ml',
             'captain morgan spiced rum': 'morgans',
@@ -7493,6 +7659,18 @@ class BarStockManagementSystem:
             'kahlua coffee liqueur': 'kahlua',
             'tanqueray sevilla': 'tanqueray_sevilla',
             'magners 4x500ml': 'magners',
+            # Booker draught kegs
+            'poretti': 'poretti',
+            'innis and gunn': 'innis_and_gunn',
+            'innis & gunn': 'innis_and_gunn',
+            'innis gunn': 'innis_and_gunn',
+            'orchard pig': 'orchard_pig',
+            'guinness keg': 'guinness',
+            'guinness draught': 'guinness',
+            'caledonian best': 'caledonian_best',
+
+            # Cart/snack aliases where Booker descriptions omit punctuation.
+            'cart roll tea coffee': 'cart_roll_tea_coffee',
         }
 
     def _invoice_unit_matches_conversion(self, desc, input_unit):
@@ -7530,27 +7708,62 @@ class BarStockManagementSystem:
         'old jamaica ginger beer',
     ]
 
+    CARTON_JUICE_AVERAGE_GROUP = [
+        'apple juice',
+        'orange juice',
+        'cranberry juice',
+        'pineapple juice',
+    ]
+
     def _is_can_average_description(self, desc: str) -> bool:
         """Return True if this invoice description is part of the mixed can/bottle average group."""
         desc_lower = desc.lower().strip()
         return any(desc_lower.startswith(key) or key in desc_lower for key in self.CAN_AVERAGE_GROUP)
 
+    def _is_carton_juice_average_description(self, desc: str) -> bool:
+        """Return True if this invoice description is part of the carton juice average group."""
+        desc_lower = desc.lower().strip()
+        return any(desc_lower.startswith(key) or key in desc_lower for key in self.CARTON_JUICE_AVERAGE_GROUP)
+
     def _compute_can_average_cost(self, aggregated: dict, invoice_lines: list) -> tuple[float, int]:
-        """Compute weighted-average inc-VAT per-unit cost from the mixed can/bottle group.
+        """Compute weighted-average ex-VAT per-unit cost from the mixed can/bottle group.
 
         Returns (average_cost_per_unit, total_units).
         """
-        total_inc_value = 0.0
+        total_ex_value = 0.0
         total_units = 0
         for desc, qty, case_size, price, vat_code in invoice_lines:
             if not self._is_can_average_description(desc):
                 continue
             upc = self._units_per_case_from_desc(desc, case_size)
             total_units += qty * upc
-            total_inc_value += qty * self._invoice_price_with_vat(price, vat_code)
+            total_ex_value += qty * self._invoice_price_ex_vat(price, vat_code)
         if total_units == 0:
             return 0.0, 0
-        return total_inc_value / total_units, total_units
+        return total_ex_value / total_units, total_units
+
+    def _compute_carton_juice_average_cost(self, aggregated: dict, invoice_lines: list) -> tuple[float, int]:
+        """Compute weighted-average ex-VAT per-pint cost from mixed carton juices.
+
+        Invoice lines are priced per litre; the stock system tracks carton_juice in
+        pints, so the result is converted from £/litre to £/pint.
+
+        Returns (average_cost_per_pint, total_litres).
+        """
+        from conversions import PINTS_PER_LITRE
+        total_ex_value = 0.0
+        total_litres = 0
+        for desc, qty, case_size, price, vat_code in invoice_lines:
+            if not self._is_carton_juice_average_description(desc):
+                continue
+            upc = self._units_per_case_from_desc(desc, case_size)
+            total_litres += qty * upc
+            total_ex_value += qty * self._invoice_price_ex_vat(price, vat_code)
+        if total_litres == 0:
+            return 0.0, 0
+        per_litre = total_ex_value / total_litres
+        per_pint = per_litre / PINTS_PER_LITRE
+        return per_pint, total_litres
 
     def upload_delivery_invoice_price_check(self):
         """Upload Booker invoice PDFs and compare prices to current system costs."""
@@ -7593,13 +7806,15 @@ class BarStockManagementSystem:
                 aggregated[key]['vat_code'] = vat_code
 
             inventory_ids = {str(i).lower().strip() for i in self.inventory_df[COL_ITEM_ID].values}
-            cost_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE]))
-            name_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_ITEM_NAME]))
-            measure_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_MEASURE]))
+            # Case-insensitive lookups so legacy IDs like Cointreau/Moretti_Bottle resolve correctly.
+            cost_by_id = {str(k).lower(): v for k, v in zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE])}
+            name_by_id = {str(k).lower(): v for k, v in zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_ITEM_NAME])}
+            measure_by_id = {str(k).lower(): v for k, v in zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_MEASURE])}
 
             comparison_rows = []
             unmatched = []
             can_group_seen = False
+            carton_juice_group_seen = False
             for desc, data in aggregated.items():
                 item_id = self._map_invoice_description_to_item_id(desc, inventory_ids)
                 if item_id is None:
@@ -7626,32 +7841,46 @@ class BarStockManagementSystem:
                         f"Weighted average across {total_cans} units "
                         "(Can/J20 mix)"
                     )
+                # Fold all carton-juice lines into a single synthetic Carton Juice row
+                elif self._is_carton_juice_average_description(desc):
+                    if carton_juice_group_seen:
+                        continue
+                    carton_juice_group_seen = True
+                    invoice_per_unit, total_litres = self._compute_carton_juice_average_cost(aggregated, invoice_lines)
+                    if total_litres == 0:
+                        continue
+                    item_id = 'carton_juice'
+                    invoice_unit = 'pint'
+                    invoice_desc = (
+                        f"Weighted average across {total_litres:.0f} litres "
+                        "(Apple/Orange/Cranberry/Pineapple mix, converted to £/pint)"
+                    )
                 else:
-                    measure = measure_by_id.get(item_id, '')
+                    measure = measure_by_id.get(item_id.lower(), '')
                     invoice_unit = measure or 'unit'
                     upc = self._units_per_case_from_desc(desc, data['case_size'])
-                    case_inc = self._invoice_price_with_vat(data['price'], data['vat_code'])
+                    case_ex = self._invoice_price_ex_vat(data['price'], data['vat_code'])
 
                     conv = get_conversion(item_id)
                     if conv and self._invoice_unit_matches_conversion(desc, conv[0]):
                         input_unit, factor, output_unit = conv
-                        invoice_per_unit = (case_inc / upc) / factor
+                        invoice_per_unit = (case_ex / upc) / factor
                         invoice_unit = output_unit
                     else:
-                        invoice_per_unit = case_inc / upc
+                        invoice_per_unit = case_ex / upc
                         if conv and not self._invoice_unit_matches_conversion(desc, conv[0]):
                             invoice_unit = f"case/{upc}"
                     invoice_desc = desc
 
-                current_cost = cost_by_id.get(item_id, 0.0)
+                current_cost = cost_by_id.get(item_id.lower(), 0.0)
                 diff = invoice_per_unit - current_cost
                 diff_pct = (diff / current_cost * 100) if current_cost > 0 else 0.0
 
                 comparison_rows.append({
                     'item_id': item_id,
-                    'item_name': name_by_id.get(item_id, item_id),
+                    'item_name': name_by_id.get(item_id.lower(), item_id),
                     'invoice_desc': invoice_desc,
-                    'measure': measure_by_id.get(item_id, ''),
+                    'measure': measure_by_id.get(item_id.lower(), ''),
                     'invoice_unit': invoice_unit,
                     'current_cost': current_cost,
                     'invoice_cost': invoice_per_unit,
@@ -7821,9 +8050,18 @@ class BarStockManagementSystem:
             log_entries.append([item_id, ACTION_DELIVERY, 0.0, timestamp, new_cost, sell_price, supplier, "", "Invoice price update"])
             updated_items.append(item_id)
 
+        if log_entries:
+            new_log_df = pd.DataFrame(
+                log_entries,
+                columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON]
+            )
+            self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
+
         if updated_items:
-            if not InventoryDataManager.save_inventory(self.inventory_df):
-                raise RuntimeError("Failed to save inventory")
+            # Costs and their audit rows must land together: a cost change with
+            # no log row is exactly what made earlier invoice runs unrepeatable.
+            if not self._persist():
+                raise RuntimeError("Failed to save invoice price updates")
 
             script_dir = get_script_directory()
             for item_id in updated_items:
@@ -7837,15 +8075,6 @@ class BarStockManagementSystem:
                     quantity=quantity,
                     total_value=total_value,
                 )
-
-        if log_entries:
-            new_log_df = pd.DataFrame(
-                log_entries,
-                columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON]
-            )
-            self.log_df = pd.concat([self.log_df, new_log_df], ignore_index=True)
-            if not InventoryDataManager.save_log(self.log_df):
-                raise RuntimeError("Failed to save transaction log")
 
 
 if __name__ == "__main__":
