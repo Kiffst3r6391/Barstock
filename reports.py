@@ -25,6 +25,7 @@ from sales_mapping import is_hidden_from_stock_view
 from supplier_mapping import get_supplier, get_supplier_order, supplier_rank
 from order_sheet_layout import get_order_sheet_layout
 from conversions import parse_display_date, DATE_FORMAT_DISPLAY
+from money import allocate_money, round_money, sum_money
 
 
 def _format_delivery_date(timestamp_str):
@@ -86,39 +87,119 @@ def _split_sales_revenue_and_cost(sales_df: pd.DataFrame, member_discount_pct: f
         has_actual = split_sum > 0
 
         if has_actual.any():
-            qty = df.loc[has_actual, COL_QUANTITY]
-            member_qty = df.loc[has_actual, COL_MEMBER_QTY].fillna(0)
-            non_member_qty = df.loc[has_actual, COL_NON_MEMBER_QTY].fillna(0)
+            def _floats(series):
+                """Plain float array, so an object-dtype log cannot leak into
+                the arithmetic (a fresh session concatenates frames and every
+                column becomes object)."""
+                return pd.to_numeric(series, errors='coerce').fillna(0.0).to_numpy(dtype=float)
+
+            qty = _floats(df.loc[has_actual, COL_QUANTITY])
+            member_qty = _floats(df.loc[has_actual, COL_MEMBER_QTY])
+            non_member_qty = _floats(df.loc[has_actual, COL_NON_MEMBER_QTY])
+            sell = _floats(df.loc[has_actual, COL_SELL_PRICE])
+            cost = _floats(df.loc[has_actual, "total_cost"])
+
             known_total = member_qty + non_member_qty
 
             # Any quantity not explicitly split is treated as non-member.
-            remaining = np.maximum(qty - known_total, 0)
+            remaining = np.maximum(qty - known_total, 0.0)
             member_qty_est = member_qty
             non_member_qty_est = non_member_qty + remaining
 
-            df.loc[has_actual, "member_revenue"] = (
-                member_qty_est * df.loc[has_actual, COL_SELL_PRICE] * member_mult
-            )
-            df.loc[has_actual, "non_member_revenue"] = (
-                non_member_qty_est * df.loc[has_actual, COL_SELL_PRICE]
-            )
+            actual_total = qty * sell
+            member_revenue = member_qty_est * sell * member_mult
+            non_member_revenue = non_member_qty_est * sell
 
             # Scale so member + non-member revenue equals total revenue for every transaction.
-            actual_total = df.loc[has_actual, COL_QUANTITY] * df.loc[has_actual, COL_SELL_PRICE]
-            split_total = df.loc[has_actual, "member_revenue"] + df.loc[has_actual, "non_member_revenue"]
-            revenue_scale = np.where(split_total > 0, actual_total / split_total, 1.0)
-            df.loc[has_actual, "member_revenue"] *= revenue_scale
-            df.loc[has_actual, "non_member_revenue"] *= revenue_scale
+            split_total = member_revenue + non_member_revenue
+            revenue_scale = np.divide(
+                actual_total, split_total,
+                out=np.ones_like(actual_total), where=split_total > 0)
+            member_revenue = member_revenue * revenue_scale
+            non_member_revenue = non_member_revenue * revenue_scale
 
-            cost = df.loc[has_actual, "total_cost"]
-            df.loc[has_actual, "member_cost"] = np.where(
+            member_cost = np.where(
                 qty > 0,
-                cost * (member_qty_est / qty),
+                cost * np.divide(member_qty_est, qty,
+                                 out=np.zeros_like(qty), where=qty > 0),
                 0.0,
             )
-            df.loc[has_actual, "non_member_cost"] = cost - df.loc[has_actual, "member_cost"]
+            non_member_cost = cost - member_cost
+
+            df.loc[has_actual, "member_revenue"] = member_revenue
+            df.loc[has_actual, "non_member_revenue"] = non_member_revenue
+            df.loc[has_actual, "member_cost"] = member_cost
+            df.loc[has_actual, "non_member_cost"] = non_member_cost
 
     return df
+
+
+SALES_MONEY_COLUMNS = [
+    'sales_qty', 'member_revenue', 'non_member_revenue', 'member_cost',
+    'non_member_cost', 'total_revenue', 'total_cost', 'member_gp',
+    'non_member_gp', 'gp',
+]
+
+
+def sales_money_by_item(log_df, member_discount_pct=10):
+    """Canonical per-item sales money, used by every report and the dashboard.
+
+    Total revenue, member revenue, total cost and member cost are each
+    allocated to the penny across the selling items, so their rows add up
+    exactly to the period totals. Non-member revenue/cost and every GP figure
+    are derived by subtraction, so each row's components add up too.
+    """
+    if log_df is None or log_df.empty:
+        return pd.DataFrame(columns=SALES_MONEY_COLUMNS)
+
+    sales_df = log_df[log_df[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])].copy()
+    if sales_df.empty:
+        return pd.DataFrame(columns=SALES_MONEY_COLUMNS)
+
+    sales_df = _split_sales_revenue_and_cost(sales_df, member_discount_pct)
+    grouped = sales_df.groupby(COL_ITEM_ID).agg({
+        COL_QUANTITY: 'sum',
+        'total_revenue': 'sum',
+        'member_revenue': 'sum',
+        'total_cost': 'sum',
+        'member_cost': 'sum',
+    }).sort_index()
+
+    grouped['total_revenue'] = allocate_money(grouped['total_revenue'].tolist())
+    grouped['member_revenue'] = allocate_money(grouped['member_revenue'].tolist())
+    grouped['total_cost'] = allocate_money(grouped['total_cost'].tolist())
+    grouped['member_cost'] = allocate_money(grouped['member_cost'].tolist())
+
+    grouped['non_member_revenue'] = grouped['total_revenue'] - grouped['member_revenue']
+    grouped['non_member_cost'] = grouped['total_cost'] - grouped['member_cost']
+    grouped['member_gp'] = grouped['member_revenue'] - grouped['member_cost']
+    grouped['non_member_gp'] = grouped['non_member_revenue'] - grouped['non_member_cost']
+    grouped['gp'] = grouped['total_revenue'] - grouped['total_cost']
+
+    grouped = grouped.rename(columns={COL_QUANTITY: 'sales_qty'})
+    return grouped[SALES_MONEY_COLUMNS]
+
+
+def item_division_lookup(inventory_df):
+    """Map item_id -> division from the live inventory, falling back to Items.csv.
+
+    The Division report and the comprehensive PDF both use this lookup, so a
+    sale lands in the same division in both.
+    """
+    division_mapping = get_division_mapping(os.path.dirname(os.path.abspath(__file__)))
+    lookup = {}
+    if inventory_df is None or inventory_df.empty:
+        return lookup
+
+    for _, row in inventory_df.iterrows():
+        item_id = row[COL_ITEM_ID]
+        live = row.get(COL_DIVISION, '')
+        if pd.notna(live) and str(live).strip():
+            lookup[item_id] = normalize_division_name(str(live))
+        else:
+            lookup[item_id] = normalize_division_name(
+                division_mapping.get(str(row[COL_ITEM_NAME]).lower(), 'Unknown'))
+    return lookup
 
 
 def filter_log_by_date(log_df, start_date=None, end_date=None):
@@ -179,7 +260,7 @@ def filter_log_by_date(log_df, start_date=None, end_date=None):
     return filtered
 
 
-def calculate_expected_remaining_series(log_df):
+def calculate_expected_remaining_series(log_df, clamp_negative=True):
     """Calculate expected remaining stock for all items from transaction log.
 
     A Stocktake Baseline row acts as a reset: expected stock at the baseline
@@ -203,6 +284,10 @@ def calculate_expected_remaining_series(log_df):
     included because stock is deducted when a tab is opened. Consumption
     reporting should use CONSUMPTION_ACTIONS (which excludes Open Tab) so that
     tabs are not counted as sold/wasted before they are closed.
+
+    ``clamp_negative`` keeps reports from inventing a negative opening stock
+    when more was sold than the baseline held. Reconciliation passes False so
+    the ledger's true balance is compared (an oversold line really is negative).
     """
     if log_df.empty:
         return pd.Series(dtype=float)
@@ -240,22 +325,39 @@ def calculate_expected_remaining_series(log_df):
     stocktake_adjustment = pivot.get(ACTION_STOCKTAKE_ADJUSTMENT, 0)
     supplier_return = pivot.get(ACTION_SUPPLIER_RETURN, 0)
 
-    # Compute parent adjustments dynamically from child sales instead of relying on log entries
+    # Compute parent adjustments dynamically from child sales instead of relying on log entries.
+    # A parent's baseline also resets its children's deductions: a child sale that
+    # happened before the parent was counted is already inside the physical count,
+    # so deducting it again would understate the parent's expected stock. Children
+    # are not on the count sheet and keep their whole history, so the child's own
+    # baseline cannot do this job.
     from sales_mapping import SALES_TO_PARENT
+    baseline_ts_lower = {}
+    if latest_baseline_ts is not None and not latest_baseline_ts.empty:
+        baseline_ts_lower = {str(k).lower(): str(v) for k, v in latest_baseline_ts.items()}
+
     computed_parent_adj = {}
     for child_id, mapping in SALES_TO_PARENT.items():
         if not mapping:
             continue
         parent_items, factors, _ = mapping[:3]
-        child_log = effective_log[effective_log[COL_ITEM_ID].str.lower() == child_id]
-        sales_qty = child_log[child_log[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])][COL_QUANTITY].sum()
-        comp_qty = child_log[child_log[COL_ACTION] == ACTION_COMPLIMENTARY][COL_QUANTITY].sum()
-        total = sales_qty + comp_qty
         if isinstance(parent_items, list):
-            for p_id, factor in zip(parent_items, factors):
-                computed_parent_adj[p_id.lower()] = computed_parent_adj.get(p_id.lower(), 0) + total * factor
+            pairs = list(zip(parent_items, factors))
         else:
-            computed_parent_adj[parent_items.lower()] = computed_parent_adj.get(parent_items.lower(), 0) + total * factors
+            pairs = [(parent_items, factors)]
+        child_log = effective_log[effective_log[COL_ITEM_ID].str.lower() == child_id]
+        sales_rows = child_log[child_log[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])]
+        comp_rows = child_log[child_log[COL_ACTION] == ACTION_COMPLIMENTARY]
+        for p_id, factor in pairs:
+            parent_key = p_id.lower()
+            parent_ts = baseline_ts_lower.get(parent_key)
+            if parent_ts is None:
+                total = sales_rows[COL_QUANTITY].sum() + comp_rows[COL_QUANTITY].sum()
+            else:
+                parent_sales = sales_rows[sales_rows[COL_TIMESTAMP].astype(str) >= parent_ts]
+                parent_comp = comp_rows[comp_rows[COL_TIMESTAMP].astype(str) >= parent_ts]
+                total = parent_sales[COL_QUANTITY].sum() + parent_comp[COL_QUANTITY].sum()
+            computed_parent_adj[parent_key] = computed_parent_adj.get(parent_key, 0) + total * factor
 
     # Build a parent_adj Series aligned with the pivot index (case-insensitive)
     all_item_ids = list(pivot.index)
@@ -268,7 +370,7 @@ def calculate_expected_remaining_series(log_df):
     # Replace any remaining negative expected remaining with the baseline anchor
     # when a baseline exists, so current_stock - expected_remaining never invents
     # a negative opening stock.
-    if not baseline_quantities.empty:
+    if clamp_negative and not baseline_quantities.empty:
         for item_id in result.index:
             if item_id in baseline_quantities.index and result[item_id] < 0:
                 result[item_id] = float(baseline_quantities[item_id])
@@ -332,65 +434,45 @@ def build_gp_report_data(log_df, member_discount_pct=10):
     Total Cost, Total Revenue, GP, GP%, Member Revenue, Non-Member Revenue,
     Member GP, Member GP%, Non-Member GP, Non-Member GP%
     """
-    if log_df.empty:
-        return pd.DataFrame(columns=['Total Cost', 'Total Revenue', 'GP', 'GP%',
-                                     'Member Revenue', 'Non-Member Revenue',
-                                     'Member GP', 'Member GP%',
-                                     'Non-Member GP', 'Non-Member GP%'])
+    columns = ['Total Cost', 'Total Revenue', 'GP', 'GP%',
+               'Member Revenue', 'Non-Member Revenue',
+               'Member GP', 'Member GP%',
+               'Non-Member GP', 'Non-Member GP%']
+    if log_df is None or log_df.empty:
+        return pd.DataFrame(columns=columns)
 
     # Gross Profit Report should only consider Sales data
-    sales_df = log_df[log_df[COL_ACTION] .isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])].copy()
-    if sales_df.empty:
-        return pd.DataFrame(columns=['Total Cost', 'Total Revenue', 'GP', 'GP%',
-                                     'Member Revenue', 'Non-Member Revenue',
-                                     'Member GP', 'Member GP%',
-                                     'Non-Member GP', 'Non-Member GP%'])
+    item_money = sales_money_by_item(log_df, member_discount_pct)
+    if item_money.empty:
+        return pd.DataFrame(columns=columns)
 
-    sales_df = _split_sales_revenue_and_cost(sales_df, member_discount_pct)
+    item_summary = item_money.rename(columns={
+        'total_cost': 'Total Cost',
+        'total_revenue': 'Total Revenue',
+        'gp': 'GP',
+        'member_revenue': 'Member Revenue',
+        'non_member_revenue': 'Non-Member Revenue',
+        'member_gp': 'Member GP',
+        'non_member_gp': 'Non-Member GP',
+    })
 
-    # Aggregate per item
-    item_summary = sales_df.groupby(COL_ITEM_ID).agg({
-        COL_QUANTITY: 'sum',
-        'total_cost': 'sum',
-        'total_revenue': 'sum',
-        COL_COST_PRICE: 'mean',
-        COL_SELL_PRICE: 'mean',
-        'member_revenue': 'sum',
-        'non_member_revenue': 'sum',
-        'member_cost': 'sum',
-        'non_member_cost': 'sum'
-    }).rename(columns={COL_QUANTITY: 'sales_qty', 'total_cost': 'sales_cost', 'total_revenue': 'sales_revenue'})
-
-    item_summary['member_gp'] = item_summary['member_revenue'] - item_summary['member_cost']
-    item_summary['non_member_gp'] = item_summary['non_member_revenue'] - item_summary['non_member_cost']
-    item_summary['total_revenue'] = item_summary['member_revenue'] + item_summary['non_member_revenue']
-    item_summary['gp'] = item_summary['member_gp'] + item_summary['non_member_gp']
-
-    item_summary['member_gp_pct'] = np.where(
-        item_summary['member_revenue'] > 0,
-        item_summary['member_gp'] / item_summary['member_revenue'] * 100,
+    item_summary['GP%'] = np.where(
+        item_summary['Total Revenue'] > 0,
+        item_summary['GP'] / item_summary['Total Revenue'] * 100,
         0.0
     )
-    item_summary['non_member_gp_pct'] = np.where(
-        item_summary['non_member_revenue'] > 0,
-        item_summary['non_member_gp'] / item_summary['non_member_revenue'] * 100,
+    item_summary['Member GP%'] = np.where(
+        item_summary['Member Revenue'] > 0,
+        item_summary['Member GP'] / item_summary['Member Revenue'] * 100,
         0.0
     )
-    item_summary['gp_pct'] = np.where(
-        item_summary['total_revenue'] > 0,
-        item_summary['gp'] / item_summary['total_revenue'] * 100,
+    item_summary['Non-Member GP%'] = np.where(
+        item_summary['Non-Member Revenue'] > 0,
+        item_summary['Non-Member GP'] / item_summary['Non-Member Revenue'] * 100,
         0.0
     )
 
-    result = item_summary[['sales_cost', 'total_revenue', 'gp', 'gp_pct',
-                           'member_revenue', 'non_member_revenue',
-                           'member_gp', 'member_gp_pct',
-                           'non_member_gp', 'non_member_gp_pct']].copy()
-    result.columns = ['Total Cost', 'Total Revenue', 'GP', 'GP%',
-                      'Member Revenue', 'Non-Member Revenue',
-                      'Member GP', 'Member GP%',
-                      'Non-Member GP', 'Non-Member GP%']
-    return result.round(2)
+    return item_summary[columns].round(2)
 
 
 def build_surplus_report_data(inventory_df, log_df):
@@ -447,6 +529,11 @@ def build_surplus_report_data(inventory_df, log_df):
             'Variance Value': variance_value
         })
 
+    # Allocate variance values so the item rows add up to the net variance shown.
+    variance_values = allocate_money([row['Variance Value'] for row in report_data])
+    for row, value in zip(report_data, variance_values):
+        row['Variance Value'] = value
+
     return report_data
 
 
@@ -456,57 +543,47 @@ def build_division_report_data(inventory_df, log_df, member_discount_pct=10):
     Returns DataFrame with columns: Division, Total Quantity, Total Revenue,
     Total Cost, GP, GP%, Member Revenue, Member GP, Member GP%
     """
-    if log_df.empty:
-        return pd.DataFrame(columns=['Division', 'Total Quantity', 'Total Revenue',
-                                     'Total Cost', 'GP', 'GP%', 'Member Revenue',
-                                     'Member GP', 'Member GP%'])
+    columns = ['Division', 'Total Quantity', 'Total Revenue',
+               'Total Cost', 'GP', 'GP%', 'Member Revenue',
+               'Member GP', 'Member GP%',
+               'Non-Member Revenue', 'Non-Member GP', 'Non-Member GP%']
+    if log_df is None or log_df.empty:
+        return pd.DataFrame(columns=columns)
 
-    division_mapping = get_division_mapping(os.path.dirname(os.path.abspath(__file__)))
+    item_money = sales_money_by_item(log_df, member_discount_pct)
+    if item_money.empty:
+        return pd.DataFrame(columns=columns)
 
-    sales_log = log_df[log_df[COL_ACTION].str.contains(ACTION_SALES, na=False)]
-    if sales_log.empty:
-        return pd.DataFrame(columns=['Division', 'Total Quantity', 'Total Revenue',
-                                     'Total Cost', 'GP', 'GP%', 'Member Revenue',
-                                     'Member GP', 'Member GP%'])
-
-    # Prefer the inventory division column; fall back to Items.csv name mapping only when empty.
-    if COL_DIVISION in inventory_df.columns:
-        sales_with_names = sales_log.merge(
-            inventory_df[[COL_ITEM_ID, COL_ITEM_NAME, COL_DIVISION]], on=COL_ITEM_ID, how='left'
-        )
-
-        def _resolve_division(row):
-            div = row[COL_DIVISION]
-            if pd.notna(div) and str(div).strip():
-                return normalize_division_name(str(div))
-            return normalize_division_name(division_mapping.get(str(row[COL_ITEM_NAME]).lower(), 'Unknown'))
-
-        sales_with_names['Division'] = sales_with_names.apply(_resolve_division, axis=1)
-    else:
-        sales_with_names = sales_log.merge(
-            inventory_df[[COL_ITEM_ID, COL_ITEM_NAME]], on=COL_ITEM_ID, how='left'
-        )
-        sales_with_names['Division'] = sales_with_names[COL_ITEM_NAME].apply(
-            lambda x: normalize_division_name(division_mapping.get(str(x).lower(), 'Unknown'))
-        )
-
-    sales_with_names = _split_sales_revenue_and_cost(sales_with_names, member_discount_pct)
+    # Same division source as the comprehensive report: the live inventory
+    # column first, Items.csv only where that column is blank.
+    lookup = item_division_lookup(inventory_df)
+    sales_with_names = item_money.copy()
+    sales_with_names['Division'] = [
+        lookup.get(item_id, 'Unknown') for item_id in sales_with_names.index
+    ]
 
     division_summary = sales_with_names.groupby('Division').agg({
-        COL_QUANTITY: 'sum',
+        'sales_qty': 'sum',
         'member_revenue': 'sum',
         'non_member_revenue': 'sum',
+        'total_revenue': 'sum',
+        'total_cost': 'sum',
         'member_cost': 'sum',
+        'member_gp': 'sum',
+        'non_member_gp': 'sum',
         'non_member_cost': 'sum',
-        'total_cost': 'sum'
+        'gp': 'sum',
     }).reset_index()
-    division_summary.columns = ['Division', 'Total Quantity', 'Member Revenue', 'Non-Member Revenue',
-                                'Member Cost', 'Non-Member Cost', 'Total Cost']
-    division_summary['Total Revenue'] = division_summary['Member Revenue'] + division_summary['Non-Member Revenue']
+    division_summary.columns = [
+        'Division', 'Total Quantity', 'Member Revenue', 'Non-Member Revenue',
+        'Total Revenue', 'Total Cost', 'Member Cost', 'Member GP',
+        'Non-Member GP', 'Non-Member Cost', 'GP',
+    ]
 
-    division_summary['GP'] = division_summary['Total Revenue'] - division_summary['Total Cost']
-    division_summary['Member GP'] = division_summary['Member Revenue'] - division_summary['Member Cost']
-    division_summary['Non-Member GP'] = division_summary['Non-Member Revenue'] - division_summary['Non-Member Cost']
+    money_columns = ['Member Revenue', 'Non-Member Revenue', 'Total Revenue',
+                     'Total Cost', 'Member GP', 'Non-Member GP', 'GP']
+    for column in money_columns:
+        division_summary[column] = [round_money(v) for v in division_summary[column]]
 
     division_summary['GP%'] = np.where(
         division_summary['Total Revenue'] > 0,
@@ -525,10 +602,7 @@ def build_division_report_data(inventory_df, log_df, member_discount_pct=10):
     )
 
     division_summary = division_summary.sort_values('Total Revenue', ascending=False)
-    result = division_summary[['Division', 'Total Quantity', 'Total Revenue', 'Total Cost', 'GP', 'GP%',
-                               'Member Revenue', 'Member GP', 'Member GP%',
-                               'Non-Member Revenue', 'Non-Member GP', 'Non-Member GP%']].copy()
-    return result.round(2)
+    return division_summary[columns].round(2)
 
 
 def build_draught_yield_data(inventory_df, log_df):
@@ -753,8 +827,19 @@ def _get_latest_baseline_snapshot():
     Returns (timestamp_str, snapshot_dict) where snapshot_dict maps item_id to
     the counted system quantity at baseline. Returns (None, {}) if no baseline
     reset audit record exists.
+
+    Older resets recorded an empty payload in the audit table, so the physical
+    Baseline rows in ``stocktake_snapshots`` are used as a fallback. Without
+    the snapshot, reports cannot anchor opening stock and every item starts
+    from zero.
     """
-    db_path = os.path.expanduser('~/Library/Application Support/BarStockManagement/barstock.db')
+    try:
+        import data_manager
+        db_path = getattr(data_manager, 'DB_PATH', None)
+    except Exception:
+        db_path = None
+    if not db_path:
+        db_path = os.path.expanduser('~/Library/Application Support/BarStockManagement/barstock.db')
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -764,12 +849,39 @@ def _get_latest_baseline_snapshot():
             ORDER BY timestamp DESC, id DESC LIMIT 1
         """)
         row = cursor.fetchone()
+        timestamp = str(row['timestamp']) if row else None
+
+        snapshot = {}
+        if row and row['snapshot_json']:
+            try:
+                snapshot = {
+                    item['item_id']: float(item.get('counted_system', 0))
+                    for item in json.loads(row['snapshot_json'])
+                }
+            except Exception:
+                snapshot = {}
+
+        if not snapshot:
+            if timestamp is None:
+                cursor.execute("""
+                    SELECT MAX(timestamp) AS ts FROM stocktake_snapshots
+                    WHERE note LIKE '%Baseline%'
+                """)
+                ts_row = cursor.fetchone()
+                timestamp = str(ts_row['ts']) if ts_row and ts_row['ts'] else None
+            if timestamp is not None:
+                cursor.execute("""
+                    SELECT item_id, counted_quantity FROM stocktake_snapshots
+                    WHERE note LIKE '%Baseline%' AND timestamp = ?
+                """, (timestamp,))
+                snapshot = {
+                    r['item_id']: float(r['counted_quantity'])
+                    for r in cursor.fetchall()
+                }
         conn.close()
-        if not row or not row['snapshot_json']:
-            return None, {}
-        snapshot_list = json.loads(row['snapshot_json'])
-        snapshot = {item['item_id']: float(item.get('counted_system', 0)) for item in snapshot_list}
-        return str(row['timestamp']), snapshot
+        if not snapshot:
+            return timestamp, {}
+        return timestamp, snapshot
     except Exception:
         return None, {}
 
@@ -811,8 +923,6 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
                     'expected_quantity': 0.0,
                     'variance': float(v),
                 }
-
-    division_mapping = get_division_mapping(os.path.dirname(os.path.abspath(__file__)))
 
     # Aggregated log data
     if not log_df.empty:
@@ -939,15 +1049,39 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
     # Pre-compute unified expected remaining for opening stock derivation
     expected_remaining_series = calculate_expected_remaining_series(log_df)
 
+    # Canonical sales money and division assignment, shared with the GP and
+    # Division reports so every figure is struck at the same penny.
+    item_money = sales_money_by_item(log_df, member_discount_pct)
+    division_lookup = item_division_lookup(inventory_df)
+
+    # Delisted lines carry no stock, so they are dropped from the report
+    # entirely unless they still appear in the selected period - typically the
+    # final sell-off before delisting. Those sales stay in the item breakdown
+    # (with zero stock) so the revenue and GP totals keep reconciling with EPOS.
+    delisted_activity_actions = {
+        ACTION_SALES, ACTION_SALES_ONE_UNIT, ACTION_DELIVERY,
+        ACTION_WASTAGE, ACTION_LINE_CLEAN, ACTION_COMPLIMENTARY,
+        ACTION_OPEN_TAB, ACTION_SUPPLIER_RETURN,
+    }
+    if not log_df.empty and COL_ITEM_ID in log_df.columns:
+        delisted_activity_ids = set(
+            log_df.loc[log_df[COL_ACTION].isin(delisted_activity_actions), COL_ITEM_ID].astype(str))
+    else:
+        delisted_activity_ids = set()
+
     for _, inv_row in inventory_df.iterrows():
         item_id = inv_row[COL_ITEM_ID]
         item_name = inv_row[COL_ITEM_NAME]
+
+        if is_delisted(item_id) and str(item_id) not in delisted_activity_ids:
+            continue
+
         # Use historical closing stock when a date-range map is provided; fall back to live stock
         current_stock = closing_stock_map.get(item_id, inv_row[COL_QUANTITY]) if closing_stock_map else inv_row[COL_QUANTITY]
         cost_price = inv_row[COL_COST_PRICE]
         sell_price = inv_row[COL_SELL_PRICE]
 
-        division = normalize_division_name(division_mapping.get(item_name.lower(), 'Unknown'))
+        division = division_lookup.get(item_id, 'Unknown')
 
         sales_row = sales_data[sales_data[COL_ITEM_ID] == item_id]
         if not sales_row.empty:
@@ -1030,37 +1164,38 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
         is_draught = (inv_row.get(COL_CATEGORY, '') == 'Draught')
         yield_pct = (total_sales_qty / expected_consumption * 100) if expected_consumption > 0 and is_draught else 0
 
-        # Compute member/non-member breakdown per-transaction to match GP/Division reports
+        # Money comes from the canonical per-item allocation shared with the
+        # GP and Division reports; only the quantity split is computed here.
         actual_sales = log_df[(log_df[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])) & (log_df[COL_ITEM_ID] == item_id)].copy()
-        member_sales_value = 0.0
-        non_member_sales_value = 0.0
-        member_cost = 0.0
-        non_member_cost = 0.0
         member_qty = 0.0
         non_member_qty = 0.0
 
-        if not actual_sales.empty:
-            actual_sales = _split_sales_revenue_and_cost(actual_sales, member_discount_pct)
-
-            member_sales_value = actual_sales['member_revenue'].sum()
-            non_member_sales_value = actual_sales['non_member_revenue'].sum()
-            member_cost = actual_sales['member_cost'].sum()
-            non_member_cost = actual_sales['non_member_cost'].sum()
-
-            if COL_MEMBER_QTY in actual_sales.columns:
-                split_sum = actual_sales[COL_MEMBER_QTY].fillna(0) + actual_sales[COL_NON_MEMBER_QTY].fillna(0)
-                has_actual = split_sum > 0
-                if has_actual.any():
-                    qty = actual_sales.loc[has_actual, COL_QUANTITY]
-                    member_qty_col = actual_sales.loc[has_actual, COL_MEMBER_QTY].fillna(0)
-                    non_member_qty_col = actual_sales.loc[has_actual, COL_NON_MEMBER_QTY].fillna(0)
-                    remaining = np.maximum(qty - member_qty_col - non_member_qty_col, 0)
-                    member_qty = (member_qty_col + remaining * 0).sum()
-                    non_member_qty = (non_member_qty_col + remaining).sum()
-                else:
-                    non_member_qty = actual_sales[COL_QUANTITY].sum()
+        if not actual_sales.empty and COL_MEMBER_QTY in actual_sales.columns:
+            split_sum = actual_sales[COL_MEMBER_QTY].fillna(0) + actual_sales[COL_NON_MEMBER_QTY].fillna(0)
+            has_actual = split_sum > 0
+            if has_actual.any():
+                qty = actual_sales.loc[has_actual, COL_QUANTITY]
+                member_qty_col = actual_sales.loc[has_actual, COL_MEMBER_QTY].fillna(0)
+                non_member_qty_col = actual_sales.loc[has_actual, COL_NON_MEMBER_QTY].fillna(0)
+                remaining = np.maximum(qty - member_qty_col - non_member_qty_col, 0)
+                member_qty = member_qty_col.sum()
+                non_member_qty = (non_member_qty_col + remaining).sum()
             else:
                 non_member_qty = actual_sales[COL_QUANTITY].sum()
+        elif not actual_sales.empty:
+            non_member_qty = actual_sales[COL_QUANTITY].sum()
+
+        if item_id in item_money.index:
+            money_row = item_money.loc[item_id]
+            member_sales_value = float(money_row['member_revenue'])
+            non_member_sales_value = float(money_row['non_member_revenue'])
+            member_cost = float(money_row['member_cost'])
+            non_member_cost = float(money_row['non_member_cost'])
+        else:
+            member_sales_value = 0.0
+            non_member_sales_value = 0.0
+            member_cost = 0.0
+            non_member_cost = 0.0
 
         member_gp = member_sales_value - member_cost
         member_gp_pct = (member_gp / member_sales_value * 100) if member_sales_value > 0 else 0
@@ -1090,6 +1225,7 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
             'item_id': item_id,
             'item_name': item_name,
             'division': division,
+            'is_delisted': is_delisted(item_id),
             'cost_price': cost_price,
             'sell_price': sell_price,
             'current_stock': current_stock,
@@ -1128,6 +1264,12 @@ def build_comprehensive_report_data(inventory_df, log_df, member_discount_pct=10
             'is_hidden': is_hidden,
             'delisted_stock_value': delisted_stock_value,
         })
+
+    # Allocate stock values to the penny so the division stock rows in the
+    # PDF add up exactly to the Total Stock Value shown on the summary.
+    stock_values = allocate_money([row['stock_value'] for row in report_data])
+    for row, value in zip(report_data, stock_values):
+        row['stock_value'] = value
 
     return report_data
 
@@ -1399,6 +1541,12 @@ def build_comparison_report_data(inventory_df, log_a, log_b, member_discount_pct
     merged[COL_ITEM_NAME] = merged['item_name_a'].fillna(merged['item_name_b'])
     merged = merged.fillna(0)
 
+    # Allocate each money column so the rows add up to the period totals.
+    for column in ('total_revenue_a', 'total_revenue_b',
+                   'total_cost_a', 'total_cost_b',
+                   'total_gp_a', 'total_gp_b'):
+        merged[column] = allocate_money(merged[column].tolist())
+
     # Calculate deltas
     merged['delta_qty'] = merged['total_qty_b'] - merged['total_qty_a']
     merged['delta_revenue'] = merged['total_revenue_b'] - merged['total_revenue_a']
@@ -1442,10 +1590,10 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
             current_stock = inv_row[COL_QUANTITY]
             cost_price = inv_row[COL_COST_PRICE]
 
-            # Delisted items report zero stock but keep their sales history.
+            # Delisted lines hold no stock and are outside the physical count,
+            # so they have no variance to report.
             if is_delisted(item_id):
-                current_stock = 0.0
-                item_name = f"{item_name} (DELISTED)"
+                continue
 
             # Opening stock = current stock - expected remaining (from transactions)
             expected = current_stock - expected_remaining.get(item_id, 0)
@@ -1471,10 +1619,10 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
             cost_price = inv_row[COL_COST_PRICE]
             current_stock = inv_row[COL_QUANTITY]
 
-            # Delisted items report zero stock but keep their sales history.
+            # Delisted lines hold no stock and are outside the physical count,
+            # so they have no variance to report.
             if is_delisted(item_id):
-                current_stock = 0.0
-                item_name = f"{item_name} (DELISTED)"
+                continue
 
             st = stocktake_by_item.get(item_id)
             if st:
@@ -1508,6 +1656,12 @@ def build_stocktake_variance_report(inventory_df, log_df, stocktake_df=None):
                     'variance_value': None,
                     'has_stocktake': False
                 })
+
+    # Allocate the counted variances so the item rows add up to the total.
+    counted = [row for row in report_data if row['variance_value'] is not None]
+    allocated = allocate_money([row['variance_value'] for row in counted])
+    for row, value in zip(counted, allocated):
+        row['variance_value'] = value
 
     return report_data
 

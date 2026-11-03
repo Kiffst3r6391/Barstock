@@ -1,13 +1,13 @@
 Name,Division,Unit,Total Stock,Total Value,Active,Min Alert,Max Alert
-Cointreau,Spirits,BOTTLE,20.00,17.99,,0.0,0.0
+Cointreau,Spirits,BOTTLE,17.00,15.29,,0.0,0.0
 Moretti Bottle,Beer - Bottled,BOTTLE,89.00,75.98,,0.0,0.0
-A/F Koppaberg,Beer - Bottled,BOTTLE,14.00,16.78,,0.0,0.0
+A/F Koppaberg,Beer - Bottled,BOTTLE,16.00,19.20,,0.0,0.0
 Angostura,Spirits,BOTTLE,10.00,4.16,,0.0,0.0
 Aperol,Liqueurs,BOTTLE,29.71,16.77,,0.0,0.0
 Aperol Spritz,Others,SERVE,0.00,0.00,,0.0,0.0
-Bacardi,Spirits,BOTTLE,92.60,69.97,,0.0,0.0
+Bacardi,Spirits,BOTTLE,91.60,69.21,,0.0,0.0
 Baileys 50ml,Beer - Bottled,BOTTLE,44.00,27.04,,0.0,0.0
-Barista Coffee,Hot Drinks,Cup,-267.00,-166.88,,0.0,0.0
+Barista Coffee,Hot Drinks,Cup,-653.00,-408.12,,0.0,0.0
 Belhaven Best,Beers- Draught,PINT,0.00,0.00,No,0.0,0.0
 Belhaven Best Half Pint,Draught,HALF PINT,0.00,0.00,No,0.0,0.0
 Belhaven Best Shandy,Shandy,PINT,0.00,0.00,No,0.0,0.0
@@ -15,12 +15,12 @@ Best Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
 Birra Moretti,Beers- Draught,PINT,0.00,0.00,No,0.0,0.0
 Birra Moretti Half,Draught,HALF PINT,0.00,0.00,No,0.0,0.0
 Birra Moretti Shandy,Shandy,PINT,0.00,0.00,No,0.0,0.0
-Birra Moretti Zero,Beer - Bottled,BOTTLE,30.00,24.25,,0.0,0.0
-Bombay Sapphire,Spirits,BOTTLE,44.00,36.28,,0.0,0.0
-Bowmore,Malt Whisky,BOTTLE,56.00,81.17,,0.0,0.0
+Birra Moretti Zero,Beer - Bottled,BOTTLE,12.00,9.70,,0.0,0.0
+Bombay Sapphire,Spirits,BOTTLE,43.00,35.45,,0.0,0.0
+Bowmore,Malt Whisky,BOTTLE,52.00,75.37,,0.0,0.0
 Brockmans Gin,Spirits,BOTTLE,61.00,79.27,,0.0,0.0
-Budweiser,Beer - Bottled,BOTTLE,67.00,61.39,,0.0,0.0
-Can,Minerals,CAN,943.00,414.92,,0.0,0.0
+Budweiser,Beer - Bottled,BOTTLE,66.00,60.47,,0.0,0.0
+Can,Minerals,CAN,638.00,280.72,,0.0,0.0
 CART BUD,Beer - Draught,PINT,0.00,0.00,,0.0,0.0
 CART CANS,Cart Sales,CAN,0.00,0.00,,0.0,0.0
 CART CORONA,Cart Sales,BOTTLE,0.00,0.00,,0.0,0.0
@@ -29,92 +29,92 @@ CART KOPPA,Beer - Bottled,BOTTLE,0.00,0.00,,0.0,0.0
 CART MAGNERS,Cart Sales,BOTTLE,0.00,0.00,,0.0,0.0
 CART PERONI,Cart Sales,BOTTLE,0.00,0.00,,0.0,0.0
 Cart Roll Tea Coffee,Others,CUP,0.00,0.00,,0.0,0.0
-Carton Juice,Post Mix,CARTON,148.53,91.14,,0.0,0.0
+Carton Juice,Post Mix,CARTON,111.53,68.44,,0.0,0.0
 Carton Juice Half,Soft,HALF PINT,0.00,0.00,,0.0,0.0
 Carton Juice PINT,Soft,PINT,0.00,0.00,,0.0,0.0
-Coffee Machine,Equipment,Unit,-3.00,-1.88,,0.0,0.0
+Coffee Machine,Equipment,Unit,-5.00,-3.12,,0.0,0.0
 Coke Half,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Coke Half Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Coke Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
-Coke PM,Post Mix,PINT,294.00,303.10,,0.0,0.0
-Cordial,Post Mix,BOTTLE,781.00,73.80,,0.0,0.0
-Corona,Beer - Bottled,BOTTLE,105.00,104.96,,0.0,0.0
+Coke PM,Post Mix,PINT,281.00,289.70,,0.0,0.0
+Cordial,Post Mix,BOTTLE,723.00,68.32,,0.0,0.0
+Corona,Beer - Bottled,BOTTLE,56.00,55.98,,0.0,0.0
 Cullinan View Sauvignon Blanc,Wine,BOTTLE,18.00,93.78,,0.0,0.0
-Dead Mans Fingers,Spirits,BOTTLE,22.00,14.84,,0.0,0.0
+Dead Mans Fingers,Spirits,BOTTLE,21.00,14.17,,0.0,0.0
 Diet Coke Half,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Diet Coke Half Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Diet Coke Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
-Diet Coke PM,Post Mix,PINT,218.00,189.39,,0.0,0.0
+Diet Coke PM,Post Mix,PINT,213.00,185.05,,0.0,0.0
 Disaronno,Liqueurs,BOTTLE,50.00,39.98,,0.0,0.0
 Drambuie,Liqueurs,BOTTLE,12.00,13.70,,0.0,0.0
 Edinburgh R&G,Spirits,BOTTLE,50.00,28.33,,0.0,0.0
-Fevertree SL Tonic,Minerals,BOTTLE,66.00,46.34,,0.0,0.0
-Fevertree Tonic,Minerals,BOTTLE,72.00,50.40,,0.0,0.0
+Fevertree SL Tonic,Minerals,BOTTLE,76.00,53.20,,0.0,0.0
+Fevertree Tonic,Minerals,BOTTLE,74.00,51.80,,0.0,0.0
 Glayva,Liqueurs,BOTTLE,46.00,44.47,,0.0,0.0
-Glen Scotia,Malt Whisky,BOTTLE,61.00,85.37,,0.0,0.0
-Glenmorangie,Malt Whisky,BOTTLE,63.00,97.62,,0.0,0.0
-Gordons Gin,Spirits,BOTTLE,140.70,99.73,,0.0,0.0
+Glen Scotia,Malt Whisky,BOTTLE,56.00,78.37,,0.0,0.0
+Glenmorangie,Malt Whisky,BOTTLE,60.00,92.97,,0.0,0.0
+Gordons Gin,Spirits,BOTTLE,127.70,90.52,,0.0,0.0
 Gordons Pink Gin,Spirits,BOTTLE,108.70,71.00,,0.0,0.0
-Guinness 0_0,Beer - Bottled,BOTTLE,65.00,142.46,,0.0,0.0
+Guinness 0_0,Beer - Bottled,BOTTLE,59.00,129.31,,0.0,0.0
 Guinness Can,Beer - Can,CAN,48.00,150.00,,0.0,0.0
 Havana Club 7,Spirits,BOTTLE,56.00,53.17,,0.0,0.0
-Highland Park,Malt Whisky,BOTTLE,43.00,79.53,,0.0,0.0
-Inchs,Beer - Bottled,BOTTLE,27.00,34.83,,0.0,0.0
-J2O,Minerals,BOTTLE,81.00,76.14,,0.0,0.0
-Jack Daniels,Spirits,BOTTLE,16.20,14.69,,0.0,0.0
+Highland Park,Malt Whisky,BOTTLE,61.00,92.99,,0.0,0.0
+Inchs,Beer - Bottled,BOTTLE,22.00,28.38,,0.0,0.0
+J2O,Minerals,BOTTLE,83.00,78.02,,0.0,0.0
+Jack Daniels,Spirits,BOTTLE,-0.80,-0.73,,0.0,0.0
 Jagermeister,Spirits,BOTTLE,70.00,55.42,,0.0,0.0
-Joker IPA,Beers- Draught,PINT,240.60,370.93,,0.0,0.0
+Joker IPA,Beers- Draught,PINT,183.10,282.29,,0.0,0.0
 Joker IPA Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Joker IPA Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
-Jura Origin,Malt Whisky,BOTTLE,100.00,102.45,,0.0,0.0
+Jura Origin,Malt Whisky,BOTTLE,98.00,100.40,,0.0,0.0
 Kahlua,Liqueurs,BOTTLE,58.00,35.64,,0.0,0.0
 Kopparberg,Beer - Bottled,BOTTLE,37.00,61.64,,0.0,0.0
-Kraken Rum,Spirits,BOTTLE,59.00,54.55,,0.0,0.0
-Lemonade,Post Mix,PINT,323.25,317.53,,0.0,0.0
+Kraken Rum,Spirits,BOTTLE,31.00,28.66,,0.0,0.0
+Lemonade,Post Mix,PINT,263.75,259.08,,0.0,0.0
 Lemonade Half,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Lemonade Half Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
 Lemonade Pint,Post Mix,PINT,0.00,0.00,,0.0,0.0
-Magners,Beer - Bottled,BOTTLE,30.00,41.75,,0.0,0.0
+Magners,Beer - Bottled,BOTTLE,24.00,33.40,,0.0,0.0
 Malibu,Liqueurs,BOTTLE,44.00,25.28,,0.0,0.0
-Martell,Spirits,BOTTLE,50.00,57.48,,0.0,0.0
-Morgans,Spirits,BOTTLE,39.30,26.50,,0.0,0.0
-Nuts,Snacks,PACK,56.00,30.80,,0.0,0.0
-old mout cider,Beer - Bottled,BOTTLE,35.00,55.39,,0.0,0.0
-Old Pulteney,Malt Whisky,BOTTLE,58.00,60.87,,0.0,0.0
+Martell,Spirits,BOTTLE,49.00,56.33,,0.0,0.0
+Morgans,Spirits,BOTTLE,38.30,25.82,,0.0,0.0
+Nuts,Snacks,PACK,42.00,23.10,,0.0,0.0
+old mout cider,Beer - Bottled,BOTTLE,31.00,49.06,,0.0,0.0
+Old Pulteney,Malt Whisky,BOTTLE,35.00,36.73,,0.0,0.0
 Orange Lemonade,Soft,PINT,0.00,0.00,,0.0,0.0
 Orange Lemonade Half,Soft,HALF PINT,0.00,0.00,,0.0,0.0
 Orange Soda,Soft,PINT,0.00,0.00,,0.0,0.0
 Orange Soda Half,Soft,HALF PINT,0.00,0.00,,0.0,0.0
-Peach Schnapps,Liqueurs,BOTTLE,48.00,24.70,,0.0,0.0
-Peroni,Beer - Bottled,BOTTLE,56.00,51.31,,0.0,0.0
+Peach Schnapps,Liqueurs,BOTTLE,47.00,24.18,,0.0,0.0
+Peroni,Beer - Bottled,BOTTLE,39.00,35.73,,0.0,0.0
 Pimms,Sherry,BOTTLE,4.00,2.27,,0.0,0.0
 Port,Sherry,BOTTLE,60.00,36.87,,0.0,0.0
-Pringles,Snacks,PACK,121.00,75.02,,0.0,0.0
-Prosecco,Wine,BOTTLE,38.00,227.94,,0.0,0.0
-Prosecco Single Serve,Wine,BOTTLE,37.00,86.21,,0.0,0.0
-Red Bull,Post Mix,CAN,48.00,48.00,,0.0,0.0
+Pringles,Snacks,PACK,69.00,42.78,,0.0,0.0
+Prosecco,Wine,BOTTLE,37.00,221.94,,0.0,0.0
+Prosecco Single Serve,Wine,BOTTLE,32.00,74.56,,0.0,0.0
+Red Bull,Post Mix,CAN,37.00,37.00,,0.0,0.0
 Sambuca,Spirits,BOTTLE,24.00,17.29,,0.0,0.0
 Short Mile Bay Merlot,Wine,BOTTLE,16.00,93.60,,0.0,0.0
 Simply Fruity,Post Mix,BOTTLE,0.0,0.0,,0.0,0.0
-Single Serve Wine,Wine,BOTTLE,328.00,554.32,,0.0,0.0
-Smirnoff,Spirits,BOTTLE,193.40,137.09,,0.0,0.0
+Single Serve Wine,Wine,BOTTLE,242.00,408.98,,0.0,0.0
+Smirnoff,Spirits,BOTTLE,183.40,130.00,,0.0,0.0
 Soda Cordial HALF PI,Soft Drinks,UNIT,0.0,0.0,,0.0,0.0
 Soda Cordial HALF PINT,Soft Drinks,UNIT,0.0,0.0,,0.0,0.0
 Soda Cordial PINT,Soft Drinks,UNIT,0.0,0.0,,0.0,0.0
-Soda Water,Soft,BOTTLE,0.0,0.0,,0.0,0.0
-Sours,Liqueurs,BOTTLE,42.00,13.30,,0.0,0.0
+Soda Water,Soft,BOTTLE,0.00,0.00,,0.0,0.0
+Sours,Liqueurs,BOTTLE,41.00,12.98,,0.0,0.0
 Southern Comfort,Liqueurs,BOTTLE,37.70,25.76,,0.0,0.0
-Specialist Tea,Hot Drinks,Cup,0.00,0.00,,0.0,0.0
-Tanqueray,Spirits,BOTTLE,60.00,68.50,,0.0,0.0
-Tanqueray Sevilla,Spirits,BOTTLE,49.00,55.59,,0.0,0.0
+Specialist Tea,Hot Drinks,Cup,-4.00,-1.67,,0.0,0.0
+Tanqueray,Spirits,BOTTLE,58.00,66.22,,0.0,0.0
+Tanqueray Sevilla,Spirits,BOTTLE,48.00,54.46,,0.0,0.0
 TB Best,Beers - Draught,PINT,0.00,0.00,,0.0,0.0
-Tea,Hot Drinks,Cup,-113.00,-47.08,,0.0,0.0
+Tea,Hot Drinks,Cup,-257.00,-107.08,,0.0,0.0
 Tennants Shandy Half Pint,Beers - Draught,PINT,0.00,0.00,,0.0,0.0
 Tennants Shandy Pint,Beer - Draught,PINT,0.00,0.00,,0.0,0.0
-Tennents Lager,Beers- Draught,PINT,502.90,637.03,,0.0,0.0
+Tennents Lager,Beers- Draught,PINT,432.40,547.72,,0.0,0.0
 Tennents Lager Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
-Tequila,Spirits,BOTTLE,24.00,17.99,,0.0,0.0
-Tequila Rose,Liqueurs,BOTTLE,40.00,22.33,,0.0,0.0
+Tequila,Spirits,BOTTLE,21.00,15.74,,0.0,0.0
+Tequila Rose,Liqueurs,BOTTLE,38.00,21.22,,0.0,0.0
 TG Best,Beers - Draught,PINT,0.00,0.00,,0.0,0.0
 TG Can,Beer - Can,CAN,0.00,0.00,,0.0,0.0
 TG Single Serve Wine,Wine,BOTTLE,0.00,0.00,,0.0,0.0
@@ -123,23 +123,24 @@ Thatchers,Beers- Draught,PINT,0.00,0.00,No,0.0,0.0
 Thatchers Half,Draught,HALF PINT,0.00,0.00,No,0.0,0.0
 Thatchers Shandy,Shandy,PINT,0.00,0.00,No,0.0,0.0
 Tonic,Post Mix,BOTTLE,0.0,0.0,,0.0,0.0
-Walkers,Snacks,PACK,140.00,74.59,,0.0,0.0
+Walkers,Snacks,PACK,86.00,45.82,,0.0,0.0
 Whispering Hills White Zinfandel,Wine,BOTTLE,23.00,99.59,,0.0,0.0
 Whitley Neill Gin,Spirits,BOTTLE,56.00,48.53,,0.0,0.0
-Wicked Lady Pinot Grigio,Wine,BOTTLE,12.00,76.90,,0.0,0.0
-Zarapito Malbec,Wine,BOTTLE,16.00,100.16,,0.0,0.0
-Poretti,Beers- Draught,PINT,223.20,459.13,,0.0,0.0
+Wicked Lady Pinot Grigio,Wine,BOTTLE,11.00,70.49,,0.0,0.0
+Zarapito Malbec,Wine,BOTTLE,9.00,56.34,,0.0,0.0
+Poretti,Beers- Draught,PINT,235.20,483.82,,0.0,0.0
 Poretti Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Poretti Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
-Innis & Gunn,Beers- Draught,PINT,231.20,613.42,,0.0,0.0
+Innis & Gunn,Beers- Draught,PINT,216.70,574.94,,0.0,0.0
 Innis & Gunn Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Innis & Gunn Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
-Orchard Pig,Beers- Draught,PINT,205.70,301.54,,0.0,0.0
+Orchard Pig,Beers- Draught,PINT,232.70,341.12,,0.0,0.0
 Orchard Pig Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Orchard Pig Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
-Caledonian Best,Beers- Draught,PINT,310.20,295.71,,0.0,0.0
+Caledonian Best,Beers- Draught,PINT,195.20,186.08,,0.0,0.0
 Caledonian Best Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Caledonian Best Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
-Guinness,Beers- Draught,PINT,172.20,334.40,,0.0,0.0
+Guinness,Beers- Draught,PINT,218.20,423.73,,0.0,0.0
 Guinness Half,Draught,HALF PINT,0.00,0.00,,0.0,0.0
 Guinness Shandy,Shandy,PINT,0.00,0.00,,0.0,0.0
+Estrella Damm,Beer - Bottled,BOTTLE,24.00,23.52,,0.0,0.0

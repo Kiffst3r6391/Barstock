@@ -22,6 +22,7 @@ ORDER_SHEET_LAYOUT = [
                 [
                     ("Budweiser", "budweiser"),
                     ("Corona", "corona"),
+                    ("Estrella Damm", "estrella_damm"),
                     ("Inch's", "inchs"),
                     ("Kopparberg 0%", "a_f_koppaberg"),
                     ("Kopparberg MF", None),

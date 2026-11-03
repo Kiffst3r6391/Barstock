@@ -82,6 +82,16 @@ def _is_reconciled_item(item_id: str) -> bool:
     )
 
 
+def _allows_negative(value) -> bool:
+    """Parse the allow_negative flag from stock.csv or SQLite inventory."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return bool(value)
+
+
 def _load_csv(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
@@ -149,6 +159,8 @@ def check_negative_stock(stock_df: pd.DataFrame, label: str) -> list[str]:
         row = stock_df.loc[idx]
         item = _item_id_from_row(row)
         if not _is_reconciled_item(item):
+            continue
+        if "allow_negative" in stock_df.columns and _allows_negative(row.get("allow_negative", 0)):
             continue
         issues.append(f"Negative stock in {label}: {item} = {qty}")
     return issues
@@ -281,7 +293,8 @@ def _load_sqlite(db_path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         inv = pd.read_sql_query(
-            "SELECT item_id, item_name, quantity FROM inventory ORDER BY item_id", conn
+            "SELECT item_id, item_name, quantity, allow_negative "
+            "FROM inventory ORDER BY item_id", conn
         )
         tx = pd.read_sql_query(
             "SELECT item_id, action, quantity, timestamp FROM transactions ORDER BY timestamp",
@@ -323,6 +336,10 @@ def check_sqlite_negative_stock(db_path: Path) -> list[str]:
         row = inv.loc[idx]
         item = str(row["item_id"]).lower()
         if not _is_reconciled_item(item):
+            continue
+        # The app deliberately lets these lines go negative (spirits counted in
+        # measures, for example), so it is not a data fault.
+        if _allows_negative(row.get("allow_negative", 0)):
             continue
         issues.append(
             f"Negative stock in SQLite DB: {row['item_name']} ({row['item_id']}) = {qty}"
@@ -386,6 +403,10 @@ def check_sqlite_transactions_reconciliation(db_path: Path) -> list[str]:
     audit and the dashboard cannot drift apart: the latest Stocktake Baseline
     anchors each item and every later movement (including adjustments, supplier
     returns and parent deductions) is applied on top of it.
+
+    The helper's negative clamp is disabled here: reports clamp so they never
+    invent a negative opening stock, but reconciliation must compare the
+    ledger's true balance, or an oversold line looks healthy.
     """
     issues: list[str] = []
     loaded = _load_sqlite(db_path)
@@ -397,7 +418,8 @@ def check_sqlite_transactions_reconciliation(db_path: Path) -> list[str]:
 
     expected = {
         str(key).lower(): float(value)
-        for key, value in calculate_expected_remaining_series(tx).items()
+        for key, value in calculate_expected_remaining_series(
+            tx, clamp_negative=False).items()
     }
 
     for _, row in inv.iterrows():

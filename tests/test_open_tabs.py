@@ -186,6 +186,16 @@ def test_get_open_tabs_filters_by_status(temp_db_path):
     assert set(closed_tabs["customer_name"]) == {"Closed Customer"}
 
 
+def test_get_open_tabs_lists_a_tab_that_has_no_items(temp_db_path):
+    tab_id = InventoryDataManager.create_open_tab("Empty Tab", [])
+
+    tabs = InventoryDataManager.get_open_tabs(status="open")
+
+    assert list(tabs["id"]) == [tab_id]
+    assert tabs["customer_name"].iloc[0] == "Empty Tab"
+    assert tabs["item_id"].isna().all()
+
+
 def test_create_open_tab_deducts_inventory_and_parent_stock(temp_db_path):
     conn = sqlite3.connect(temp_db_path)
     _seed_inventory(conn)

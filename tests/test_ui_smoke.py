@@ -13,6 +13,8 @@ import sqlite3
 import tkinter as tk
 from pathlib import Path
 
+import pandas as pd
+
 import pytest
 
 import data_manager as dm
@@ -170,6 +172,30 @@ def test_dashboard_snapshot_is_cached(app):
     assert first is second  # same object returned while data is unchanged
 
 
+def test_dashboard_reports_sales_inc_vat(app):
+    """Sales are stored ex VAT but shown inc VAT as well, so the dashboard
+    figure can be checked against an EPOS export."""
+    from actions import ACTION_SALES
+    from data_manager import LOG_COLUMNS
+
+    sale = pd.DataFrame([[
+        "peroni", ACTION_SALES, 10.0, "2026-10-20 12:00:00", 1.2, 4.5,
+        "", "20-10-2026 - 20-10-2026", "", 0, 10, None,
+    ]], columns=LOG_COLUMNS)
+    app.log_df = pd.concat([app.log_df, sale], ignore_index=True)
+
+    snap = app._compute_dashboard_snapshot()
+
+    assert snap["period_sales"] == pytest.approx(45.00)
+    assert snap["period_sales_inc"] == pytest.approx(54.00)
+    upload = snap["recent_sales_uploads"][0]
+    assert upload["value"] == pytest.approx(45.00)
+    assert upload["value_inc"] == pytest.approx(54.00)
+    peroni = next(s for s in snap["top_sellers"] if s["name"] == "Peroni")
+    assert peroni["value"] == pytest.approx(45.00)
+    assert peroni["value_inc"] == pytest.approx(54.00)
+
+
 class _FakeDateRangeDialog:
     """Stand-in for the modal date picker: returns 'all time' immediately."""
 
@@ -224,6 +250,25 @@ def test_resolved_font_is_shared_with_screen_modules(app):
     import ui_theme
 
     assert ui_theme.THEME_FONT == ui.THEME_FONT
+
+
+def test_shell_uses_ledger_paper_surfaces(app):
+    """The shell, rail, content and tables all sit on Ledger tokens."""
+    from tkinter import ttk
+
+    import ui_theme
+
+    app.show_dashboard()
+    app.root.update_idletasks()
+
+    assert app.shell_container.cget("bg") == ui_theme.THEME_BG
+    assert app.sidebar.cget("bg") == ui_theme.THEME_SIDEBAR
+    assert app.main_menu.cget("bg") == ui_theme.THEME_BG
+
+    style = ttk.Style()
+    assert style.lookup("Treeview", "background") == ui_theme.THEME_BG
+    assert style.lookup("Treeview", "foreground") == ui_theme.THEME_TEXT
+    assert style.lookup("Treeview.Heading", "background") == ui_theme.THEME_SIDEBAR
 
 
 def test_retired_item_leaves_the_stock_list(app):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dashboard screen: statistics, alerts, snapshot and attention table."""
+"""Dashboard screen: the Ledger summary, attention list, top sellers and notices."""
 
 import glob
 import os
@@ -10,16 +10,17 @@ import pandas as pd
 import tkinter as tk
 from tkinter import ttk
 
+import data_manager as data_manager_module
 import ui_theme
 from ui_theme import (
-    THEME_ACCENT, THEME_BORDER, THEME_CARD, THEME_DANGER, THEME_PANEL,
-    THEME_SUCCESS, THEME_TEXT, THEME_TEXT_MUTED, THEME_WARNING,
-    TBL_ROW_ALT, TBL_ROW_WARN, TBL_ROW_DANGER,
+    THEME_ACCENT, THEME_BG, THEME_BORDER, THEME_CARD, THEME_DANGER,
+    THEME_PANEL, THEME_SUCCESS, THEME_TEXT, THEME_TEXT_MUTED,
+    THEME_WARNING, TBL_ROW_ALT,
 )
 from app_config import (
     COL_ACTION, COL_COST_PRICE, COL_DATE_RANGE, COL_ITEM_ID, COL_ITEM_NAME,
     COL_MEASURE, COL_QUANTITY, COL_SELL_PRICE, COL_SUPPLIER, COL_TIMESTAMP,
-    DATA_DIR, get_resource_path,
+    DATA_DIR,
 )
 from actions import ACTION_DELIVERY, ACTION_STOCKTAKE_BASELINE, SALE_ACTIONS
 from categories import is_delisted, should_exclude
@@ -27,136 +28,134 @@ from conversions import DATE_FORMAT_DISPLAY, parse_display_date
 from data_manager import (
     InventoryDataManager, COL_REORDER_LEVEL, get_setting, get_upload_hashes,
 )
-from reports import build_surplus_report_data
 from sales_mapping import is_hidden_from_stock_view
+from money import inc_vat, round_money, sum_money
+from reports import sales_money_by_item
+
+
+MEASURE_PLURALS = {
+    'pint': 'pints',
+    'bottle': 'bottles',
+    'can': 'cans',
+    'cup': 'cups',
+    'measure': 'measures',
+    'keg': 'kegs',
+    'glass': 'glasses',
+    'unit': 'units',
+}
 
 
 class DashboardMixin:
     """Dashboard methods mixed into the main application class."""
 
+    # ------------------------------------------------------------------
+    # Screen
+    # ------------------------------------------------------------------
+
     def show_dashboard(self):
-        """Render the simplified dashboard."""
+        """Render the Ledger dashboard."""
         self._create_app_shell('Dashboard')
 
-        # Header
-        header = self.themed_frame(self.main_menu)
-        header.pack(fill='x', pady=(0, 20))
-        self.themed_label(header, "Dashboard",
-                          font=(ui_theme.THEME_FONT, 24, 'bold')).pack(side='left')
-
-        # Reconciliation banner (inventory must agree with its transaction log)
+        # Notices replace the old filled banners.
         self._render_integrity_alert(self.main_menu)
-
-        # Sync/setup banner (non-blocking, shown only when there are real issues)
         self._render_sync_alert(self.main_menu)
-
-        # Price-sync banner (non-blocking, shown when stock.csv changed costs)
         self._render_price_sync_alert(self.main_menu)
 
-        # Stat cards
-        self.update_dashboard_stats(self.main_menu)
+        self._render_ledger_summary(self.main_menu)
+        self._render_ledger_panels(self.main_menu)
+        self._render_deliveries_strip(self.main_menu)
+        self._render_dashboard_footer(self.main_menu)
 
-        # Snapshot details
-        self._render_dashboard_snapshot(self.main_menu)
+    # ------------------------------------------------------------------
+    # Alerts and notices
+    # ------------------------------------------------------------------
 
-        # Items needing attention
-        self._section_title(self.main_menu, "Items needing attention").pack(fill='x', pady=(20, 10))
-        self._render_attention_table(self.main_menu)
+    def _render_notice(self, parent, label, message, detail='', kind='warning',
+                       on_dismiss=None):
+        """Render a ruled notice with a coloured left rule and no fill."""
+        colour = {
+            'danger': THEME_DANGER,
+            'warning': THEME_WARNING,
+            'success': THEME_SUCCESS,
+        }.get(kind, THEME_WARNING)
 
-        # Footer
-        footer = self.themed_frame(self.main_menu)
-        footer.pack(fill='x', pady=(20, 0))
-        self.themed_label(footer, "Created by Chris Armstrong",
-                          font=(ui_theme.THEME_FONT, 9, 'italic'),
-                          fg=THEME_TEXT_MUTED).pack(side='right')
+        notice = tk.Frame(parent, bg=THEME_BG)
+        notice.pack(fill='x', pady=(0, 18))
+        tk.Frame(notice, bg=colour, width=3).pack(side='left', fill='y')
 
+        body = tk.Frame(notice, bg=THEME_BG)
+        body.pack(side='left', fill='x', expand=True, padx=(12, 0), pady=2)
+
+        header = tk.Frame(body, bg=THEME_BG)
+        header.pack(fill='x')
+        tk.Label(header, text=label.upper(), font=ui_theme.mono_font(9, 'bold'),
+                 fg=colour, bg=THEME_BG, anchor='w').pack(side='left')
+        if on_dismiss is not None:
+            dismiss = tk.Label(header, text="Dismiss", font=(ui_theme.THEME_FONT, 9),
+                               fg=THEME_TEXT_MUTED, bg=THEME_BG, cursor='hand2',
+                               takefocus=1)
+            dismiss.pack(side='right')
+            dismiss.bind('<Button-1>', lambda e: on_dismiss())
+            dismiss.bind('<Return>', lambda e: on_dismiss())
+
+        tk.Label(body, text=message, font=(ui_theme.THEME_FONT, 10),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w', justify='left',
+                 wraplength=900).pack(fill='x', pady=(4, 0))
+        if detail:
+            tk.Label(body, text=detail, font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w',
+                     justify='left', wraplength=900).pack(fill='x', pady=(3, 0))
+        return notice
 
     def _render_integrity_alert(self, parent=None):
-        """Show a banner when live inventory does not reconcile with the log."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-
-        if not getattr(self, 'startup_integrity_report', None):
+        """Show a notice when live inventory does not reconcile with the log."""
+        parent = self._dashboard_parent(parent)
+        if parent is None or not getattr(self, 'startup_integrity_report', None):
             return
-
-        banner = tk.Frame(parent, bg='#3d1f1f', bd=1, relief='solid',
-                          highlightbackground=THEME_DANGER, highlightthickness=1)
-        banner.pack(fill='x', pady=(0, 18), padx=2)
-
-        tk.Label(banner, text='⚠ Stock Reconciliation Check',
-                 font=(ui_theme.THEME_FONT, 11, 'bold'), fg=THEME_DANGER, bg='#3d1f1f',
-                 anchor='w').pack(fill='x', padx=12, pady=(10, 2))
-
-        tk.Label(banner,
-                 text=('Live inventory does not agree with the transaction log. '
-                       'Run audit_data.py for the full list before relying on stock values.'),
-                 font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT, bg='#3d1f1f',
-                 anchor='w', justify='left', wraplength=700).pack(fill='x', padx=12, pady=(0, 4))
-
-        tk.Label(banner, text=self.startup_integrity_report,
-                 font=(ui_theme.THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#3d1f1f',
-                 anchor='w', justify='left', wraplength=700).pack(fill='x', padx=12, pady=(0, 4))
 
         def dismiss():
             self.startup_integrity_report = None
-            banner.destroy()
+            self.show_dashboard()
 
-        self.styled_button(banner, 'Dismiss', dismiss, width=12,
-                           variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
-
+        self._render_notice(
+            parent,
+            "Stock reconciliation check",
+            "Live inventory does not agree with the transaction log. Run "
+            "audit_data.py for the full list before relying on stock values.",
+            self.startup_integrity_report,
+            kind='danger',
+            on_dismiss=dismiss,
+        )
 
     def _render_sync_alert(self, parent=None):
-        """Show a non-blocking setup/sync banner if issues were detected at startup."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-
-        if not hasattr(self, 'startup_sync_report') or not self.startup_sync_report:
+        """Show a notice when tracked items are missing setup rules."""
+        parent = self._dashboard_parent(parent)
+        if parent is None or not getattr(self, 'startup_sync_report', None):
             return
 
-        # Trim huge order-sheet-only reports so the banner isn't overwhelming
         report_text = self.startup_sync_report.strip()
         lines = report_text.splitlines()
         if len(lines) > 12:
             report_text = "\n".join(lines[:12]) + f"\n... and {len(lines) - 12} more items"
 
-        banner = tk.Frame(parent, bg='#3d2e1f', bd=1, relief='solid',
-                          highlightbackground=THEME_ACCENT, highlightthickness=1)
-        banner.pack(fill='x', pady=(0, 18), padx=2)
-
-        tk.Label(banner, text='⚠ Inventory Setup Check',
-                 font=(ui_theme.THEME_FONT, 11, 'bold'), fg=THEME_WARNING, bg='#3d2e1f',
-                 anchor='w').pack(fill='x', padx=12, pady=(10, 2))
-
-        text = tk.Label(banner,
-                        text='Some tracked items are missing category, conversion, or order-sheet rules.',
-                        font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT, bg='#3d2e1f',
-                        anchor='w', justify='left', wraplength=700)
-        text.pack(fill='x', padx=12, pady=(0, 4))
-
-        detail = tk.Label(banner, text=report_text,
-                          font=(ui_theme.THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#3d2e1f',
-                          anchor='w', justify='left', wraplength=700)
-        detail.pack(fill='x', padx=12, pady=(0, 4))
-
         def dismiss():
             self.startup_sync_report = None
-            banner.destroy()
+            self.show_dashboard()
 
-        self.styled_button(banner, 'Dismiss', dismiss, width=12, variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
-
+        self._render_notice(
+            parent,
+            "Inventory setup check",
+            "Some tracked items are missing category, conversion, or "
+            "order-sheet rules.",
+            report_text,
+            kind='warning',
+            on_dismiss=dismiss,
+        )
 
     def _render_price_sync_alert(self, parent=None):
-        """Show a non-blocking banner when stock.csv cost prices were synced at startup."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-
-        if not hasattr(self, 'startup_price_sync_report') or not self.startup_price_sync_report:
+        """Show a notice when stock.csv cost prices were synced at startup."""
+        parent = self._dashboard_parent(parent)
+        if parent is None or not getattr(self, 'startup_price_sync_report', None):
             return
 
         report_text = self.startup_price_sync_report.strip()
@@ -164,92 +163,302 @@ class DashboardMixin:
         if len(lines) > 12:
             report_text = "\n".join(lines[:12]) + f"\n... and {len(lines) - 12} more items"
 
-        banner = tk.Frame(parent, bg='#1f3d2e', bd=1, relief='solid',
-                          highlightbackground=THEME_ACCENT, highlightthickness=1)
-        banner.pack(fill='x', pady=(0, 18), padx=2)
-
-        tk.Label(banner, text='ℹ Price Sync from stock.csv',
-                 font=(ui_theme.THEME_FONT, 11, 'bold'), fg=THEME_ACCENT, bg='#1f3d2e',
-                 anchor='w').pack(fill='x', padx=12, pady=(10, 2))
-
-        detail = tk.Label(banner, text=report_text,
-                          font=(ui_theme.THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg='#1f3d2e',
-                          anchor='w', justify='left', wraplength=700)
-        detail.pack(fill='x', padx=12, pady=(0, 4))
-
         def dismiss():
             self.startup_price_sync_report = None
-            banner.destroy()
+            self.show_dashboard()
 
-        self.styled_button(banner, 'Dismiss', dismiss, width=12, variant='ghost').pack(anchor='e', padx=12, pady=(0, 10))
+        self._render_notice(
+            parent,
+            "Price sync from stock.csv",
+            "Cost prices were updated from the stock file.",
+            report_text,
+            kind='success',
+            on_dismiss=dismiss,
+        )
 
+    # ------------------------------------------------------------------
+    # Ledger summary
+    # ------------------------------------------------------------------
 
     def update_dashboard_stats(self, parent=None):
-        """Render simplified dashboard summary cards."""
+        """Refresh the summary in place after a stock movement.
+
+        Kept as the single post-mutation hook used across the screens.  It
+        only redraws when the dashboard is the visible screen; otherwise the
+        next visit recomputes the snapshot.
+        """
+        if getattr(self, 'active_tab', '') != 'Dashboard':
+            return
+        if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
+            return
+        try:
+            self._render_ledger_summary(self.main_menu)
+            self._render_ledger_panels(self.main_menu)
+            self._render_deliveries_strip(self.main_menu)
+        except tk.TclError:
+            return
+
+    def _render_ledger_summary(self, parent=None):
+        """Render the four ruled headline figures."""
+        parent = self._dashboard_parent(parent)
         if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'stats_frame'):
-            self.stats_frame.destroy()
+            return
+        if hasattr(self, 'ledger_summary_frame'):
+            self.ledger_summary_frame.destroy()
 
-        self.stats_frame = self.themed_frame(parent)
-        self.stats_frame._cards_grid = True
-        self.stats_frame.pack(fill='x', pady=(0, 18))
+        snap = self._compute_dashboard_snapshot()
+        attention = snap['attention_items']
+        attention_note = self._attention_footnote(attention)
 
-        total_items = len(self.inventory_df)
-        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
-            active = self.inventory_df[COL_ITEM_ID]
-            active = active[~active.apply(is_hidden_from_stock_view)]
-            active = active[~active.apply(is_delisted)]
-            total_items = len(active)
+        outer = tk.Frame(parent, bg=THEME_BG)
+        outer.pack(fill='x', pady=(0, 22))
+        self.ledger_summary_frame = outer
 
-        # Negative stock count (excluding hidden/excluded items)
-        neg_stock_count = 0
-        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
-            neg_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] < 0]
-            if not neg_stock_df.empty and COL_ITEM_ID in neg_stock_df.columns:
-                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(should_exclude)]
-                neg_stock_df = neg_stock_df[~neg_stock_df[COL_ITEM_ID].apply(is_delisted)]
-            neg_stock_count = len(neg_stock_df)
+        tk.Frame(outer, bg=THEME_BORDER, height=1).pack(fill='x')
+        row = tk.Frame(outer, bg=THEME_BG)
+        row.pack(fill='x')
 
-        # Low stock count (at or below reorder level)
-        low_stock_count = 0
-        if (COL_REORDER_LEVEL in self.inventory_df.columns
-                and COL_ITEM_ID in self.inventory_df.columns
-                and not self.inventory_df.empty):
-            low_stock_df = self.inventory_df[self.inventory_df[COL_QUANTITY] <= self.inventory_df[COL_REORDER_LEVEL]]
-            low_stock_df = low_stock_df[low_stock_df[COL_REORDER_LEVEL] > 0]
-            if not low_stock_df.empty and COL_ITEM_ID in low_stock_df.columns:
-                low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-                low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(should_exclude)]
-                low_stock_df = low_stock_df[~low_stock_df[COL_ITEM_ID].apply(is_delisted)]
-            low_stock_count = len(low_stock_df)
+        for column in (0, 2, 4, 6):
+            row.grid_columnconfigure(column, weight=1, uniform='ledger-kpi')
+        for column in (1, 3, 5):
+            tk.Frame(row, bg=THEME_BORDER, width=1).grid(
+                row=0, column=column, sticky='ns', pady=16)
 
-        # Last delivery timestamp
-        last_delivery = "None"
-        if not self.log_df.empty and COL_ACTION in self.log_df.columns:
-            deliveries = self.log_df[self.log_df[COL_ACTION] == ACTION_DELIVERY]
-            if not deliveries.empty and COL_TIMESTAMP in deliveries.columns:
-                try:
-                    latest = deliveries[COL_TIMESTAMP].max()
-                    last_delivery = datetime.strptime(latest.split()[0], '%Y-%m-%d').strftime(DATE_FORMAT_DISPLAY)
-                except Exception:
-                    last_delivery = "Unknown"
+        sales_note = snap['period_label']
+        if snap['period_sales_inc']:
+            sales_note = (f"{sales_note} · £{snap['period_sales_inc']:,.2f} "
+                          "inc VAT")
 
-        # Latest backup date
+        cells = [
+            ("Stock holding", f"£{snap['stock_holding']:,.2f}",
+             "At cost, ex VAT", THEME_TEXT),
+            ("Sales this period", f"£{snap['period_sales']:,.2f}",
+             sales_note, THEME_TEXT),
+            ("Active lines", f"{snap['active_lines']}",
+             f"{snap['lines_with_stock']} holding stock", THEME_TEXT),
+            ("Needs attention", f"{len(attention)}",
+             attention_note,
+             THEME_WARNING if attention else THEME_TEXT),
+        ]
+        for index, (label, value, note, colour) in enumerate(cells):
+            cell = tk.Frame(row, bg=THEME_BG)
+            cell.grid(row=0, column=index * 2, sticky='nsew',
+                      padx=(0 if index == 0 else 18, 18), pady=16)
+            tk.Label(cell, text=label.upper(), font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x')
+            tk.Label(cell, text=value, font=ui_theme.display_font(30),
+                     fg=colour, bg=THEME_BG, anchor='w').pack(fill='x', pady=(2, 0))
+            tk.Label(cell, text=note, font=(ui_theme.THEME_FONT, 9),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x')
+
+        tk.Frame(outer, bg=THEME_BORDER, height=1).pack(fill='x')
+
+    @staticmethod
+    def _attention_footnote(items):
+        tabs = sum(1 for item in items if item['tag'] == 'Tab')
+        uploads = sum(1 for item in items if item['tag'] == 'Upload')
+        stock = sum(1 for item in items if item['tag'] in ('Negative', 'Low'))
+        parts = []
+        if tabs:
+            parts.append(f"{tabs} stale tab{'s' if tabs != 1 else ''}")
+        if uploads:
+            parts.append("upload due")
+        if stock:
+            parts.append(f"{stock} stock item{'s' if stock != 1 else ''}")
+        return " · ".join(parts) if parts else "All clear"
+
+    # ------------------------------------------------------------------
+    # Panels
+    # ------------------------------------------------------------------
+
+    def _render_ledger_panels(self, parent=None):
+        """Render the attention list and the top-seller bars side by side."""
+        parent = self._dashboard_parent(parent)
+        if parent is None:
+            return
+        if hasattr(self, 'ledger_panels_frame'):
+            self.ledger_panels_frame.destroy()
+
+        snap = self._compute_dashboard_snapshot()
+        outer = tk.Frame(parent, bg=THEME_BG)
+        outer.pack(fill='both', expand=True, pady=(0, 22))
+        self.ledger_panels_frame = outer
+
+        outer.grid_columnconfigure(0, weight=1, uniform='ledger-panels')
+        outer.grid_columnconfigure(1, weight=1, uniform='ledger-panels')
+
+        left = tk.Frame(outer, bg=THEME_BG)
+        left.grid(row=0, column=0, sticky='nsew', padx=(0, 24))
+        right = tk.Frame(outer, bg=THEME_BG)
+        right.grid(row=0, column=1, sticky='nsew', padx=(24, 0))
+
+        self._build_attention_panel(left, snap)
+        self._build_top_sellers_panel(right, snap)
+
+    def _panel_heading(self, parent, title, note='', ink_rule=True):
+        heading = tk.Frame(parent, bg=THEME_BG)
+        heading.pack(fill='x')
+        tk.Label(heading, text=title, font=ui_theme.display_font(12),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(side='left')
+        if note:
+            tk.Label(heading, text=note.upper(), font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='e').pack(side='right')
+        tk.Frame(parent, bg=THEME_TEXT if ink_rule else THEME_BORDER,
+                 height=1).pack(fill='x', pady=(7, 0))
+
+    def _build_attention_panel(self, parent, snap):
+        items = snap['attention_items']
+        self._panel_heading(parent, "Needs attention",
+                            f"{len(items)} item{'s' if len(items) != 1 else ''}")
+
+        if not items:
+            tk.Label(parent, text="Nothing needs attention.",
+                     font=(ui_theme.THEME_FONT, 10), fg=THEME_SUCCESS,
+                     bg=THEME_BG, anchor='w').pack(fill='x', pady=(10, 0))
+        else:
+            for index, item in enumerate(items):
+                if index:
+                    tk.Frame(parent, bg=THEME_BORDER, height=1).pack(fill='x')
+                row = tk.Frame(parent, bg=THEME_BG)
+                row.pack(fill='x', pady=8)
+                text = tk.Frame(row, bg=THEME_BG)
+                text.pack(side='left', fill='x', expand=True)
+                tk.Label(text, text=item['name'], font=ui_theme.display_font(11),
+                         fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x')
+                tk.Label(text, text=item['detail'], font=(ui_theme.THEME_FONT, 9),
+                         fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x')
+                tk.Label(row, text=item['tag'].upper(), font=ui_theme.mono_font(8),
+                         fg=THEME_WARNING, bg=THEME_BG, padx=8, pady=2,
+                         bd=1, relief='solid').pack(side='right', padx=(12, 0))
+
+        uploads = snap['recent_sales_uploads']
+        if not uploads:
+            return
+
+        tk.Frame(parent, bg=THEME_BORDER, height=1).pack(fill='x', pady=(16, 0))
+        sub = tk.Frame(parent, bg=THEME_BG)
+        sub.pack(fill='x')
+        tk.Label(sub, text="Latest sales uploads", font=ui_theme.display_font(11),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(side='left', pady=(10, 0))
+        tk.Label(sub, text="INC VAT", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='e').pack(
+            side='right', pady=(10, 0))
+        tk.Frame(parent, bg=THEME_TEXT, height=1).pack(fill='x', pady=(6, 0))
+
+        for index, upload in enumerate(uploads):
+            if index:
+                tk.Frame(parent, bg=THEME_BORDER, height=1).pack(fill='x')
+            row = tk.Frame(parent, bg=THEME_BG)
+            row.pack(fill='x', pady=7)
+            text = tk.Frame(row, bg=THEME_BG)
+            text.pack(side='left', fill='x', expand=True)
+            tk.Label(text, text=upload['period'], font=ui_theme.display_font(10),
+                     fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x')
+            tk.Label(text, text=f"{upload['lines']} lines · {upload['qty']:,.0f} units",
+                     font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG, anchor='w').pack(fill='x')
+            # Inc VAT first — it is the figure the EPOS export totals — with the
+            # ex-VAT revenue (what every report uses) underneath.
+            value_box = tk.Frame(row, bg=THEME_BG)
+            value_box.pack(side='right', padx=(12, 0))
+            tk.Label(value_box, text=f"£{upload.get('value_inc', inc_vat(upload['value'])):,.2f}",
+                     font=ui_theme.display_font(11, 'bold'),
+                     fg=THEME_TEXT, bg=THEME_BG, anchor='e').pack(fill='x')
+            tk.Label(value_box, text=f"£{upload['value']:,.2f} ex VAT",
+                     font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG, anchor='e').pack(fill='x')
+
+    def _build_top_sellers_panel(self, parent, snap):
+        sellers = snap['top_sellers']
+        # The card below is "Since 1 November" after a baseline reset, so a
+        # hard-coded month here goes stale the moment a new baseline is set.
+        period = str(snap.get('period_label') or '')
+        heading = (f"Most sold {period[0].lower() + period[1:]}"
+                   if period.startswith('Since ') else "Most sold")
+        self._panel_heading(parent, heading, "Inc VAT")
+
+        if not sellers:
+            tk.Label(parent, text="No sales recorded since the baseline.",
+                     font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG, anchor='w').pack(fill='x', pady=(10, 0))
+            return
+
+        largest = max((seller['value'] for seller in sellers), default=0) or 1
+        for seller in sellers:
+            block = tk.Frame(parent, bg=THEME_BG)
+            block.pack(fill='x', pady=(10, 0))
+
+            top = tk.Frame(block, bg=THEME_BG)
+            top.pack(fill='x')
+            tk.Label(top, text=seller['name'], font=(ui_theme.THEME_FONT, 11),
+                     fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(side='left')
+            # Inc VAT is the figure an EPOS export totals, so it leads; the
+            # ex-VAT revenue every report uses sits underneath it.
+            value_box = tk.Frame(top, bg=THEME_BG)
+            value_box.pack(side='right')
+            tk.Label(value_box,
+                     text=f"£{seller.get('value_inc', inc_vat(seller['value'])):,.2f}",
+                     font=ui_theme.display_font(11, 'bold'),
+                     fg=THEME_TEXT, bg=THEME_BG, anchor='e').pack(fill='x')
+            tk.Label(value_box, text=f"£{seller['value']:,.2f} ex VAT",
+                     font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG, anchor='e').pack(fill='x')
+
+            track = tk.Frame(block, bg=TBL_ROW_ALT, height=5)
+            track.pack(fill='x', pady=(6, 0))
+            track.pack_propagate(False)
+            fill = tk.Frame(track, bg=THEME_ACCENT)
+            fill.place(relx=0, rely=0, relheight=1,
+                       relwidth=max(0.03, seller['value'] / largest))
+
+            tk.Label(block, text=seller['qty_label'], font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(
+                fill='x', pady=(4, 2))
+
+    def _render_deliveries_strip(self, parent=None):
+        """Render the one-line latest-deliveries strip."""
+        parent = self._dashboard_parent(parent)
+        if parent is None:
+            return
+        if hasattr(self, 'deliveries_strip_frame'):
+            self.deliveries_strip_frame.destroy()
+
+        snap = self._compute_dashboard_snapshot()
+        deliveries = snap['recent_deliveries']
+        if not deliveries:
+            return
+
+        outer = tk.Frame(parent, bg=THEME_BG)
+        outer.pack(fill='x', pady=(0, 10))
+        self.deliveries_strip_frame = outer
+        tk.Frame(outer, bg=THEME_BORDER, height=1).pack(fill='x')
+
+        line = tk.Frame(outer, bg=THEME_BG)
+        line.pack(fill='x', pady=(10, 0))
+        tk.Label(line, text="LATEST DELIVERIES", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(side='left', padx=(0, 22))
+        for delivery in deliveries:
+            tk.Label(line,
+                     text=f"{delivery['date']} · {delivery['supplier']} · "
+                          f"{delivery['lines']} line{'s' if delivery['lines'] != 1 else ''}",
+                     font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG).pack(side='left', padx=(0, 20))
+
+    def _render_dashboard_footer(self, parent):
+        footer = self.themed_frame(parent)
+        footer.pack(fill='x', pady=(6, 0))
+
         latest_backup = "None"
         try:
-            import glob
-            backups = sorted(glob.glob(os.path.join(DATA_DIR, 'backups', 'barstock_*.db')), key=os.path.getmtime, reverse=True)
+            backups = sorted(
+                glob.glob(os.path.join(DATA_DIR, 'backups', 'barstock_*.db')),
+                key=os.path.getmtime, reverse=True)
             if backups:
                 mtime = os.path.getmtime(backups[0])
                 latest_backup = datetime.fromtimestamp(mtime).strftime(DATE_FORMAT_DISPLAY)
         except Exception:
             latest_backup = "Unknown"
 
-        # Last successful database write (every movement saves immediately)
         last_saved = "Not yet saved"
         saved_raw = get_setting('last_saved_at')
         if saved_raw:
@@ -259,22 +468,16 @@ class DashboardMixin:
             except (TypeError, ValueError):
                 last_saved = str(saved_raw)
 
-        # Reorder-level alert total
-        reorder_alert_count = low_stock_count
+        tk.Label(
+            footer,
+            text=(f"Created by Chris Armstrong   ·   Latest backup {latest_backup}"
+                  f"   ·   Last saved {last_saved}"),
+            font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+            anchor='e').pack(side='right')
 
-        self.create_card(self.stats_frame, "Items in Stock", f"{total_items}",
-                         f"{reorder_alert_count} below reorder level",
-                         status='warning' if reorder_alert_count > 0 else 'normal')
-        self.create_card(self.stats_frame, "Negative Stock", f"{neg_stock_count}",
-                         "Needs attention" if neg_stock_count > 0 else "All positive",
-                         status='danger' if neg_stock_count > 0 else 'normal')
-        self.create_card(self.stats_frame, "Last Delivery", last_delivery,
-                         "Booker/Tennent’s/Belhaven" if last_delivery != "None" else "Add a delivery")
-        self.create_card(self.stats_frame, "Latest Backup", latest_backup,
-                         "Auto-backup on open" if latest_backup != "None" else "Not yet backed up")
-        self.create_card(self.stats_frame, "Last Saved", last_saved,
-                         "Every movement saves immediately")
-
+    # ------------------------------------------------------------------
+    # Snapshot
+    # ------------------------------------------------------------------
 
     def _dashboard_cache_key(self):
         """Cheap fingerprint of the data the dashboard aggregates."""
@@ -295,9 +498,17 @@ class DashboardMixin:
                 value_sum = float((qty * cost).sum())
             except Exception:
                 pass
+        try:
+            tab_count = len(InventoryDataManager.get_open_tabs(status='open'))
+        except Exception:
+            tab_count = 0
+        try:
+            upload_count = len(get_upload_hashes())
+        except Exception:
+            upload_count = 0
         return (log_len, latest, len(self.inventory_df),
-                round(qty_sum, 4), round(value_sum, 4))
-
+                round(qty_sum, 4), round(value_sum, 4),
+                tab_count, upload_count)
 
     def _compute_dashboard_snapshot(self):
         """Return the dashboard aggregation, memoised against the data."""
@@ -309,67 +520,146 @@ class DashboardMixin:
         self._dashboard_snapshot_cache = (key, result)
         return result
 
-
     def _compute_dashboard_snapshot_uncached(self):
-        """Return dict of snapshot values for the dashboard details panel."""
+        """Return the values the Ledger dashboard draws."""
         result = {
             'period_sales': 0.0,
+            'period_sales_inc': 0.0,
             'period_label': 'No sales data',
             'stock_holding': 0.0,
+            'active_lines': 0,
+            'lines_with_stock': 0,
             'recent_sales_uploads': [],
             'recent_deliveries': [],
+            'top_sellers': [],
+            'attention_items': [],
         }
 
-        # Stock holding value at cost price
+        measure_by_id = {}
+        name_by_id = {}
+        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
+            for _, item in self.inventory_df.iterrows():
+                item_id = str(item[COL_ITEM_ID])
+                if is_hidden_from_stock_view(item_id) or is_delisted(item_id):
+                    continue
+                measure_by_id[item_id] = str(item.get(COL_MEASURE, '') or '')
+                name_by_id[item_id] = str(item.get(COL_ITEM_NAME, item_id))
+            result['active_lines'] = len(measure_by_id)
+            qty_series = pd.to_numeric(
+                self.inventory_df.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+            holding_ids = set(
+                self.inventory_df.loc[qty_series > 0, COL_ITEM_ID].astype(str)
+                if COL_ITEM_ID in self.inventory_df.columns else [])
+            result['lines_with_stock'] = len(holding_ids & set(measure_by_id))
+
+        # Stock holding value at cost price. Delisted lines are excluded, in
+        # line with the report's Total Stock Value: they no longer hold stock.
         if not self.inventory_df.empty:
             qty = pd.to_numeric(self.inventory_df.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
             cost = pd.to_numeric(self.inventory_df.get(COL_COST_PRICE, 0), errors='coerce').fillna(0)
-            result['stock_holding'] = (qty * cost).sum()
+            active_mask = ~self.inventory_df[COL_ITEM_ID].astype(str).map(is_delisted)
+            result['stock_holding'] = sum_money(qty[active_mask] * cost[active_mask])
 
         if self.log_df.empty or COL_ACTION not in self.log_df.columns:
+            result['attention_items'] = self._compute_attention_items()
             return result
 
         log = self.log_df.copy()
         log['_ts'] = pd.to_datetime(log[COL_TIMESTAMP], errors='coerce')
 
-        # Determine period start: latest baseline reset, otherwise earliest sales transaction
+        # Period start: latest baseline reset, otherwise the first sale.
         baseline_ts = None
         baseline_rows = log[log[COL_ACTION] == ACTION_STOCKTAKE_BASELINE]
         if not baseline_rows.empty:
             baseline_ts = baseline_rows['_ts'].max()
-        # Both sale actions count: "Sales (1 unit)" rows come from single-item
-        # uploads and were previously missing from the dashboard total.
         sales_rows = log[log[COL_ACTION].isin(SALE_ACTIONS)]
         if baseline_ts is None and not sales_rows.empty:
             baseline_ts = sales_rows['_ts'].min()
 
         period_sales = 0.0
+        period_rows = sales_rows
+        item_money = None
         if not sales_rows.empty and baseline_ts is not None:
-            period_sales_rows = sales_rows[sales_rows['_ts'] >= baseline_ts]
-            qty = pd.to_numeric(period_sales_rows.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
-            price = pd.to_numeric(period_sales_rows.get(COL_SELL_PRICE, 0), errors='coerce').fillna(0)
-            period_sales = (qty * price).sum()
+            period_rows = sales_rows[sales_rows['_ts'] >= baseline_ts]
+            # Canonical penny allocation shared with every report, so the
+            # dashboard total is the same figure the GP, Division and
+            # comprehensive reports show.
+            item_money = sales_money_by_item(
+                period_rows, int(self.get_member_discount_pct()))
+            if not item_money.empty:
+                period_sales = sum_money(item_money['total_revenue'])
             if baseline_rows.empty:
                 result['period_label'] = 'All recorded sales'
             else:
-                result['period_label'] = f"Since {baseline_ts.strftime(DATE_FORMAT_DISPLAY)}"
-
+                result['period_label'] = f"Since {baseline_ts.strftime('%-d %B')}"
         result['period_sales'] = period_sales
+        # The EPOS exports are inc-VAT, so the dashboard shows the same total
+        # both ways and an upload can be checked against the CSV at a glance.
+        result['period_sales_inc'] = inc_vat(period_sales)
 
-        # Recent sales uploads (grouped by date_range)
+        # Recent sales uploads: period, value, lines and units.
         uploads = sales_rows[sales_rows.get(COL_DATE_RANGE, '').astype(str).str.strip() != '']
         if not uploads.empty:
-            grouped = uploads.groupby(COL_DATE_RANGE).agg({'_ts': 'min', COL_QUANTITY: 'sum'}).reset_index()
-            grouped = grouped.sort_values('_ts', ascending=False).head(3)
+            uploads = uploads.copy()
+            uploads['_value'] = (
+                pd.to_numeric(uploads.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+                * pd.to_numeric(uploads.get(COL_SELL_PRICE, 0), errors='coerce').fillna(0))
+            grouped = uploads.groupby(COL_DATE_RANGE).agg(
+                _ts=('_ts', 'min'),
+                qty=(COL_QUANTITY, 'sum'),
+                value=('_value', 'sum'),
+                lines=(COL_QUANTITY, 'size'),
+            ).reset_index().sort_values('_ts', ascending=False).head(2)
             for _, row in grouped.iterrows():
-                period_raw = str(row[COL_DATE_RANGE])
-                period_fmt = self._format_period_display(period_raw)
+                value = round_money(row['value'])
                 result['recent_sales_uploads'].append({
-                    'period': period_fmt,
-                    'qty': float(row[COL_QUANTITY]),
+                    'period': self._format_period_short(str(row[COL_DATE_RANGE])),
+                    'qty': float(row['qty']),
+                    'value': value,
+                    'value_inc': inc_vat(value),
+                    'lines': int(row['lines']),
                 })
 
-        # Recent deliveries (grouped by timestamp + supplier)
+        # Top sellers since the baseline.
+        if not period_rows.empty:
+            seller_rows = period_rows.copy()
+            seller_rows['_qty'] = pd.to_numeric(
+                seller_rows.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+            seller_rows['_price'] = pd.to_numeric(
+                seller_rows.get(COL_SELL_PRICE, 0), errors='coerce').fillna(0)
+            seller_rows['_value'] = seller_rows['_qty'] * seller_rows['_price']
+            seller_rows['_key'] = seller_rows.get(
+                COL_ITEM_ID, seller_rows.get(COL_ITEM_NAME, '')).astype(str)
+            agg_kwargs = {
+                'qty': ('_qty', 'sum'),
+                'value': ('_value', 'sum'),
+            }
+            if COL_ITEM_NAME in seller_rows.columns:
+                agg_kwargs['name'] = (COL_ITEM_NAME, 'last')
+            grouped = seller_rows.groupby('_key').agg(
+                **agg_kwargs).reset_index()
+            sellers = []
+            for _, seller in grouped.iterrows():
+                item_id = seller['_key']
+                if item_money is not None and item_id in item_money.index:
+                    value = float(item_money.loc[item_id, 'total_revenue'])
+                else:
+                    value = round_money(seller['value'])
+                sellers.append((value, item_id, float(seller['qty']),
+                                str(seller.get('name', item_id))))
+            sellers.sort(key=lambda entry: entry[0], reverse=True)
+            for value, item_id, qty, fallback_name in sellers[:5]:
+                name = name_by_id.get(item_id) or fallback_name
+                measure = measure_by_id.get(item_id, '')
+                result['top_sellers'].append({
+                    'name': name,
+                    'value': value,
+                    'value_inc': inc_vat(value),
+                    'qty': qty,
+                    'qty_label': self._quantity_label(qty, measure),
+                })
+
+        # Recent deliveries (grouped by timestamp + supplier).
         deliveries = log[log[COL_ACTION] == ACTION_DELIVERY].copy()
         if not deliveries.empty:
             deliveries[COL_SUPPLIER] = deliveries.get(COL_SUPPLIER, '').fillna('')
@@ -378,416 +668,186 @@ class DashboardMixin:
             grouped = grouped.sort_values('_ts_dt', ascending=False).head(3)
             for _, row in grouped.iterrows():
                 ts = row['_ts_dt']
-                ts_str = ts.strftime(DATE_FORMAT_DISPLAY) if pd.notna(ts) else self._format_date_display(str(row[COL_TIMESTAMP])[:10])
+                date_text = self._short_day(ts) if pd.notna(ts) else str(row[COL_TIMESTAMP])[:10]
                 result['recent_deliveries'].append({
-                    'date': ts_str,
+                    'date': date_text,
                     'supplier': str(row[COL_SUPPLIER]) or '-',
+                    'lines': int(row['count']),
                 })
 
+        result['attention_items'] = self._compute_attention_items()
         return result
 
+    def _compute_attention_items(self):
+        """Build the truthful attention list: stale tabs, upload age, stock.
+
+        Reorder levels are zero for every live item, so the old "below reorder"
+        rule contributes nothing; stale tabs and an overdue sales upload are
+        what actually needs chasing.
+        """
+        items = []
+
+        try:
+            # Query the tab table directly so each tab appears once, not once
+            # per item row.
+            conn = sqlite3.connect(
+                f'file:{data_manager_module.DB_PATH}?mode=ro', uri=True)
+            try:
+                tab_rows = conn.execute(
+                    "SELECT customer_name, created_at FROM open_tabs "
+                    "WHERE status = 'open' ORDER BY created_at").fetchall()
+            finally:
+                conn.close()
+            cutoff = datetime.now() - timedelta(days=7)
+            for customer_name, created_at in tab_rows:
+                if not created_at:
+                    continue
+                try:
+                    created_dt = datetime.fromisoformat(
+                        str(created_at).replace('Z', '+00:00')).replace(tzinfo=None)
+                except Exception:
+                    continue
+                if created_dt < cutoff:
+                    items.append({
+                        'name': str(customer_name or 'Open tab'),
+                        'detail': f"Tab open since {self._short_date(created_dt)}",
+                        'tag': 'Tab',
+                    })
+        except Exception:
+            pass
+
+        try:
+            uploads = [h for h in get_upload_hashes() if h.get('type') == 'sales']
+            if uploads:
+                latest = max(uploads, key=lambda h: h.get('timestamp', ''))
+                uploaded = self._parse_timestamp(latest.get('timestamp'))
+                if uploaded and datetime.now() - uploaded > timedelta(days=8):
+                    items.append({
+                        'name': 'Sales upload',
+                        'detail': f"Last sales file {self._short_date(uploaded)}",
+                        'tag': 'Upload',
+                    })
+        except Exception:
+            pass
+
+        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
+            for _, row in self.inventory_df.iterrows():
+                item_id = row[COL_ITEM_ID]
+                if (is_hidden_from_stock_view(item_id) or should_exclude(item_id)
+                        or is_delisted(item_id)):
+                    continue
+                try:
+                    qty = float(row[COL_QUANTITY])
+                    reorder = float(row.get(COL_REORDER_LEVEL, 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                name = str(row.get(COL_ITEM_NAME, item_id))
+                measure = str(row.get(COL_MEASURE, '') or '')
+                if qty < 0:
+                    items.append({
+                        'name': name,
+                        'detail': f"{qty:.0f} {measure.lower()} on hand".replace('  ', ' '),
+                        'tag': 'Negative',
+                    })
+                elif reorder > 0 and qty <= reorder:
+                    items.append({
+                        'name': name,
+                        'detail': f"{qty:.0f} {measure.lower()} left".replace('  ', ' '),
+                        'tag': 'Low',
+                    })
+
+        seen = set()
+        unique = []
+        for item in items:
+            key = (item['name'], item['tag'])
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        return unique
+
+    # ------------------------------------------------------------------
+    # Formatting helpers
+    # ------------------------------------------------------------------
+
+    def _dashboard_parent(self, parent):
+        if parent is not None:
+            return parent
+        menu = getattr(self, 'main_menu', None)
+        if menu is not None and menu.winfo_exists():
+            return menu
+        return None
+
+    @staticmethod
+    def _parse_timestamp(value):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(
+                str(value).replace('Z', '+00:00')).replace(tzinfo=None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _short_date(dt):
+        if dt.year == datetime.now().year:
+            return f"{dt.day} {dt:%B}"
+        return f"{dt.day} {dt:%B %Y}"
+
+    @staticmethod
+    def _short_day(dt):
+        return f"{dt.day} {dt:%b}"
+
+    @staticmethod
+    def _quantity_label(qty, measure):
+        unit = MEASURE_PLURALS.get(str(measure).lower(), str(measure).lower() or 'units')
+        if qty == 1 and unit.endswith('s'):
+            unit = unit[:-1]
+        return f"{qty:,.0f} {unit}"
+
+    def _format_period_short(self, period_raw):
+        """Turn '05/10/2026 - 11/10/2026' into '5–11 October'."""
+        if not period_raw:
+            return period_raw
+        for sep in (' - ', ' – ', ' to '):
+            if sep in period_raw:
+                parts = period_raw.split(sep)
+                if len(parts) == 2:
+                    try:
+                        start = parse_display_date(parts[0].strip())
+                        end = parse_display_date(parts[1].strip())
+                    except Exception:
+                        break
+                    if (start.year == end.year and start.month == end.month):
+                        return f"{start.day}–{end.day} {end:%B}"
+                    if start.year == end.year:
+                        return f"{start.day} {start:%B} – {end.day} {end:%B}"
+                    return (f"{start.day} {start:%B %Y} – "
+                            f"{end.day} {end:%B %Y}")
+                break
+        try:
+            single = parse_display_date(period_raw)
+            return self._short_date(single)
+        except Exception:
+            return period_raw
 
     def _format_period_display(self, period_raw):
         """Convert a raw period string to DD-MM-YYYY display format if possible."""
         if not period_raw:
             return period_raw
-        # Match common patterns: 03/08/2026 - 09/08/2026, 24-05-2026 - 24-05-2026, 2026-08-03 - 2026-08-09
         for sep in (' - ', ' – ', ' to '):
             if sep in period_raw:
                 parts = period_raw.split(sep)
                 if len(parts) == 2:
-                    return f"{self._format_date_display(parts[0].strip())}{sep}{self._format_date_display(parts[1].strip())}"
+                    return (f"{self._format_date_display(parts[0].strip())}{sep}"
+                            f"{self._format_date_display(parts[1].strip())}")
                 break
         return self._format_date_display(period_raw)
-
 
     def _format_date_display(self, date_str):
         """Convert any ISO/legacy display date string to DD-MM-YYYY."""
         if not date_str:
             return date_str
         try:
-            dt = parse_display_date(date_str)
-            return dt.strftime(DATE_FORMAT_DISPLAY)
+            return parse_display_date(date_str).strftime(DATE_FORMAT_DISPLAY)
         except Exception:
             return date_str
-
-
-    def _render_dashboard_snapshot(self, parent=None):
-        """Render snapshot details panel: period sales, stock holding, recent uploads/deliveries."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'snapshot_frame'):
-            self.snapshot_frame.destroy()
-
-        self.snapshot_frame = self.themed_frame(parent)
-        self.snapshot_frame.pack(fill='x', pady=(0, 18))
-
-        snap = self._compute_dashboard_snapshot()
-
-        # Summary cards row
-        cards_frame = self.themed_frame(self.snapshot_frame)
-        cards_frame._cards_grid = True
-        cards_frame.pack(fill='x', pady=(0, 14))
-
-        self.create_card(cards_frame, "Period Sales (ex-VAT)", f"£{snap['period_sales']:,.2f}",
-                         snap['period_label'])
-        self.create_card(cards_frame, "Stock Holding", f"£{snap['stock_holding']:,.2f}",
-                         "At cost price (ex VAT)")
-        recent_uploads_text = "\n".join(
-            [f"{u['period']}" for u in snap['recent_sales_uploads']]
-        ) or "No recent uploads"
-        self.create_card(cards_frame, "Last 3 Sales Uploads", f"{len(snap['recent_sales_uploads'])}",
-                         recent_uploads_text)
-        recent_deliveries_text = "\n".join(
-            [f"{d['date']} — {d['supplier']}" for d in snap['recent_deliveries']]
-        ) or "No recent deliveries"
-        self.create_card(cards_frame, "Last 3 Deliveries", f"{len(snap['recent_deliveries'])}",
-                         recent_deliveries_text)
-
-        # Exit System card (clickable)
-        exit_card = tk.Frame(cards_frame, bg=THEME_CARD, bd=1, relief='solid',
-                             highlightbackground=THEME_BORDER, highlightthickness=1,
-                             cursor='hand2')
-        exit_column = len(cards_frame.grid_slaves())
-        exit_card.grid(row=0, column=exit_column, sticky='nsew', padx=8, pady=5)
-        cards_frame.grid_columnconfigure(exit_column, weight=1, uniform='cards')
-        tk.Label(exit_card, text="EXIT SYSTEM", font=(ui_theme.THEME_FONT, 9, 'bold'),
-                 fg=THEME_DANGER, bg=THEME_CARD).pack(anchor='w', padx=14, pady=(12, 4))
-        exit_value = tk.Label(exit_card, text="Save & Exit", font=(ui_theme.THEME_FONT, 22, 'bold'),
-                              fg=THEME_DANGER, bg=THEME_CARD)
-        exit_value.pack(anchor='w', padx=14)
-        tk.Label(exit_card, text="Safely close BarStock", font=(ui_theme.THEME_FONT, 10),
-                 fg=THEME_TEXT_MUTED, bg=THEME_CARD).pack(anchor='w', padx=14, pady=(4, 14))
-
-        def _fit_exit(event=None):
-            width = exit_card.winfo_width()
-            if width < 40 or width == getattr(exit_card, '_fitted_width', None):
-                return
-            exit_card._fitted_width = width
-            exit_value.configure(wraplength=max(width - 28, 40),
-                                 font=(ui_theme.THEME_FONT, 22 if width >= 120 else 15, 'bold'))
-
-        exit_card.bind('<Configure>', _fit_exit)
-        exit_card.bind('<Button-1>', lambda e: self.on_exit())
-        for child in exit_card.winfo_children():
-            child.bind('<Button-1>', lambda e: self.on_exit())
-
-
-    def _render_attention_table(self, parent=None):
-        """Show a simple table of items that need action: negative, low, or discrepancy."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'attention_frame'):
-            self.attention_frame.destroy()
-
-        attention = []
-        if not self.inventory_df.empty and COL_ITEM_ID in self.inventory_df.columns:
-            for _, row in self.inventory_df.iterrows():
-                item_id = row[COL_ITEM_ID]
-                if is_hidden_from_stock_view(item_id) or should_exclude(item_id):
-                    continue
-                qty = float(row[COL_QUANTITY])
-                reorder = float(row.get(COL_REORDER_LEVEL, 0) or 0)
-                name = row.get(COL_ITEM_NAME, item_id)
-                measure = row.get(COL_MEASURE, '')
-
-                if qty < 0:
-                    attention.append({
-                        'name': name,
-                        'qty': qty,
-                        'measure': measure,
-                        'status': 'Negative',
-                        'action': 'Stocktake or delivery',
-                        'tag': 'danger'
-                    })
-                elif reorder > 0 and qty <= reorder:
-                    attention.append({
-                        'name': name,
-                        'qty': qty,
-                        'measure': measure,
-                        'status': 'Low',
-                        'action': 'Order soon',
-                        'tag': 'warning'
-                    })
-
-        panel = self.create_panel(parent, "Items needing attention")
-
-        if not attention:
-            self.themed_label(panel, "No issues found. All tracked stock is positive and above reorder levels.",
-                              font=(ui_theme.THEME_FONT, 11), fg=THEME_SUCCESS).pack(anchor='w', padx=14, pady=(0, 14))
-            return
-
-        tree_frame = self.themed_frame(panel, bg=THEME_PANEL)
-        tree_frame.pack(fill='both', expand=True, padx=14, pady=(0, 14))
-
-        tree = ttk.Treeview(tree_frame, columns=('name', 'current', 'status', 'action'), show='headings', height=min(8, len(attention)))
-        tree.heading('name', text='Item')
-        tree.heading('current', text='Current Stock')
-        tree.heading('status', text='Status')
-        tree.heading('action', text='Action')
-        tree.column('name', width=250)
-        tree.column('current', width=140, anchor='e')
-        tree.column('status', width=110, anchor='center')
-        tree.column('action', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.configure(yscrollcommand=scrollbar.set)
-        tree.pack(side=tk.LEFT, fill='both', expand=True)
-        self._bind_treeview_mousewheel(tree)
-
-        for item in attention:
-            current_text = f"{item['qty']:.1f} {item['measure']}s" if item['measure'] else f"{item['qty']:.1f}"
-            tag = 'danger' if item['tag'] == 'danger' else 'warning'
-            tree.insert('', tk.END, values=(item['name'], current_text, item['status'], item['action']), tags=(tag,))
-
-        tree.tag_configure('danger', foreground=THEME_DANGER, font=(ui_theme.THEME_FONT, 10, 'bold'))
-        tree.tag_configure('warning', foreground=THEME_WARNING, font=(ui_theme.THEME_FONT, 10, 'bold'))
-
-
-    def _safe_slice(self, df, required_cols):
-        """Return a copy of df if it has all required columns, else an empty DataFrame with those columns."""
-        if df is None or df.empty:
-            return pd.DataFrame(columns=required_cols)
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            return pd.DataFrame(columns=required_cols)
-        return df.copy()
-
-
-    def update_critical_stock_alert(self, parent=None):
-        """Display a dark-themed red alert banner if any stock item is below -10."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'critical_alert_frame'):
-            self.critical_alert_frame.destroy()
-
-        df = self._safe_slice(self.inventory_df, [COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY])
-        critical_items = df[df[COL_QUANTITY] < -10]
-        if critical_items.empty:
-            return
-        critical_items = critical_items[~critical_items[COL_ITEM_ID].apply(is_hidden_from_stock_view)]
-        critical_items = critical_items[~critical_items[COL_ITEM_ID].apply(should_exclude)]
-        if critical_items.empty:
-            return
-
-        self.critical_alert_frame = tk.Frame(parent, bg='#3a1010', bd=1, relief='solid',
-                                             highlightbackground='#7f1d1d', highlightthickness=1)
-        self.critical_alert_frame.pack(fill='x', pady=(0, 12))
-
-        alert_text = f"CRITICAL STOCK: {len(critical_items)} item(s) below -10 — "
-        alert_text += ", ".join(f"{row[COL_ITEM_NAME]} ({row[COL_QUANTITY]:.1f})" for _, row in critical_items.iterrows())
-        tk.Label(self.critical_alert_frame, text=alert_text,
-                 font=(ui_theme.THEME_FONT, 11, 'bold'), bg='#3a1010', fg=THEME_DANGER,
-                 wraplength=1100, justify='left').pack(anchor='w', padx=14, pady=10)
-
-
-    def update_variance_alert(self, parent=None):
-        """Display a dark-themed yellow warning banner for unexplained stock variance."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'variance_alert_frame'):
-            self.variance_alert_frame.destroy()
-
-        df = self._safe_slice(self.inventory_df, [COL_ITEM_ID])
-        if df.empty:
-            return
-
-        try:
-            from reports import build_surplus_report_data
-            from data_manager import get_resource_path
-            import sqlite3
-            import os
-            from datetime import datetime, timedelta
-
-            report_data = build_surplus_report_data(self.inventory_df, self.log_df)
-            db_path = os.path.join(get_resource_path(), 'barstock.db')
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cutoff = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute("""
-                SELECT item_id, SUM(quantity) FROM transactions
-                WHERE action = 'Stocktake Adjustment' AND timestamp >= ?
-                GROUP BY item_id
-            """, (cutoff,))
-            stocktake_adjusted = {row[0]: row[1] for row in cursor.fetchall()}
-            conn.close()
-
-            unexplained = []
-            for r in report_data:
-                item_id = r.get(COL_ITEM_ID)
-                if item_id in stocktake_adjusted:
-                    continue
-                if abs(r.get('Variance Value', 0)) >= 5:
-                    unexplained.append(r)
-
-            total_variance_value = sum(abs(r.get('Variance Value', 0)) for r in unexplained)
-            if total_variance_value <= 200:
-                return
-
-            self.variance_alert_frame = tk.Frame(parent, bg='#382a05', bd=1, relief='solid',
-                                                 highlightbackground='#856404', highlightthickness=1)
-            self.variance_alert_frame.pack(fill='x', pady=(0, 12))
-
-            alert_text = f"VARIANCE WARNING: £{total_variance_value:.2f} unexplained across {len(unexplained)} item(s). Consider a stocktake."
-            tk.Label(self.variance_alert_frame, text=alert_text,
-                     font=(ui_theme.THEME_FONT, 11, 'bold'), bg='#382a05', fg=THEME_WARNING,
-                     wraplength=1100, justify='left').pack(anchor='w', padx=14, pady=10)
-        except Exception:
-            return
-
-
-    def update_open_tab_alert(self, parent=None):
-        """Display a dark-themed red alert banner for stale open tabs."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'open_tab_alert_frame'):
-            self.open_tab_alert_frame.destroy()
-
-        try:
-            from datetime import datetime, timedelta
-            open_tabs = InventoryDataManager.get_open_tabs(status='open')
-            if open_tabs.empty:
-                return
-
-            cutoff = datetime.now() - timedelta(days=7)
-            stale_tabs = []
-            for _, row in open_tabs.iterrows():
-                created = row.get('created_at')
-                if not created:
-                    continue
-                try:
-                    created_dt = datetime.fromisoformat(str(created).replace('Z', '+00:00'))
-                    if created_dt.replace(tzinfo=None) < cutoff:
-                        stale_tabs.append(row.get('customer_name', 'Unknown'))
-                except Exception:
-                    continue
-
-            stale_tabs = list(dict.fromkeys(stale_tabs))
-            if not stale_tabs:
-                return
-
-            self.open_tab_alert_frame = tk.Frame(parent, bg='#3a1010', bd=1, relief='solid',
-                                                 highlightbackground='#7f1d1d', highlightthickness=1)
-            self.open_tab_alert_frame.pack(fill='x', pady=(0, 12))
-
-            alert_text = f"STALE TABS: {len(stale_tabs)} tab(s) over 7 days old — {', '.join(stale_tabs[:5])}"
-            if len(stale_tabs) > 5:
-                alert_text += " and more..."
-            alert_text += ". Consider closing or chasing."
-            tk.Label(self.open_tab_alert_frame, text=alert_text,
-                     font=(ui_theme.THEME_FONT, 11, 'bold'), bg='#3a1010', fg=THEME_DANGER,
-                     wraplength=1100, justify='left').pack(anchor='w', padx=14, pady=10)
-        except Exception:
-            return
-
-
-    def _render_upload_banner(self, parent=None):
-        """Render dark-themed upload history banner."""
-        if parent is None:
-            if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
-                return
-            parent = self.main_menu
-        if hasattr(self, 'upload_banner_frame'):
-            self.upload_banner_frame.destroy()
-
-        hashes = get_upload_hashes()
-        sales_uploads = [h for h in hashes if h.get('type') == 'sales']
-        comp_uploads = [h for h in hashes if h.get('type') == 'complimentary']
-        banner_texts = []
-        if sales_uploads:
-            latest = max(sales_uploads, key=lambda h: h.get('timestamp', ''))
-            banner_texts.append(f"Last Sales Upload: {latest.get('date_range', 'Unknown')}")
-        if comp_uploads:
-            latest = max(comp_uploads, key=lambda h: h.get('timestamp', ''))
-            banner_texts.append(f"Last Complimentary Upload: {latest.get('date_range', 'Unknown')}")
-        if not banner_texts:
-            return
-
-        self.upload_banner_frame = tk.Frame(parent, bg='#0f2e4e', bd=1, relief='solid',
-                                            highlightbackground='#1e4b7a', highlightthickness=1)
-        self.upload_banner_frame.pack(fill='x', pady=(0, 14))
-        tk.Label(self.upload_banner_frame, text='  |  '.join(banner_texts),
-                 font=(ui_theme.THEME_FONT, 10), bg='#0f2e4e', fg='#93c5fd').pack(anchor='w', padx=14, pady=8)
-
-
-    def _render_stock_alerts_panel(self, parent):
-        """Render a dark-themed panel listing items needing attention."""
-        panel = self.create_panel(parent, "Stock Alerts")
-        rows_frame = self.themed_frame(panel, bg=THEME_PANEL)
-        rows_frame.pack(fill='x', padx=14, pady=(0, 14))
-
-        header_bg = THEME_PANEL
-        col_config = [("Item", 30, 'w'), ("Current", 15, 'center'),
-                      ("Reorder", 15, 'center'), ("Status", 15, 'center')]
-        for text, width, anchor in col_config:
-            tk.Label(rows_frame, text=text, font=(ui_theme.THEME_FONT, 10, 'bold'),
-                     bg=header_bg, fg=THEME_TEXT_MUTED, width=width, anchor=anchor).pack(side='left', padx=4)
-
-        df = self._safe_slice(self.inventory_df, [COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_REORDER_LEVEL])
-        if df.empty:
-            tk.Label(rows_frame, text="No inventory data available.", font=(ui_theme.THEME_FONT, 11),
-                     bg=THEME_PANEL, fg=THEME_TEXT_MUTED).pack(pady=10)
-            return
-
-        alert_rows = []
-        for _, row in df.iterrows():
-            try:
-                qty = float(row[COL_QUANTITY])
-                reorder = float(row[COL_REORDER_LEVEL])
-                if reorder <= 0:
-                    continue
-                if qty > reorder:
-                    continue
-                item_id = str(row[COL_ITEM_ID])
-                if is_hidden_from_stock_view(item_id):
-                    continue
-                if qty <= 0:
-                    status_text = "CRITICAL"
-                    status_color = THEME_DANGER
-                elif qty <= reorder * 0.5:
-                    status_text = "LOW"
-                    status_color = THEME_WARNING
-                else:
-                    status_text = "BELOW REORDER"
-                    status_color = THEME_TEXT
-                alert_rows.append({
-                    COL_ITEM_NAME: str(row[COL_ITEM_NAME]),
-                    COL_QUANTITY: qty,
-                    COL_REORDER_LEVEL: reorder,
-                    'status_text': status_text,
-                    'status_color': status_color,
-                })
-            except Exception:
-                continue
-
-        alert_rows = sorted(alert_rows, key=lambda r: r[COL_QUANTITY])[:10]
-
-        if not alert_rows:
-            tk.Label(rows_frame, text="No stock alerts. All items are above reorder level.",
-                     font=(ui_theme.THEME_FONT, 11), bg=THEME_PANEL, fg=THEME_SUCCESS).pack(pady=10)
-            return
-
-        list_frame = self.themed_frame(panel, bg=THEME_PANEL)
-        list_frame.pack(fill='x', padx=14, pady=(0, 14))
-        for row in alert_rows:
-            row_frame = self.themed_frame(list_frame, bg=THEME_PANEL)
-            row_frame.pack(fill='x', pady=3)
-            tk.Label(row_frame, text=row[COL_ITEM_NAME], font=(ui_theme.THEME_FONT, 11),
-                     bg=THEME_PANEL, fg=THEME_TEXT, width=30, anchor='w').pack(side='left', padx=4)
-            tk.Label(row_frame, text=f"{row[COL_QUANTITY]:.1f}", font=(ui_theme.THEME_FONT, 11),
-                     bg=THEME_PANEL, fg=row['status_color'], width=15, anchor='center').pack(side='left', padx=4)
-            tk.Label(row_frame, text=f"{row[COL_REORDER_LEVEL]:.1f}", font=(ui_theme.THEME_FONT, 11),
-                     bg=THEME_PANEL, fg=THEME_TEXT_MUTED, width=15, anchor='center').pack(side='left', padx=4)
-            tk.Label(row_frame, text=row['status_text'], font=(ui_theme.THEME_FONT, 10, 'bold'),
-                     bg=THEME_PANEL, fg=row['status_color'], width=15, anchor='center').pack(side='left', padx=4)

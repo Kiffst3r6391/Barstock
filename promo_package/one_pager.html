@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BarStock for Clubs</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #F7F6F0;
+  --rail: #F2F1E9;
+  --ink: #1B221E;
+  --muted: #5F685F;
+  --rule: #D7D9CD;
+  --bottle: #16443B;
+  --copper: #8E5A2B;
+  --accent-ink: #F6F4EC;
+  --display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --body: 'Public Sans', 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'IBM Plex Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+p { margin: 0 0 12px; }
+p:last-child { margin-bottom: 0; }
+
+.page {
+  max-width: 200mm;
+  margin: 0 auto;
+  padding-block: 14mm 10mm;
+}
+
+/* ---- masthead ---- */
+
+.masthead { border-top: 1px solid var(--ink); padding-top: 10px; }
+
+.kicker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wordmark {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(44px, 9vw, 62px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  margin: 18px 0 12px;
+}
+
+.wordmark .dot { color: var(--copper); }
+
+.standfirst {
+  font-family: var(--display);
+  font-size: 21px;
+  line-height: 1.3;
+  max-width: 34em;
+  margin-bottom: 18px;
+  text-wrap: balance;
+}
+
+.contact-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 24px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--ink);
+  padding: 8px 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* ---- metrics ---- */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--ink);
+  margin-bottom: 34px;
+}
+
+.metric { padding: 16px 14px 14px; }
+.metric + .metric { border-left: 1px solid var(--rule); }
+
+.metric .label {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.metric .figure {
+  font-family: var(--display);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  margin-bottom: 7px;
+}
+
+.metric .note { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+
+/* ---- sections ---- */
+
+section { margin-bottom: 32px; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  border-bottom: 1px solid var(--ink);
+  padding-bottom: 6px;
+  margin-bottom: 16px;
+}
+
+.section-head .no {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--copper);
+  letter-spacing: 0.08em;
+}
+
+h2 {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.15;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.lede { font-size: 15px; color: var(--muted); max-width: 40em; margin-bottom: 16px; }
+
+/* ---- pain list ---- */
+
+.pains { border-top: 1px solid var(--rule); }
+
+.pain {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 8px 28px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--rule);
+  break-inside: avoid;
+}
+
+.pain q {
+  font-family: var(--display);
+  font-size: 15.5px;
+  font-style: italic;
+  quotes: '\201C' '\201D';
+}
+
+.pain p { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+/* ---- feature columns ---- */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 34px;
+  border-top: 1px solid var(--rule);
+}
+
+.feature {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rule);
+  break-inside: avoid;
+}
+
+.feature h3 {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--bottle);
+  margin: 0 0 5px;
+}
+
+.feature p { font-size: 12.5px; line-height: 1.5; color: var(--muted); margin: 0; }
+.feature p strong { color: var(--ink); font-weight: 600; }
+
+/* ---- report table ---- */
+
+table.reports {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+table.reports th {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: 0 12px 6px 0;
+  border-bottom: 1px solid var(--ink);
+}
+
+table.reports td {
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+  color: var(--muted);
+}
+
+table.reports td:first-child {
+  font-family: var(--display);
+  font-size: 14px;
+  color: var(--ink);
+  white-space: nowrap;
+  padding-right: 20px;
+}
+
+/* ---- screenshots ---- */
+
+.shots { display: grid; gap: 18px; }
+
+.shot { margin: 0; break-inside: avoid; }
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  background: #fff;
+}
+
+.shot figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.shot figcaption span:last-child {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+/* ---- quote ---- */
+
+.quote {
+  border-left: 2px solid var(--copper);
+  padding: 2px 0 2px 18px;
+  margin: 0 0 14px;
+}
+
+.quote blockquote {
+  font-family: var(--display);
+  font-size: 19px;
+  font-style: italic;
+  line-height: 1.35;
+  margin: 0 0 8px;
+  text-wrap: pretty;
+}
+
+.quote cite {
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+/* ---- pricing ---- */
+
+.pricing { border-top: 1px solid var(--ink); }
+
+.price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 1.6fr);
+  gap: 6px 24px;
+  align-items: baseline;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--rule);
+  break-inside: avoid;
+}
+
+.price-row .name {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.price-row .name span {
+  display: block;
+  font-family: var(--body);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.price-row .amount {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.price-row .amount em {
+  display: block;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.price-row .detail { font-size: 12px; color: var(--muted); }
+
+.smallprint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+
+/* ---- footer ---- */
+
+footer {
+  border-top: 1px solid var(--ink);
+  margin-top: 38px;
+  padding-top: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px 32px;
+  align-items: flex-end;
+}
+
+footer .ask {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+footer .who { font-size: 13px; color: var(--muted); }
+
+footer .details {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  text-align: right;
+}
+
+footer .details strong { color: var(--ink); font-weight: 500; }
+
+@media (max-width: 720px) {
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric:nth-child(3) { border-left: 0; }
+  .metric:nth-child(n + 3) { border-top: 1px solid var(--rule); }
+  .features { grid-template-columns: minmax(0, 1fr); }
+  .pain { grid-template-columns: minmax(0, 1fr); }
+  .price-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .price-row .detail { grid-column: 1 / -1; }
+  table.reports td:first-child { white-space: normal; }
+  footer .details { text-align: left; }
+}
+
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body { background: #fff; padding: 0; }
+  .page { max-width: none; padding: 0; }
+  .metric .figure { font-size: 27px; }
+  .wordmark { font-size: 54px; }
+  section { break-inside: auto; margin-bottom: 24px; }
+  .page-break { break-before: page; }
+  .section-head { break-after: avoid; }
+  .feature { padding: 9px 0; }
+  .price-row { padding: 9px 0; }
+  .quote { margin-bottom: 10px; }
+  .smallprint { margin-top: 8px; }
+  footer { margin-top: 24px; padding-top: 12px; break-inside: avoid; }
+  .pain, .feature, .price-row, table.reports tr, .quote, .smallprint,
+  .shot { break-inside: avoid; }
+  .shots { gap: 13px; }
+  .shot img { border-color: #C9CCBE; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="page">
+  <header class="masthead">
+    <div class="kicker">
+      <span>Stock control for member clubs</span>
+      <span>Edition 2 &middot; October 2026</span>
+    </div>
+    <div class="wordmark">BarStock<span class="dot">.</span></div>
+    <p class="standfirst">The bar ledger your committee can trust &mdash; stocktakes, sales, gross profit, order sheets and backups in one Mac app.</p>
+    <div class="contact-line">
+      <span>Built and run at Prestonfield Golf Club, Edinburgh</span>
+      <span>kiffst3r@gmail.com &middot; 07359 537176</span>
+    </div>
+  </header>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="label">Stocktaking cost</div>
+      <div class="figure">&pound;1,200+</div>
+      <div class="note">a year replaced at Prestonfield &mdash; external counts were &pound;140 every six weeks</div>
+    </div>
+    <div class="metric">
+      <div class="label">A weekly stocktake</div>
+      <div class="figure">20 min</div>
+      <div class="note">counted against expected stock, with every variance valued at cost</div>
+    </div>
+    <div class="metric">
+      <div class="label">Gross profit</div>
+      <div class="figure">Live</div>
+      <div class="note">by line, category and division after every sales upload &mdash; not at month end</div>
+    </div>
+    <div class="metric">
+      <div class="label">Your data</div>
+      <div class="figure">Local</div>
+      <div class="note">one database on your Mac, backed up daily &mdash; no cloud subscription, no user limit</div>
+    </div>
+  </div>
+
+  <section>
+    <div class="section-head"><span class="no">01</span><h2>What it replaces</h2></div>
+    <p class="lede">Most club bars run on three things that never quite meet: an EPOS report, a paper count sheet and a spreadsheet. BarStock puts all three in one place, and keeps the history when products or staff change.</p>
+    <div class="pains">
+      <div class="pain">
+        <q>We ran out of Tennents on Saturday night.</q>
+        <p>Stock and negatives are flagged after every upload, so the order goes in before the busy night, not after it.</p>
+      </div>
+      <div class="pain">
+        <q>Stocktakes take hours and never match the till.</q>
+        <p>Expected stock is built from deliveries, sales, waste and adjustments. The variance report values every difference in pounds.</p>
+      </div>
+      <div class="pain">
+        <q>I only know gross profit at month end.</q>
+        <p>Revenue, cost and margin update the moment the week's sales go in &mdash; ex VAT, with inc-VAT totals shown alongside.</p>
+      </div>
+      <div class="pain">
+        <q>Ordering means scrolling through a spreadsheet.</q>
+        <p>Order sheets are produced by supplier and product type, with count and order columns ready for the pen.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="page-break">
+    <div class="section-head"><span class="no">02</span><h2>What it does</h2></div>
+    <div class="features">
+      <div class="feature">
+        <h3>Stocktake &amp; variance</h3>
+        <p>Full or partial counts, variance at cost, and a <strong>running surplus or shortfall across every count</strong> so a one-off counting error does not flatter the picture.</p>
+      </div>
+      <div class="feature">
+        <h3>Sales upload</h3>
+        <p>Drop in the weekly EPOS CSV. Pints, half pints, shandies and TG lines deduct from the right parent stock. Duplicate files are caught before they double-count.</p>
+      </div>
+      <div class="feature">
+        <h3>Deliveries &amp; returns</h3>
+        <p>Every supplier line is logged with quantity, unit cost and date. Stock updates immediately; invoice lines are matched to the products you carry.</p>
+      </div>
+      <div class="feature">
+        <h3>Invoice price check</h3>
+        <p>Upload a Booker or supplier invoice and compare its prices with the costs in the system. Apply the changes in bulk, or lock a price you want kept.</p>
+      </div>
+      <div class="feature">
+        <h3>Order sheets</h3>
+        <p>Printable sheets grouped by supplier and product type, with count and order columns. Delisted lines stay off the sheet but keep their history in the reports.</p>
+      </div>
+      <div class="feature">
+        <h3>Open tabs &amp; functions</h3>
+        <p>Member tabs and function tabs are held open until paid or written off, and still record the drinks issued against real stock.</p>
+      </div>
+      <div class="feature">
+        <h3>Backups &amp; restore</h3>
+        <p>A backup is taken daily, and before every sales upload, baseline reset and restore. Any of them can be restored from inside the app.</p>
+      </div>
+      <div class="feature">
+        <h3>One look, on screen and paper</h3>
+        <p>Chalk paper, bottle green and copper, with serif figures and ruled tables. Committee reports print in the same style as the screen.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="no">03</span><h2>Reports a committee can read</h2></div>
+    <table class="reports">
+      <thead>
+        <tr><th scope="col">Report</th><th scope="col">What it settles</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Comprehensive</td><td>Opening stock, sales, deliveries, waste, closing stock and GP per line, with stock value and margin.</td></tr>
+        <tr><td>Division</td><td>Draught, bottled beer, wine, spirits, soft drinks and hot drinks &mdash; each with sales, cost, GP and stock.</td></tr>
+        <tr><td>Surplus / shortfall</td><td>Counted against expected stock, valued at cost, and the running position over every stocktake.</td></tr>
+        <tr><td>Draught yield</td><td>Pints sold against kegs delivered, so a line that is pouring badly shows up early.</td></tr>
+        <tr><td>Price history</td><td>Every cost and sell price change with its date and reason.</td></tr>
+        <tr><td>Audit</td><td>Data checks that catch a mismatched stock figure before the committee sees it.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="page-break">
+    <div class="section-head"><span class="no">04</span><h2>What it looks like</h2></div>
+    <p class="lede">The dashboard opens on the four figures that matter, then the lines that need chasing and what is selling. The reports use the same ruled ledger, so the screen and the committee pack read alike. The figures below are illustrative.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="screenshots/dashboard.png" alt="The BarStock dashboard showing stock holding, sales this period, active lines and needs attention, with a list of stale tabs, recent sales uploads and the five best-selling products.">
+        <figcaption>
+          <span>Dashboard &middot; the default screen</span>
+          <span>Illustrative figures &middot; stock, sales and margin at a glance</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="screenshots/gross_profit.png" alt="The Gross Profit report listing each product with cost, retail revenue, retail gross profit, GP percentage, and the member and non-member split.">
+        <figcaption>
+          <span>Gross Profit &middot; by product</span>
+          <span>Illustrative figures &middot; member and non-member margin, valued at cost</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="page-break">
+    <div class="section-head"><span class="no">05</span><h2>At Prestonfield</h2></div>
+    <div class="quote">
+      <blockquote>Stocktakes went from a three-hour job at month end to something the bar manager does in twenty minutes every week. We actually trust the numbers now.</blockquote>
+      <cite>Committee member &middot; Prestonfield Golf Club</cite>
+    </div>
+    <p class="lede">Before BarStock the club paid an external stocktaker &pound;140 every six weeks &mdash; over &pound;1,200 a year &mdash; and the answer only arrived after the count. The cost is gone; the stock and GP figures are live all year, and the same product list, prices and history stay with the club if staff change.</p>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="no">06</span><h2>What setup includes</h2></div>
+    <div class="features">
+      <div class="feature">
+        <h3>The product list</h3>
+        <p>Every line you carry, with its measure, category and division, entered from your stock sheet &mdash; including the half-pint and shandy versions of each draught.</p>
+      </div>
+      <div class="feature">
+        <h3>EPOS names</h3>
+        <p>Your till's product names mapped to stock items, so the weekly export deducts the right product even when the spelling differs.</p>
+      </div>
+      <div class="feature">
+        <h3>Prices</h3>
+        <p>Cost and sell prices loaded from your latest invoices, with any price you want held locked against future invoice updates.</p>
+      </div>
+      <div class="feature">
+        <h3>The first week</h3>
+        <p>A stocktake baseline, one sales upload and a walkthrough with the bar manager &mdash; enough to see the reports with your own numbers.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="no">07</span><h2>Simple licensing</h2></div>
+    <div class="pricing">
+      <div class="price-row">
+        <div class="name">Purchase<span>Own it outright</span></div>
+        <div class="amount">&pound;1,000<em>one-time, per club</em></div>
+        <div class="detail">Full app licence, all current features and initial stock setup included. No ongoing fee.</div>
+      </div>
+      <div class="price-row">
+        <div class="name">Lease with support<span>The usual choice</span></div>
+        <div class="amount">&pound;750<em>per year, per club</em></div>
+        <div class="detail">Everything in Purchase, plus updates, email support, a setup call and help with the first stocktake and sales upload.</div>
+      </div>
+      <div class="price-row">
+        <div class="name">Multi-club<span>Groups &amp; federations</span></div>
+        <div class="amount">POA<em>bundles from three clubs</em></div>
+        <div class="detail">Bundle pricing, shared setup and admin training, with white-label options for a group identity.</div>
+      </div>
+    </div>
+    <p class="smallprint">Initial stock setup is included with every licence. No cloud subscription, no per-user charge, and no internet required after setup. BarStock runs on macOS (Apple Silicon and Intel), with all data in a local database on the club's Mac.</p>
+  </section>
+
+  <footer>
+    <div>
+      <p class="ask">Request a no-obligation demo</p>
+      <p class="who">Chris &middot; Prestonfield Golf Club<br>Fifteen minutes, using your own product list.</p>
+    </div>
+    <div class="details">
+      <strong>kiffst3r@gmail.com</strong><br>
+      07359 537176<br>
+      BarStock &middot; macOS
+    </div>
+  </footer>
+</div>
+
+</body>
+</html>

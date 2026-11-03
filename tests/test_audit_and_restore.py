@@ -33,16 +33,17 @@ def connect(path):
     return conn
 
 
-def add_item(path, item_id, quantity):
+def add_item(path, item_id, quantity, allow_negative=0):
     conn = connect(path)
     conn.execute(
         """
         INSERT INTO inventory
         (item_id, item_name, quantity, cost_price, sell_price, measure, category,
          price_locked, allow_negative, reorder_level, division)
-        VALUES (?, ?, ?, 1, 3, 'Pint', 'Draught', 0, 0, 0, '')
+        VALUES (?, ?, ?, 1, 3, 'Pint', 'Draught', 0, ?, 0, '')
         """,
-        (item_id, item_id.replace("_", " ").title(), float(quantity)),
+        (item_id, item_id.replace("_", " ").title(), float(quantity),
+         int(allow_negative)),
     )
     conn.commit()
     conn.close()
@@ -108,6 +109,30 @@ def test_reconciliation_reports_a_genuine_mismatch(db):
     assert "expected_from_tx=90.00" in issues[0]
 
 
+def test_reconciliation_compares_the_true_ledger_balance(db):
+    # Oversold line: the baseline was 17.2 and 18 went out, so the ledger's
+    # true balance is -0.8. Reports clamp that to the baseline so they never
+    # invent a negative opening stock, but reconciliation must not, or the
+    # real (allowed) negative looks like a mismatch.
+    add_item(db, "jack_daniels", -0.8, allow_negative=1)
+    add_tx(db, "jack_daniels", "Stocktake Baseline", 17.2, "2026-10-01 09:00:00")
+    add_tx(db, "jack_daniels", "Sales", 18, "2026-10-02 09:00:00")
+
+    assert reconcile_inventory(db) == []
+
+
+def test_reconciliation_still_flags_a_negative_that_is_not_allowed(db):
+    add_item(db, "tennents_lager", -10, allow_negative=0)
+    add_tx(db, "tennents_lager", "Stocktake Baseline", 100, "2026-10-01 09:00:00")
+    add_tx(db, "tennents_lager", "Sales", 110, "2026-10-02 09:00:00")
+
+    issues = reconcile_inventory(db)
+
+    assert len(issues) == 1
+    assert "Negative stock" in issues[0]
+    assert "tennents_lager" in issues[0]
+
+
 def test_reconciliation_skips_child_and_non_stocked_items(db):
     add_item(db, "tennents_lager", 90)
     add_tx(db, "tennents_lager", "Stocktake Baseline", 100, "2026-10-01 09:00:00")
@@ -155,6 +180,17 @@ def test_restore_round_trips_and_keeps_a_pre_restore_copy(db):
     ids = {row[0] for row in conn.execute("SELECT item_id FROM inventory")}
     conn.close()
     assert ids == {"tennents_lager"}
+
+
+def test_backups_stay_beside_the_database_they_copy(db):
+    # A test database (or any tool pointed at another DB) must not drop backups
+    # into the live folder: they count toward the 20-file retention there and
+    # pruned real backups.
+    backup = dm.create_backup("test_snapshot")
+
+    assert backup
+    assert os.path.dirname(os.path.dirname(backup)) == str(db.parent)
+    assert dm.get_backups_dir() == str(db.parent / "backups")
 
 
 def test_restore_reports_missing_file(db):

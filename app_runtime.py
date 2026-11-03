@@ -12,7 +12,39 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 APP_NAME = "BarStock Management"
-APP_VERSION = "2.1.0"
+
+
+def resolve_version() -> str:
+    """Report the version that is actually running.
+
+    The packaged bundle carries its version in Info.plist (pyproject.toml is
+    not shipped), so the title bar used to keep showing whatever number was
+    hard-coded here long after the build had moved on.
+    """
+    if getattr(sys, "frozen", False):
+        plist = os.path.join(os.path.dirname(sys.executable), "..", "Info.plist")
+        try:
+            import plistlib
+            with open(plist, "rb") as fh:
+                version = plistlib.load(fh).get("CFBundleShortVersionString")
+            if version:
+                return str(version)
+        except (OSError, ValueError):
+            pass
+
+    pyproject = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml")
+    try:
+        import re
+        with open(pyproject, encoding="utf-8") as fh:
+            match = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.MULTILINE)
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+APP_VERSION = resolve_version()
 
 _LOCK_HANDLE = None
 

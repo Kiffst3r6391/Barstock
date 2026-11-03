@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Transaction log, open tabs, wastage, complimentary and supplier returns."""
 
-import os
 from datetime import datetime
 
 import pandas as pd
@@ -9,14 +8,17 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import ui_theme
+from ui_theme import (TBL_ROW_ALT, THEME_ACCENT, THEME_BG, THEME_BORDER,
+                      THEME_CARD, THEME_TEXT, THEME_TEXT_MUTED)
 from app_config import (
-    COL_ACTION, COL_COST_PRICE, COL_DATE_RANGE, COL_ITEM_ID, COL_ITEM_NAME,
-    COL_QUANTITY, COL_REASON, COL_SELL_PRICE, COL_SUPPLIER, COL_TIMESTAMP,
-    get_script_directory,
+    COL_ACTION, COL_COST_PRICE, COL_DATE_RANGE, COL_DIVISION, COL_ITEM_ID,
+    COL_ITEM_NAME, COL_QUANTITY, COL_REASON, COL_SELL_PRICE, COL_SUPPLIER,
+    COL_TIMESTAMP,
 )
 from actions import (
     ACTION_COMPLIMENTARY, ACTION_DELIVERY, ACTION_SUPPLIER_RETURN, ACTION_WASTAGE,
 )
+from categories import is_delisted
 from conversions import (
     convert_to_system, format_stock_display, get_conversion, get_input_label,
     requires_conversion,
@@ -27,6 +29,39 @@ from sales_mapping import (
     has_parent_stock,
 )
 from supplier_mapping import get_supplier, get_supplier_order
+
+
+def draught_lines_to_clean(inventory_df):
+    """Return the draught keg lines a line clean should deduct 5 pints from.
+
+    Detection uses the live inventory rather than Items.csv: the CSV sits in
+    the data folder and is never bundled, so reading it from the packaged
+    app's script directory left the list empty.
+    """
+    lines = []
+    for _, row in inventory_df.iterrows():
+        item_id = str(row[COL_ITEM_ID])
+        item_name = str(row[COL_ITEM_NAME]).lower()
+
+        # Delisted lines hold no stock and are never cleaned.
+        if is_delisted(item_id):
+            continue
+
+        conversion = get_conversion(item_id)
+        is_barrel_line = bool(conversion) and conversion[0] == 'barrel'
+        division = str(row.get(COL_DIVISION, '') or '').lower()
+        # Half-pint variants share their parent's keg; the keg itself is the
+        # line that gets cleaned.
+        is_draught_line = is_barrel_line or (
+            'draught' in division
+            and 'half' not in item_id.lower()
+            and 'half' not in item_name
+        )
+
+        if is_draught_line and float(row[COL_QUANTITY]) > 0:
+            lines.append(row)
+
+    return lines
 
 
 class TransactionsMixin:
@@ -42,16 +77,8 @@ class TransactionsMixin:
         """View the complete transaction log."""
         self.clear_main_menu()
     
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Transaction Log",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
+        frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        frame.pack(fill=tk.BOTH, expand=True)
     
         try:
             self.refresh_data()
@@ -70,15 +97,16 @@ class TransactionsMixin:
             log_tree.heading('date_range', text='Period')
             log_tree.heading('reason', text='Reason')
     
-            log_tree.column('timestamp', width=120, anchor='center')
-            log_tree.column('item_id', width=80, anchor='center')
-            log_tree.column('action', width=100, anchor='center')
-            log_tree.column('quantity', width=60, anchor='center')
-            log_tree.column('cost_price', width=60, anchor='center')
-            log_tree.column('sell_price', width=60, anchor='center')
-            log_tree.column('total_value', width=60, anchor='center')
-            log_tree.column('date_range', width=120, anchor='center')
-            log_tree.column('reason', width=100, anchor='center')
+            log_tree.column('timestamp', width=150, anchor='w')
+            log_tree.column('item_id', width=150, anchor='w')
+            log_tree.column('action', width=140, anchor='w')
+            log_tree.column('quantity', width=80, anchor='e')
+            log_tree.column('cost_price', width=90, anchor='e')
+            log_tree.column('sell_price', width=90, anchor='e')
+            log_tree.column('total_value', width=100, anchor='e')
+            log_tree.column('date_range', width=140, anchor='w')
+            log_tree.column('reason', width=260, anchor='w')
+            log_tree.tag_configure('alt', background=TBL_ROW_ALT)
     
             self._make_sortable(log_tree)
     
@@ -92,7 +120,7 @@ class TransactionsMixin:
             # Sort by timestamp descending
             if not self.log_df.empty and COL_TIMESTAMP in self.log_df.columns:
                 sorted_log = self.log_df.sort_values(by=COL_TIMESTAMP, ascending=False)
-                for _, row in sorted_log.iterrows():
+                for index, (_, row) in enumerate(sorted_log.iterrows()):
                     cost_price = row.get(COL_COST_PRICE, 0)
                     quantity = row.get(COL_QUANTITY, 0)
                     total_value = cost_price * quantity
@@ -104,7 +132,8 @@ class TransactionsMixin:
                              row.get(COL_DATE_RANGE, '') if COL_DATE_RANGE in row.index else '',
                              row.get(COL_REASON, '') if COL_REASON in row.index else '')
     
-                    log_tree.insert('', tk.END, values=values)
+                    log_tree.insert('', tk.END, values=values,
+                                    tags=('alt',) if index % 2 else ())
     
                 if self.log_df.empty:
                     tk.Label(self.main_menu, text="No transactions recorded yet.").pack(pady=20)
@@ -113,10 +142,10 @@ class TransactionsMixin:
             messagebox.showerror("Error", f"An error occurred: {e}")
     
         # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+        btn_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(12, 0))
+        self.styled_button(btn_frame, "Back", self.generate_reports,
+                           width=15, variant='secondary').pack(side='left')
     
         self._apply_legacy_theme()
 
@@ -130,66 +159,84 @@ class TransactionsMixin:
     def open_tabs_menu(self):
         """Display the Open Tabs menu with options to create or view tabs."""
         self.clear_main_menu()
-    
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-        tk.Label(header_frame, text="Open Tabs", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=20)
-    
-        tk.Button(btn_frame, text="Create New Tab", command=self.create_open_tab_dialog, width=25).pack(pady=5)
-        tk.Button(btn_frame, text="View / Close Tabs", command=self.view_open_tabs, width=25).pack(pady=5)
-        tk.Button(btn_frame, text="Back", command=self.show_dashboard, width=25).pack(pady=5)
+
+        entries = [
+            ("Create New Tab", "Start a tab for a customer and add items",
+             self.create_open_tab_dialog),
+            ("View / Close Tabs", "See every tab still running at the bar",
+             self.view_open_tabs),
+            ("Back", "Return to the dashboard", self.show_dashboard),
+        ]
+
+        tk.Frame(self.main_menu, bg=THEME_BORDER, height=1).pack(fill='x')
+        for index, (title, description, command) in enumerate(entries):
+            if index:
+                tk.Frame(self.main_menu, bg=THEME_BORDER,
+                         height=1).pack(fill='x')
+            self.report_row(self.main_menu, title, description,
+                            command).pack(fill='x')
+        tk.Frame(self.main_menu, bg=THEME_BORDER, height=1).pack(fill='x')
 
 
     def create_open_tab_dialog(self):
         """Dialog to create a new open tab (multi-item, customer name)."""
+        self._create_app_shell('New Tab')
         self.clear_main_menu()
     
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-        tk.Label(header_frame, text="Create Open Tab", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        main_frame = tk.Frame(self.main_menu)
-        main_frame.pack(pady=10, padx=20, fill='both', expand=True)
+        main_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        main_frame.pack(fill='both', expand=True)
     
         # Left side - Item entry
-        entry_frame = tk.LabelFrame(main_frame, text="Add Items", font=(ui_theme.THEME_FONT, 10, 'bold'))
+        entry_frame = tk.Frame(main_frame, bg=THEME_BG,
+                               highlightbackground=THEME_BORDER,
+                               highlightthickness=1, padx=18, pady=12)
         entry_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=(0, 10))
-    
+
+        tk.Label(entry_frame, text="TAB DETAILS", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').grid(
+            row=0, column=0, columnspan=2, padx=5, pady=(0, 8), sticky="w")
+
         # Customer name
-        tk.Label(entry_frame, text="Customer Name:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
-        customer_entry = tk.Entry(entry_frame, width=35)
-        customer_entry.grid(row=0, column=1, padx=5, pady=8, sticky="w")
-    
+        tk.Label(entry_frame, text="CUSTOMER", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=1, column=0, padx=5, pady=8, sticky="e")
+        customer_entry = self.styled_entry(entry_frame, width=35)
+        customer_entry.grid(row=1, column=1, padx=5, pady=8, sticky="w")
+
         # Search bar
         self.refresh_data()
-        full_item_list = [f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}" for _, row in self.inventory_df.iterrows()]
+        # Delisted lines hold no stock and cannot be transacted again; their
+        # history stays in the ledger but they leave the item picker.
+        full_item_list = [
+            f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}"
+            for _, row in self.inventory_df.iterrows()
+            if not is_delisted(row[COL_ITEM_ID])
+        ]
         if not full_item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
             self.show_dashboard()
             return
-    
-        tk.Label(entry_frame, text="Search:").grid(row=1, column=0, padx=5, pady=8, sticky="e")
+
+        tk.Label(entry_frame, text="SEARCH", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=2, column=0, padx=5, pady=8, sticky="e")
         search_var = tk.StringVar()
-        search_entry = tk.Entry(entry_frame, textvariable=search_var, width=15, bg='#2c2c2c', fg='white')
-        search_entry.grid(row=1, column=1, padx=(5, 0), pady=8, sticky="w")
+        search_entry = self.styled_entry(entry_frame, textvariable=search_var,
+                                         width=35)
+        search_entry.grid(row=2, column=1, padx=5, pady=8, sticky="w")
         search_entry.insert(0, "Type to search...")
-        search_entry.config(fg='gray')
-    
+        search_entry.config(fg=ui_theme.THEME_TEXT_MUTED)
+
         def on_search_focus_in(event):
             if search_var.get() == "Type to search...":
                 search_entry.delete(0, tk.END)
-                search_entry.config(fg='white')
-    
+                search_entry.config(fg=ui_theme.THEME_TEXT)
+
         def on_search_focus_out(event):
             if not search_var.get().strip():
                 search_entry.insert(0, "Type to search...")
-                search_entry.config(fg='gray')
-    
+                search_entry.config(fg=ui_theme.THEME_TEXT_MUTED)
+
         def on_search_change(*args):
             query = search_var.get().lower()
             if query == "type to search..." or not query:
@@ -197,26 +244,38 @@ class TransactionsMixin:
             else:
                 filtered = [item for item in full_item_list if query in item.lower()]
             item_dropdown['values'] = filtered
-    
+
         search_entry.bind('<FocusIn>', on_search_focus_in)
         search_entry.bind('<FocusOut>', on_search_focus_out)
         search_var.trace_add('write', on_search_change)
-    
+
+        tk.Label(entry_frame, text="ITEM", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').grid(
+            row=3, column=0, columnspan=2, padx=5, pady=(8, 0), sticky="w")
         item_var = tk.StringVar()
-        item_dropdown = ttk.Combobox(entry_frame, textvariable=item_var, values=full_item_list, width=35, state="readonly")
-        item_dropdown.grid(row=2, column=0, columnspan=2, padx=5, pady=8)
+        item_dropdown = ttk.Combobox(entry_frame, textvariable=item_var,
+                                     values=full_item_list, width=40,
+                                     state="readonly")
+        item_dropdown.grid(row=4, column=0, columnspan=2, padx=5, pady=(2, 8),
+                           sticky="w")
         item_dropdown.set("Select an item...")
-    
-        qty_label = tk.Label(entry_frame, text="Quantity:")
-        qty_label.grid(row=3, column=0, padx=5, pady=8, sticky="e")
-        entry_quantity = tk.Entry(entry_frame, width=15)
-        entry_quantity.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-    
-        stock_label = tk.Label(entry_frame, text="Current stock: -", font=(ui_theme.THEME_FONT, 9), fg='gray')
-        stock_label.grid(row=4, column=1, padx=5, pady=2, sticky="w")
-    
-        conversion_label = tk.Label(entry_frame, text="", font=(ui_theme.THEME_FONT, 9), fg='gray')
-        conversion_label.grid(row=5, column=1, padx=5, pady=0, sticky="w")
+
+        qty_label = tk.Label(entry_frame, text="QUANTITY",
+                             font=ui_theme.mono_font(8), bg=THEME_BG,
+                             fg=THEME_TEXT_MUTED)
+        qty_label.grid(row=5, column=0, padx=5, pady=8, sticky="e")
+        entry_quantity = self.styled_entry(entry_frame, width=15)
+        entry_quantity.grid(row=5, column=1, padx=5, pady=8, sticky="w")
+
+        stock_label = tk.Label(entry_frame, text="Current stock: -",
+                               font=ui_theme.mono_font(9),
+                               fg=ui_theme.THEME_TEXT_MUTED, bg=THEME_BG)
+        stock_label.grid(row=6, column=1, padx=5, pady=2, sticky="w")
+
+        conversion_label = tk.Label(entry_frame, text="",
+                                    font=ui_theme.mono_font(9),
+                                    fg=ui_theme.THEME_TEXT_MUTED, bg=THEME_BG)
+        conversion_label.grid(row=7, column=1, padx=5, pady=0, sticky="w")
     
         def on_item_select(event=None):
             selected = item_var.get()
@@ -230,19 +289,19 @@ class TransactionsMixin:
                         conversion = get_conversion(item_id)
                         output_unit = conversion[2] if conversion else "units"
                         stock_label.config(text=f"Current stock: {display}")
-                        qty_label.config(text=f"Quantity ({output_unit}s):")
+                        qty_label.config(text=f"QUANTITY ({output_unit.upper()}S)")
                         conversion_label.config(text="Enter quantity in consumption units")
                     else:
                         stock_label.config(text=f"Current stock: {qty:.1f}")
-                        qty_label.config(text="Quantity:")
+                        qty_label.config(text="QUANTITY")
                         conversion_label.config(text="")
                 except:
                     stock_label.config(text="Current stock: -")
-                    qty_label.config(text="Quantity:")
+                    qty_label.config(text="QUANTITY")
                     conversion_label.config(text="")
             else:
                 stock_label.config(text="Current stock: -")
-                qty_label.config(text="Quantity:")
+                qty_label.config(text="QUANTITY")
                 conversion_label.config(text="")
     
         item_dropdown.bind("<<ComboboxSelected>>", on_item_select)
@@ -250,18 +309,26 @@ class TransactionsMixin:
         # Items list
         transaction_items = []
     
-        list_frame = tk.LabelFrame(main_frame, text="Items in this Tab", font=(ui_theme.THEME_FONT, 10, 'bold'))
+        list_frame = tk.Frame(main_frame, bg=THEME_BG,
+                              highlightbackground=THEME_BORDER,
+                              highlightthickness=1)
         list_frame.pack(side=tk.RIGHT, fill='both', expand=True)
+        tk.Label(list_frame, text="ITEMS IN THIS TAB",
+                 font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=12,
+                                               pady=(8, 6))
     
         columns = ('item_id', 'item_name', 'quantity')
         items_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
-        items_tree.heading('item_id', text='Item ID')
-        items_tree.heading('item_name', text='Name')
-        items_tree.heading('quantity', text='Qty')
+        items_tree.heading('item_id', text='Item ID', anchor='w')
+        items_tree.heading('item_name', text='Name', anchor='w')
+        items_tree.heading('quantity', text='Qty', anchor='e')
         self._make_sortable(items_tree)
-        items_tree.column('item_id', width=80)
-        items_tree.column('item_name', width=120)
-        items_tree.column('quantity', width=60)
+        items_tree.column('item_id', width=150, anchor='w')
+        items_tree.column('item_name', width=220, anchor='w')
+        items_tree.column('quantity', width=80, anchor='e')
+        items_tree.tag_configure('alt', background=TBL_ROW_ALT,
+                                 foreground=THEME_TEXT)
         items_tree.pack(fill='both', expand=True, padx=5, pady=5)
     
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
@@ -324,8 +391,10 @@ class TransactionsMixin:
         def refresh_list():
             for item in items_tree.get_children():
                 items_tree.delete(item)
-            for item_id, item_name, qty in transaction_items:
-                items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}"))
+            for index, (item_id, item_name, qty) in enumerate(transaction_items):
+                items_tree.insert('', tk.END,
+                                  values=(item_id, item_name, f"{qty:.1f}"),
+                                  tags=('alt',) if index % 2 else ())
     
         def save_tab():
             customer_name = customer_entry.get().strip()
@@ -385,42 +454,49 @@ class TransactionsMixin:
             except Exception as e:
                 messagebox.showerror("Error", f"Tab failed: {e}")
     
-        btn_frame = tk.Frame(entry_frame)
-        btn_frame.grid(row=6, column=0, columnspan=2, pady=15)
-        tk.Button(btn_frame, text="Add Item", command=add_item, width=12).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Remove Selected", command=remove_selected, width=12).pack(side=tk.LEFT, padx=5)
-    
-        bottom_frame = tk.Frame(self.main_menu)
-        bottom_frame.pack(fill='x', padx=20, pady=20)
-        tk.Button(bottom_frame, text="Save Tab", command=save_tab, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(bottom_frame, text="Back", command=self.open_tabs_menu, width=15).pack(side=tk.LEFT, padx=10)
+        btn_frame = tk.Frame(entry_frame, bg=THEME_BG)
+        btn_frame.grid(row=8, column=0, columnspan=2, pady=(16, 4), sticky='w')
+        self.styled_button(btn_frame, "Add item", add_item, width=13,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Remove selected", remove_selected,
+                           width=16, variant='secondary').pack(side=tk.LEFT)
+
+        tk.Frame(self.main_menu, bg=THEME_BORDER, height=1).pack(
+            fill='x', pady=(16, 0))
+        bottom_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        bottom_frame.pack(fill='x', pady=(12, 0))
+        self.styled_button(bottom_frame, "Save tab", save_tab,
+                           width=14, variant='primary').pack(
+            side='left', padx=(0, 8))
+        self.styled_button(bottom_frame, "Back", self.open_tabs_menu,
+                           width=14, variant='secondary').pack(side='left')
     
         self.root.update_idletasks()
 
 
     def view_open_tabs(self):
         """Display all open tabs with options to close or cancel."""
+        self._create_app_shell('Open Tabs')
         self.clear_main_menu()
-    
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-        tk.Label(header_frame, text="View Open Tabs", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
     
         # Load open tabs
         tabs_df = InventoryDataManager.get_open_tabs(status='open')
     
         if tabs_df.empty:
-            tk.Label(self.main_menu, text="No open tabs.", font=(ui_theme.THEME_FONT, 12)).pack(pady=20)
-            tk.Button(self.main_menu, text="Back", command=self.open_tabs_menu, width=15).pack(pady=10)
+            tk.Label(self.main_menu, text="No tabs are open at the bar.",
+                     font=ui_theme.display_font(13), fg=THEME_TEXT,
+                     bg=THEME_BG).pack(anchor='w', pady=(8, 12))
+            self.styled_button(self.main_menu, "Back",
+                               self.open_tabs_menu, width=14,
+                               variant='secondary').pack(anchor='w')
             return
     
         # Group by tab id
         tab_groups = tabs_df.groupby('id')
     
         # Treeview for tabs
-        tree_container = tk.Frame(self.main_menu)
-        tree_container.pack(fill='both', expand=True, padx=20, pady=10)
+        tree_container = tk.Frame(self.main_menu, bg=THEME_BG)
+        tree_container.pack(fill='both', expand=True)
     
         columns = ('tab_id', 'customer', 'items', 'total_qty', 'created_at')
         tabs_tree = ttk.Treeview(tree_container, columns=columns, show='headings', height=12)
@@ -430,11 +506,11 @@ class TransactionsMixin:
         tabs_tree.heading('total_qty', text='Total Qty')
         tabs_tree.heading('created_at', text='Created')
         self._make_sortable(tabs_tree)
-        tabs_tree.column('tab_id', width=60, anchor='center')
-        tabs_tree.column('customer', width=150)
-        tabs_tree.column('items', width=250)
-        tabs_tree.column('total_qty', width=80, anchor='center')
-        tabs_tree.column('created_at', width=150, anchor='center')
+        tabs_tree.column('tab_id', width=70, anchor='e')
+        tabs_tree.column('customer', width=180, anchor='w')
+        tabs_tree.column('items', width=320, anchor='w')
+        tabs_tree.column('total_qty', width=90, anchor='e')
+        tabs_tree.column('created_at', width=160, anchor='w')
         tabs_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     
         scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=tabs_tree.yview)
@@ -446,8 +522,17 @@ class TransactionsMixin:
         for tab_id, group in tab_groups:
             customer = group['customer_name'].iloc[0]
             created_at = group['created_at'].iloc[0]
-            items_list = [f"{row['item_name']} ({row['quantity']:.1f})" for _, row in group.iterrows()]
-            total_qty = group['quantity'].sum()
+            items = group[group['item_id'].notna()]
+            if items.empty:
+                # A tab can exist without recorded items (e.g. opened before the
+                # tab transaction was written); it must still be listed and
+                # closable.
+                items_list = ["No items"]
+                total_qty = 0.0
+            else:
+                items_list = [f"{row['item_name']} ({row['quantity']:.1f})"
+                              for _, row in items.iterrows()]
+                total_qty = items['quantity'].sum()
             tabs_tree.insert('', tk.END, values=(tab_id, customer, ", ".join(items_list), f"{total_qty:.1f}", created_at))
     
         def close_as_sale():
@@ -462,7 +547,8 @@ class TransactionsMixin:
                 return
     
             self.refresh_data()
-            tab_items = tabs_df[tabs_df['id'] == tab_id]
+            tab_items = tabs_df[(tabs_df['id'] == tab_id)
+                                & tabs_df['item_id'].notna()]
             items_for_db = []
             for _, row in tab_items.iterrows():
                 items_for_db.append({
@@ -493,7 +579,8 @@ class TransactionsMixin:
                 return
     
             self.refresh_data()
-            tab_items = tabs_df[tabs_df['id'] == tab_id]
+            tab_items = tabs_df[(tabs_df['id'] == tab_id)
+                                & tabs_df['item_id'].notna()]
             items_for_db = []
             for _, row in tab_items.iterrows():
                 items_for_db.append({
@@ -537,12 +624,20 @@ class TransactionsMixin:
             self.update_dashboard_stats()
             self.view_open_tabs()
     
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Close as Sale", command=close_as_sale, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Close as Complimentary", command=close_as_complimentary, width=20).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Cancel Tab", command=cancel_tab, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Back", command=self.open_tabs_menu, width=15).pack(side=tk.LEFT, padx=5)
+        btn_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(14, 0))
+        self.styled_button(btn_frame, "Close as sale", close_as_sale,
+                           width=16, variant='primary').pack(
+            side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Close as complimentary",
+                           close_as_complimentary, width=22,
+                           variant='secondary').pack(side=tk.LEFT,
+                                                     padx=(0, 8))
+        self.styled_button(btn_frame, "Cancel tab", cancel_tab,
+                           width=14, variant='danger').pack(
+            side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Back", self.open_tabs_menu,
+                           width=14, variant='secondary').pack(side=tk.LEFT)
     
         self.root.update_idletasks()
 
@@ -564,48 +659,57 @@ class TransactionsMixin:
 
     def process_multi_transaction(self, action):
         """Process wastage, complimentary or supplier return transactions with multiple items."""
+        self._create_app_shell(action)
         self.clear_main_menu()
     
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text=f"Add {action}", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
         # Main container
-        main_frame = tk.Frame(self.main_menu)
-        main_frame.pack(pady=10, padx=20, fill='both', expand=True)
+        main_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        main_frame.pack(fill='x')
     
         # Left side - Item entry
-        entry_frame = tk.LabelFrame(main_frame, text=f"Add Items ({action})", font=(ui_theme.THEME_FONT, 10, 'bold'))
+        entry_frame = tk.Frame(main_frame, bg=THEME_BG,
+                               highlightbackground=THEME_BORDER,
+                               highlightthickness=1, padx=18, pady=12)
         entry_frame.pack(side=tk.LEFT, fill='both', expand=True, padx=(0, 10))
-    
+
+        tk.Label(entry_frame, text="ENTRY DETAILS", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').grid(
+            row=0, column=0, columnspan=2, padx=5, pady=(0, 8), sticky="w")
+
         # Search bar
-        tk.Label(entry_frame, text="Search:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(entry_frame, text="SEARCH", font=ui_theme.mono_font(8),
+                 fg=ui_theme.THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=1, column=0, padx=5, pady=8, sticky="e")
         self.refresh_data()
-        full_item_list = [f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}" for _, row in self.inventory_df.iterrows()]
-    
+        # Delisted lines hold no stock and cannot be transacted again; their
+        # history stays in the ledger but they leave the item picker.
+        full_item_list = [
+            f"{row[COL_ITEM_ID]} - {row[COL_ITEM_NAME]}"
+            for _, row in self.inventory_df.iterrows()
+            if not is_delisted(row[COL_ITEM_ID])
+        ]
+
         if not full_item_list:
             messagebox.showerror("Error", "No items in inventory. Please add items first.")
             self.show_dashboard()
             return
-    
+
         search_var = tk.StringVar()
-        search_entry = tk.Entry(entry_frame, textvariable=search_var, width=15, bg='#2c2c2c', fg='white')
-        search_entry.grid(row=0, column=1, padx=(5, 0), pady=8, sticky="w")
+        search_entry = self.styled_entry(entry_frame, textvariable=search_var,
+                                         width=35)
+        search_entry.grid(row=1, column=1, padx=5, pady=8, sticky="w")
         search_entry.insert(0, "Type to search...")
-        search_entry.config(fg='gray')
+        search_entry.config(fg=ui_theme.THEME_TEXT_MUTED)
     
         def on_search_focus_in(event):
             if search_var.get() == "Type to search...":
                 search_entry.delete(0, tk.END)
-                search_entry.config(fg='white')
+                search_entry.config(fg=ui_theme.THEME_TEXT)
     
         def on_search_focus_out(event):
             if not search_var.get().strip():
                 search_entry.insert(0, "Type to search...")
-                search_entry.config(fg='gray')
+                search_entry.config(fg=ui_theme.THEME_TEXT_MUTED)
     
         def on_search_change(*args):
             query = search_var.get().lower()
@@ -620,64 +724,81 @@ class TransactionsMixin:
         search_var.trace_add('write', on_search_change)
     
         item_var = tk.StringVar()
-        item_dropdown = ttk.Combobox(entry_frame, textvariable=item_var, values=full_item_list, width=35, state="readonly")
-        item_dropdown.grid(row=1, column=0, columnspan=2, padx=5, pady=8)
+        item_dropdown = ttk.Combobox(entry_frame, textvariable=item_var,
+                                     values=full_item_list, width=40,
+                                     state="readonly")
+        item_dropdown.grid(row=2, column=0, columnspan=2, padx=5, pady=8,
+                           sticky="w")
         item_dropdown.set("Select an item...")
-    
-        qty_label = tk.Label(entry_frame, text="Quantity:")
-        qty_label.grid(row=2, column=0, padx=5, pady=8, sticky="e")
-        entry_quantity = tk.Entry(entry_frame, width=15)
-        entry_quantity.grid(row=2, column=1, padx=5, pady=8, sticky="w")
-    
+
+        qty_label = tk.Label(entry_frame, text="QUANTITY",
+                             font=ui_theme.mono_font(8), bg=THEME_BG,
+                             fg=THEME_TEXT_MUTED)
+        qty_label.grid(row=3, column=0, padx=5, pady=8, sticky="e")
+        entry_quantity = self.styled_entry(entry_frame, width=15)
+        entry_quantity.grid(row=3, column=1, padx=5, pady=8, sticky="w")
+
         # Reason dropdown for Wastage, Complimentary and Supplier Return
         if action == ACTION_WASTAGE:
-            tk.Label(entry_frame, text="Reason:").grid(row=3, column=0, padx=5, pady=8, sticky="e")
+            tk.Label(entry_frame, text="REASON", font=ui_theme.mono_font(8),
+                     bg=THEME_BG, fg=THEME_TEXT_MUTED).grid(
+                row=4, column=0, padx=5, pady=8, sticky="e")
             reason_var = tk.StringVar(value="Broken/Damaged")
             reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
                                            values=["Broken/Damaged", "Out of Date", "Overpour", "Returned", "Line Clean", "Drip Trays", "Other"],
-                                           width=33, state="readonly")
-            reason_dropdown.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-            stock_row = 4
-            conv_row = 5
-            btn_row = 6
-        elif action == ACTION_COMPLIMENTARY:
-            tk.Label(entry_frame, text="Reason:").grid(row=3, column=0, padx=5, pady=8, sticky="e")
-            reason_var = tk.StringVar(value="Complaint")
-            reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
-                                           values=["Complaint", "Chris", "Tour Group", "Hospitality"],
-                                           width=33, state="readonly")
-            reason_dropdown.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-            stock_row = 4
-            conv_row = 5
-            btn_row = 6
-        elif action == ACTION_SUPPLIER_RETURN:
-            tk.Label(entry_frame, text="Reason:").grid(row=3, column=0, padx=5, pady=8, sticky="e")
-            reason_var = tk.StringVar(value="Faulty Keg")
-            reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
-                                           values=["Faulty Keg", "Out of Date", "Damaged", "Wrong Product", "Other"],
-                                           width=33, state="readonly")
-            reason_dropdown.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-    
-            tk.Label(entry_frame, text="Supplier:").grid(row=4, column=0, padx=5, pady=8, sticky="e")
-            supplier_var = tk.StringVar(value="Tennents")
-            supplier_dropdown = ttk.Combobox(entry_frame, textvariable=supplier_var,
-                                             values=get_supplier_order() + ["Other"],
-                                             width=33, state="readonly")
-            supplier_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
+                                           width=38, state="readonly")
+            reason_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
             stock_row = 5
             conv_row = 6
             btn_row = 7
+        elif action == ACTION_COMPLIMENTARY:
+            tk.Label(entry_frame, text="REASON", font=ui_theme.mono_font(8),
+                     bg=THEME_BG, fg=THEME_TEXT_MUTED).grid(
+                row=4, column=0, padx=5, pady=8, sticky="e")
+            reason_var = tk.StringVar(value="Complaint")
+            reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
+                                           values=["Complaint", "Chris", "Tour Group", "Hospitality"],
+                                           width=38, state="readonly")
+            reason_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
+            stock_row = 5
+            conv_row = 6
+            btn_row = 7
+        elif action == ACTION_SUPPLIER_RETURN:
+            tk.Label(entry_frame, text="REASON", font=ui_theme.mono_font(8),
+                     bg=THEME_BG, fg=THEME_TEXT_MUTED).grid(
+                row=4, column=0, padx=5, pady=8, sticky="e")
+            reason_var = tk.StringVar(value="Faulty Keg")
+            reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
+                                           values=["Faulty Keg", "Out of Date", "Damaged", "Wrong Product", "Other"],
+                                           width=38, state="readonly")
+            reason_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
+
+            tk.Label(entry_frame, text="SUPPLIER", font=ui_theme.mono_font(8),
+                     bg=THEME_BG, fg=THEME_TEXT_MUTED).grid(
+                row=5, column=0, padx=5, pady=8, sticky="e")
+            supplier_var = tk.StringVar(value="Tennents")
+            supplier_dropdown = ttk.Combobox(entry_frame, textvariable=supplier_var,
+                                             values=get_supplier_order() + ["Other"],
+                                             width=38, state="readonly")
+            supplier_dropdown.grid(row=5, column=1, padx=5, pady=8, sticky="w")
+            stock_row = 6
+            conv_row = 7
+            btn_row = 8
         else:
-            stock_row = 3
-            conv_row = 4
-            btn_row = 5
-    
-        stock_label = tk.Label(entry_frame, text="Current stock: -", font=(ui_theme.THEME_FONT, 9), fg='gray')
+            stock_row = 4
+            conv_row = 5
+            btn_row = 6
+
+        stock_label = tk.Label(entry_frame, text="Current stock: -",
+                               font=ui_theme.mono_font(9),
+                               fg=ui_theme.THEME_TEXT_MUTED, bg=THEME_BG)
         stock_label.grid(row=stock_row, column=1, padx=5, pady=2, sticky="w")
-    
-        conversion_label = tk.Label(entry_frame, text="", font=(ui_theme.THEME_FONT, 9), fg='gray')
+
+        conversion_label = tk.Label(entry_frame, text="",
+                                    font=ui_theme.mono_font(9),
+                                    fg=ui_theme.THEME_TEXT_MUTED, bg=THEME_BG)
         conversion_label.grid(row=conv_row, column=1, padx=5, pady=0, sticky="w")
-    
+
         def on_item_select(event=None):
             selected = item_var.get()
             if selected and selected != "Select an item...":
@@ -690,20 +811,22 @@ class TransactionsMixin:
                         conversion = get_conversion(item_id)
                         output_unit = conversion[2] if conversion else "units"
                         stock_label.config(text=f"Current stock: {display}")
-                        qty_label.config(text=f"Quantity ({output_unit}s):")
+                        qty_label.config(text=f"QUANTITY ({output_unit.upper()}S)")
                         conversion_label.config(text="Enter quantity in consumption units")
                     else:
                         stock_label.config(text=f"Current stock: {qty:.1f}")
-                        qty_label.config(text="Quantity:")
+                        qty_label.config(text="QUANTITY")
                         conversion_label.config(text="")
                     if action == ACTION_SUPPLIER_RETURN:
                         mapped_supplier = get_supplier(item_id)
                         supplier_var.set(mapped_supplier)
                 except:
                     stock_label.config(text="Current stock: -")
+                    qty_label.config(text="QUANTITY")
+                    conversion_label.config(text="")
             else:
                 stock_label.config(text="Current stock: -")
-                qty_label.config(text="Quantity:")
+                qty_label.config(text="QUANTITY")
                 conversion_label.config(text="")
     
         item_dropdown.bind("<<ComboboxSelected>>", on_item_select)
@@ -712,26 +835,33 @@ class TransactionsMixin:
         transaction_items = []
     
         # Right side - Items list
-        list_frame = tk.LabelFrame(main_frame, text=f"Items in this {action}", font=(ui_theme.THEME_FONT, 10, 'bold'))
+        list_frame = tk.Frame(main_frame, bg=THEME_BG,
+                              highlightbackground=THEME_BORDER,
+                              highlightthickness=1)
         list_frame.pack(side=tk.RIGHT, fill='both', expand=True)
+        tk.Label(list_frame, text=f"ITEMS IN THIS {str(action).upper()}",
+                 font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=12,
+                                               pady=(8, 6))
     
         if action == ACTION_SUPPLIER_RETURN:
             columns = ('item_id', 'item_name', 'quantity', 'reason', 'supplier')
         else:
             columns = ('item_id', 'item_name', 'quantity', 'reason')
         items_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
-        items_tree.heading('item_id', text='Item ID')
-        items_tree.heading('item_name', text='Name')
-        items_tree.heading('quantity', text='Qty')
-        items_tree.heading('reason', text='Reason')
+        items_tree.heading('item_id', text='Item ID', anchor='w')
+        items_tree.heading('item_name', text='Name', anchor='w')
+        items_tree.heading('quantity', text='Qty', anchor='e')
+        items_tree.heading('reason', text='Reason', anchor='w')
         self._make_sortable(items_tree)
-        items_tree.column('item_id', width=80)
-        items_tree.column('item_name', width=120)
-        items_tree.column('quantity', width=60)
-        items_tree.column('reason', width=120)
+        items_tree.column('item_id', width=120, anchor='w')
+        items_tree.column('item_name', width=180, anchor='w')
+        items_tree.column('quantity', width=70, anchor='e')
+        items_tree.column('reason', width=150, anchor='w')
         if action == ACTION_SUPPLIER_RETURN:
-            items_tree.heading('supplier', text='Supplier')
-            items_tree.column('supplier', width=100)
+            items_tree.heading('supplier', text='Supplier', anchor='w')
+            items_tree.column('supplier', width=100, anchor='w')
+        items_tree.tag_configure('alt', background=TBL_ROW_ALT, foreground=THEME_TEXT)
         items_tree.pack(fill='both', expand=True, padx=5, pady=5)
     
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=items_tree.yview)
@@ -797,11 +927,14 @@ class TransactionsMixin:
         def refresh_list():
             for item in items_tree.get_children():
                 items_tree.delete(item)
-            for item_id, item_name, qty, reason, supplier in transaction_items:
+            for index, (item_id, item_name, qty, reason, supplier) in enumerate(transaction_items):
+                tags = ('alt',) if index % 2 else ()
                 if action == ACTION_SUPPLIER_RETURN:
-                    items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}", reason, supplier))
+                    items_tree.insert('', tk.END, tags=tags,
+                                      values=(item_id, item_name, f"{qty:.1f}", reason, supplier))
                 else:
-                    items_tree.insert('', tk.END, values=(item_id, item_name, f"{qty:.1f}", reason))
+                    items_tree.insert('', tk.END, tags=tags,
+                                      values=(item_id, item_name, f"{qty:.1f}", reason))
     
         def save_all():
             if not transaction_items:
@@ -862,38 +995,47 @@ class TransactionsMixin:
                 messagebox.showerror("Error", f"{action} failed: {e}")
     
         # Buttons
-        btn_frame = tk.Frame(entry_frame)
+        btn_frame = tk.Frame(entry_frame, bg=THEME_BG)
         btn_frame.grid(row=btn_row, column=0, columnspan=2, pady=15)
-        tk.Button(btn_frame, text="Add Item", command=add_item, width=12).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Remove Selected", command=remove_selected, width=12).pack(side=tk.LEFT, padx=5)
+        self.styled_button(btn_frame, "Add item", add_item, width=13,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Remove selected", remove_selected,
+                           width=16, variant='secondary').pack(side=tk.LEFT)
     
         # Bottom buttons
-        bottom_frame = tk.Frame(self.main_menu)
-        bottom_frame.pack(fill='x', padx=20, pady=20)
-        tk.Button(bottom_frame, text="Save All", command=save_all, width=15).pack(side=tk.LEFT, padx=10)
+        tk.Frame(self.main_menu, bg=THEME_BORDER, height=1).pack(
+            fill='x', pady=(18, 0))
+        bottom_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        bottom_frame.pack(fill='x', pady=(12, 0))
+        self.styled_button(bottom_frame, f"Save {action.lower()}",
+                           save_all, width=18,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 8))
         if action == ACTION_COMPLIMENTARY:
-            tk.Button(bottom_frame, text="Upload CSV", command=self.upload_complimentary_report, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(bottom_frame, text="Back", command=self.show_dashboard, width=15).pack(side=tk.LEFT, padx=10)
+            self.styled_button(bottom_frame, "Upload CSV",
+                               self.upload_complimentary_report,
+                               width=15, variant='secondary').pack(
+                side=tk.LEFT, padx=(0, 8))
+        self.styled_button(bottom_frame, "Back", self.show_dashboard,
+                           width=14, variant='secondary').pack(side=tk.LEFT)
     
         self.root.update_idletasks()
 
 
     def process_transaction(self, action):
         """Process a transaction of the specified type."""
+        self._create_app_shell('Single Sale')
         self.clear_main_menu()
     
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text=f"Add {action}", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, padx=20)
+        frame = tk.Frame(self.main_menu, bg=THEME_CARD,
+                         highlightbackground=THEME_BORDER,
+                         highlightthickness=1, padx=24, pady=20)
+        frame.pack(fill='x')
+        frame.grid_columnconfigure(1, weight=1)
     
         # Item selection via dropdown
-        tk.Label(frame, text="Item:").grid(row=0, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(frame, text="ITEM", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_CARD).grid(
+            row=0, column=0, padx=(0, 12), pady=8, sticky="w")
     
         # Create list of items for dropdown
         self.refresh_data()
@@ -906,22 +1048,28 @@ class TransactionsMixin:
     
         item_var = tk.StringVar()
         item_dropdown = ttk.Combobox(frame, textvariable=item_var, values=item_list, width=40, state="readonly")
-        item_dropdown.grid(row=0, column=1, padx=5, pady=8)
+        item_dropdown.grid(row=0, column=1, pady=8, sticky="w")
         item_dropdown.set("Select an item...")
     
         # Quantity label updated dynamically based on selected item
-        qty_label = tk.Label(frame, text="Quantity:")
-        qty_label.grid(row=1, column=0, padx=5, pady=8, sticky="e")
-        entry_quantity = tk.Entry(frame, width=20)
-        entry_quantity.grid(row=1, column=1, padx=5, pady=8, sticky="w")
-    
+        qty_label = tk.Label(frame, text="QUANTITY",
+                             font=ui_theme.mono_font(8),
+                             fg=THEME_TEXT_MUTED, bg=THEME_CARD)
+        qty_label.grid(row=1, column=0, padx=(0, 12), pady=8, sticky="w")
+        entry_quantity = self.styled_entry(frame, width=20)
+        entry_quantity.grid(row=1, column=1, pady=8, sticky="w")
+
         # Show current stock label
-        stock_label = tk.Label(frame, text="Current stock: -", font=(ui_theme.THEME_FONT, 10, 'bold'))
-        stock_label.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-    
+        stock_label = tk.Label(frame, text="Current stock: -",
+                               font=ui_theme.mono_font(9),
+                               fg=THEME_TEXT_MUTED, bg=THEME_CARD)
+        stock_label.grid(row=2, column=1, pady=5, sticky="w")
+
         # Conversion info label
-        conversion_label = tk.Label(frame, text="", font=(ui_theme.THEME_FONT, 9), fg='gray')
-        conversion_label.grid(row=3, column=1, padx=5, pady=0, sticky="w")
+        conversion_label = tk.Label(frame, text="",
+                                    font=ui_theme.mono_font(9),
+                                    fg=THEME_TEXT_MUTED, bg=THEME_CARD)
+        conversion_label.grid(row=3, column=1, pady=0, sticky="w")
     
         # Track currently selected item for conversion
         selected_item_id = [None]
@@ -942,20 +1090,20 @@ class TransactionsMixin:
                         factor = conversion[1] if conversion else 1
                         output_unit = conversion[2] if conversion else "units"
                         stock_label.config(text=f"Current stock: {display}")
-                        qty_label.config(text=f"Quantity ({input_unit}s):")
+                        qty_label.config(text=f"QUANTITY ({input_unit.upper()}S)")
                         conversion_label.config(text=f"1 {input_unit} = {factor} {output_unit}s")
                     else:
                         stock_label.config(text=f"Current stock: {qty:.1f}")
-                        qty_label.config(text="Quantity:")
+                        qty_label.config(text="QUANTITY")
                         conversion_label.config(text="")
                 except:
                     stock_label.config(text="Current stock: -")
-                    qty_label.config(text="Quantity:")
+                    qty_label.config(text="QUANTITY")
                     conversion_label.config(text="")
             else:
                 selected_item_id[0] = None
                 stock_label.config(text="Current stock: -")
-                qty_label.config(text="Quantity:")
+                qty_label.config(text="QUANTITY")
                 conversion_label.config(text="")
     
         item_dropdown.bind("<<ComboboxSelected>>", on_item_select)
@@ -1077,11 +1225,14 @@ class TransactionsMixin:
             except Exception as e:
                 messagebox.showerror("Error", f"Transaction failed: {e}")
     
-        btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=20)
+        btn_frame = tk.Frame(frame, bg=THEME_CARD)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=(20, 0), sticky='w')
     
-        tk.Button(btn_frame, text="Save Transaction", command=save_transaction, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Back", command=self.show_dashboard, width=15).pack(side=tk.LEFT, padx=10)
+        self.styled_button(btn_frame, "Save sale", save_transaction,
+                           width=16, variant='primary').pack(
+            side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Back", self.show_dashboard,
+                           width=14, variant='secondary').pack(side=tk.LEFT)
     
         # Force redraw so ttk.Combobox is visible immediately on macOS
         self.root.update_idletasks()
@@ -1095,36 +1246,11 @@ class TransactionsMixin:
             messagebox.showwarning("No Data", "No inventory data available.")
             return
     
-        # Load Items.csv to identify draught items by their Division
-        script_dir = get_script_directory()
-        items_csv_path = os.path.join(script_dir, 'Items.csv')
-        draught_item_names = set()
-    
-        if os.path.exists(items_csv_path):
-            try:
-                items_df = pd.read_csv(items_csv_path, compression=None)
-                if 'Name' in items_df.columns and 'Division' in items_df.columns:
-                    for _, row in items_df.iterrows():
-                        if 'draught' in str(row['Division']).lower():
-                            draught_item_names.add(str(row['Name']).lower().strip())
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to read Items.csv: {e}")
-                return
-    
-        if not draught_item_names:
-            messagebox.showwarning("No Data", "Could not find draught items in Items.csv.\n\nPlease ensure Items.csv exists with 'Name' and 'Division' columns,\nand some items have 'Draught' in their Division.")
-            return
-    
-        # Find matching items in inventory
-        draught_items = []
-        for _, row in self.inventory_df.iterrows():
-            item_name = str(row[COL_ITEM_NAME]).lower().strip()
-            # Check if item name matches any draught item from Items.csv
-            if item_name in draught_item_names and row[COL_QUANTITY] > 0:
-                draught_items.append(row)
-    
+        draught_items = draught_lines_to_clean(self.inventory_df)
+
         if not draught_items:
-            messagebox.showinfo("Line Clean", "No draught items with positive stock found in inventory.")
+            messagebox.showinfo("Line Clean",
+                                "No draught lines with positive stock found in inventory.")
             return
     
         # Build confirmation message

@@ -1,0 +1,1557 @@
+<meta charset="utf-8">
+<title>BarStock Design Directions</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bricolage+Grotesque:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Public+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------
+   Page system: cool paper, cobalt signal, editorial serif display.
+   The three mockups below are deliberately fixed-palette "screens";
+   they are content, not page chrome.
+----------------------------------------------------------------*/
+:root {
+  --paper: #F1F3F7;
+  --surface: #FFFFFF;
+  --ink: #10141A;
+  --muted: #5A6472;
+  --line: #DBDFE6;
+  --accent: #2B49D6;
+  --accent-soft: #E6EAFB;
+  --display: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0D1015;
+    --surface: #151A21;
+    --ink: #EDF0F4;
+    --muted: #98A3B0;
+    --line: #262D37;
+    --accent: #8FA2FF;
+    --accent-soft: #1A2133;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0D1015;
+  --surface: #151A21;
+  --ink: #EDF0F4;
+  --muted: #98A3B0;
+  --line: #262D37;
+  --accent: #8FA2FF;
+  --accent-soft: #1A2133;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-bottom: 80px;
+}
+
+/* ---------- Masthead ---------- */
+
+.masthead {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr);
+  gap: 32px 56px;
+  align-items: end;
+  padding-block: 64px 40px;
+  border-bottom: 1px solid var(--line);
+}
+
+.masthead__main { min-width: 0; }
+
+.eyebrow {
+  margin: 0 0 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(40px, 6.4vw, 78px);
+  line-height: 0.99;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+h1 em {
+  font-style: italic;
+  color: var(--accent);
+}
+
+.standfirst {
+  margin: 22px 0 0;
+  max-width: 56ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.masthead__aside {
+  padding-bottom: 6px;
+}
+
+.factlist {
+  margin: 0;
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.factlist > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.factlist > div:first-child { border-top: 0; }
+
+.factlist dt {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.factlist dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ---------- Jump bar ---------- */
+
+.jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  padding-block: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.jump a {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--muted);
+  border-bottom: 1px solid transparent;
+  padding-bottom: 2px;
+}
+
+.jump a:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* ---------- Directions ---------- */
+
+.direction {
+  padding-block: 64px 72px;
+  border-bottom: 1px solid var(--line);
+}
+
+.direction__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 28px 56px;
+  align-items: start;
+  margin-bottom: 34px;
+}
+
+.direction__head > div { min-width: 0; }
+
+.dirnum {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.direction h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(30px, 4.2vw, 48px);
+  line-height: 1.04;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.thesis {
+  margin: 14px 0 0;
+  max-width: 46ch;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.specs {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.specs > div { min-width: 0; }
+
+.specs dt {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.specs dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.palette { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
+.palette span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.palette i {
+  width: 13px;
+  height: 13px;
+  border-radius: 2px;
+  background: var(--c);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  flex: none;
+}
+
+:root[data-theme="dark"] .palette i { border-color: rgba(255, 255, 255, 0.22); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .palette i { border-color: rgba(255, 255, 255, 0.22); }
+}
+
+/* ---------- Screen frame ---------- */
+
+.frame {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px -32px rgba(16, 20, 26, 0.45);
+}
+
+.frame figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 6px 2px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- Mock screens (fixed palettes by design) ---------- */
+
+.screen {
+  --m-bg: #fff;
+  --m-rail: #fff;
+  --m-tile: #fff;
+  --m-ink: #111;
+  --m-muted: #666;
+  --m-line: #ddd;
+  --m-accent: #333;
+  --m-accent-ink: #fff;
+  --m-warn: #b00;
+  --m-bar: #333;
+  --m-radius: 6px;
+  --m-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --m-display: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --m-num: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --m-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--m-line);
+  font-family: var(--m-body);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.screen .app {
+  display: grid;
+  grid-template-columns: 206px minmax(0, 1fr);
+  background: var(--m-bg);
+  color: var(--m-ink);
+  min-height: 480px;
+}
+
+.screen .rail {
+  background: var(--m-rail);
+  border-right: 1px solid var(--m-line);
+  padding: 18px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.screen .club {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.screen .crest {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--m-radius);
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+  font-family: var(--m-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.screen .clubname {
+  display: grid;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.screen .clubname b {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen .clubname i {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--m-muted);
+}
+
+.screen .nav {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.screen .nav span {
+  padding: 7px 9px;
+  border-radius: calc(var(--m-radius) * 0.7);
+  color: var(--m-muted);
+}
+
+.screen .railfoot {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--m-line);
+  font-family: var(--m-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--m-muted);
+}
+
+.screen .main {
+  padding: 20px 22px 18px;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.screen .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.screen .date {
+  margin: 0;
+  font-family: var(--m-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-muted);
+}
+
+.screen .top h4 {
+  margin: 3px 0 0;
+  font-family: var(--m-display);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.screen .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.screen .btn {
+  padding: 7px 12px;
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.screen .btn--solid {
+  background: var(--m-accent);
+  border-color: transparent;
+  color: var(--m-accent-ink);
+  font-weight: 600;
+}
+
+.screen .kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.screen .kpi {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  background: var(--m-tile);
+  min-width: 0;
+}
+
+.screen .kpi .k {
+  font-family: var(--m-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--m-muted);
+}
+
+.screen .kpi b {
+  font-family: var(--m-num);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.screen .kpi .f {
+  font-size: 10.5px;
+  color: var(--m-muted);
+}
+
+.screen .kpi--warn b { color: var(--m-warn); }
+
+.screen .panels {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.screen .panel {
+  padding: 14px;
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  background: var(--m-tile);
+  min-width: 0;
+}
+
+.screen .ph {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.screen .ph h5 {
+  margin: 0;
+  font-family: var(--m-display);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.screen .ph__note {
+  font-family: var(--m-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-muted);
+  white-space: nowrap;
+}
+
+.screen .attn {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.screen .attn li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--m-line);
+}
+
+.screen .attn li:first-child { border-top: 0; padding-top: 2px; }
+
+.screen .attn b { display: block; font-size: 12px; font-weight: 600; }
+
+.screen .attn span {
+  font-size: 10.5px;
+  color: var(--m-muted);
+}
+
+.screen .tag {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--m-line);
+  border-radius: 3px;
+  font-family: var(--m-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--m-muted);
+  white-space: nowrap;
+}
+
+.screen .tag--warn {
+  color: var(--m-warn);
+  border-color: var(--m-warn);
+}
+
+.screen .chart { display: grid; gap: 8px; }
+
+.screen .bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 104px;
+  border-bottom: 1px solid var(--m-line);
+}
+
+.screen .bars > div {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+}
+
+.screen .bars .v {
+  font-family: var(--m-mono);
+  font-size: 9px;
+  color: var(--m-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.screen .bars i {
+  display: block;
+  width: 100%;
+  height: calc(var(--h) * 0.78);
+  background: var(--m-bar);
+  border-radius: 2px 2px 0 0;
+}
+
+.screen .xaxis {
+  display: flex;
+  gap: 10px;
+}
+
+.screen .xaxis span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-family: var(--m-mono);
+  font-size: 9px;
+  color: var(--m-muted);
+}
+
+.screen .strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--m-line);
+  font-family: var(--m-mono);
+  font-size: 9.5px;
+  color: var(--m-muted);
+}
+
+.screen .strip b {
+  color: var(--m-muted);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* --- Direction A: The Ledger --- */
+
+.s--a {
+  --m-bg: #F7F6F0;
+  --m-rail: #F2F1E9;
+  --m-tile: transparent;
+  --m-ink: #1B221E;
+  --m-muted: #6C756C;
+  --m-line: #D7D9CD;
+  --m-accent: #16443B;
+  --m-accent-ink: #F6F4EC;
+  --m-warn: #8E5A2B;
+  --m-bar: #16443B;
+  --m-radius: 2px;
+  --m-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --m-display: "Source Serif 4", Georgia, serif;
+  --m-num: "Source Serif 4", Georgia, serif;
+}
+
+.s--a .kpis {
+  gap: 0;
+  border-top: 1px solid var(--m-line);
+  border-bottom: 1px solid var(--m-line);
+}
+
+.s--a .kpi {
+  padding: 12px 16px 14px;
+  border: 0;
+  border-left: 1px solid var(--m-line);
+  border-radius: 0;
+  background: none;
+}
+
+.s--a .kpi:first-child { border-left: 0; padding-left: 0; }
+
+.s--a .kpi b { font-size: 32px; font-weight: 600; }
+
+.s--a .panels { gap: 30px; }
+
+.s--a .panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.s--a .ph {
+  border-bottom: 1px solid var(--m-ink);
+  padding-bottom: 6px;
+}
+
+.s--a .ph h5 {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.s--a .nav .on {
+  color: var(--m-ink);
+  font-weight: 600;
+  border-bottom: 1px solid var(--m-accent);
+  border-radius: 0;
+}
+
+.s--a .crest { border-radius: 0; }
+
+.s--a .btn { border-radius: 2px; }
+
+.s--a .bars { gap: 18px; }
+
+.s--a .bars i { width: 9px; border-radius: 0; }
+
+.s--a .tag { border-radius: 0; background: none; }
+
+.s--a .tag--warn { border-color: var(--m-warn); }
+
+.s--a .strip { border-top: 1px solid var(--m-line); }
+
+.s--a .rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0;
+}
+
+.s--a .rank li {
+  padding: 7px 0;
+  border-top: 1px solid var(--m-line);
+}
+
+.s--a .rank li:first-child { border-top: 0; padding-top: 2px; }
+
+.s--a .rank__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.s--a .rank__top b { font-size: 11.5px; font-weight: 500; }
+
+.s--a .rank__top em {
+  font-family: var(--m-num);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.s--a .rank__track {
+  position: relative;
+  height: 5px;
+  margin: 6px 0 3px;
+  background: #E9E7DB;
+}
+
+.s--a .rank__track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--w);
+  background: var(--m-bar);
+}
+
+.s--a .rank small {
+  font-family: var(--m-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--m-muted);
+}
+
+.s--a .panel__sub {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--m-line);
+}
+
+.s--a .attn em {
+  flex: none;
+  font-family: var(--m-num);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* --- Direction B: Night Service --- */
+
+.s--b {
+  --m-bg: #0F1418;
+  --m-rail: #0B1013;
+  --m-tile: #161D23;
+  --m-ink: #E9EEF2;
+  --m-muted: #8C99A5;
+  --m-line: #242D35;
+  --m-accent: #D9A75B;
+  --m-accent-ink: #171208;
+  --m-warn: #E0A85A;
+  --m-bar: #C08C42;
+  --m-radius: 8px;
+  --m-body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --m-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --m-num: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+
+.s--b .app { grid-template-columns: 196px minmax(0, 1fr); }
+
+.s--b .nav .on {
+  background: rgba(217, 167, 91, 0.12);
+  color: #F1C77F;
+  box-shadow: inset 2px 0 0 var(--m-accent);
+  border-radius: 0 5px 5px 0;
+}
+
+.s--b .kpi b { font-size: 24px; font-weight: 500; }
+
+.s--b .kpi { background: linear-gradient(180deg, #192128 0%, #151C22 100%); }
+
+.s--b .tag {
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.s--b .tag--warn { background: rgba(224, 168, 90, 0.1); }
+
+.s--b .bars i { background: linear-gradient(180deg, #E3B468 0%, #B9853C 100%); }
+
+.s--b .strip { color: #7E8B97; }
+
+/* --- Direction C: The Green --- */
+
+.s--c {
+  --m-bg: #ECEEE8;
+  --m-rail: #E6E9E1;
+  --m-tile: #FFFFFF;
+  --m-ink: #14201A;
+  --m-muted: #5F6B62;
+  --m-line: #E0E3DA;
+  --m-accent: #2E6B4E;
+  --m-accent-ink: #F2F6F1;
+  --m-warn: #B25A34;
+  --m-bar: #2E6B4E;
+  --m-radius: 14px;
+  --m-body: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --m-display: "Bricolage Grotesque", "Instrument Sans", Arial, sans-serif;
+  --m-num: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+}
+
+.s--c .app { grid-template-columns: 224px minmax(0, 1fr); }
+
+.s--c .main { padding: 24px 26px 20px; gap: 18px; }
+
+.s--c .top h4 { font-size: 22px; }
+
+.s--c .kpi {
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(20, 32, 26, 0.06);
+  padding: 14px;
+}
+
+.s--c .kpi b { font-size: 27px; }
+
+.s--c .panel {
+  border-color: transparent;
+  box-shadow: 0 1px 3px rgba(20, 32, 26, 0.07);
+  padding: 16px;
+}
+
+.s--c .btn { border-radius: 999px; padding: 7px 14px; }
+
+.s--c .btn:not(.btn--solid) { background: #FFFFFF; border-color: transparent; }
+
+.s--c .tag { border-radius: 999px; padding: 3px 9px; background: rgba(20, 32, 26, 0.03); }
+
+.s--c .tag--warn { background: rgba(178, 90, 52, 0.08); }
+
+.s--c .bars i { border-radius: 4px 4px 0 0; }
+
+.s--c .ph h5 { font-size: 14px; }
+
+/* ---------- Notes under each direction ---------- */
+
+.notes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 56px;
+  margin-top: 30px;
+}
+
+.notes article { min-width: 0; }
+
+.notes h3 {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.notes ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 9px;
+}
+
+.notes li {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.notes li::before {
+  content: "";
+  width: 6px;
+  height: 1px;
+  margin-top: 10px;
+  background: var(--accent);
+}
+
+/* ---------- Foundation + recommendation ---------- */
+
+.foundation { padding-block: 64px 0; }
+
+.foundation h2 {
+  margin: 0 0 12px;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(30px, 4vw, 44px);
+  letter-spacing: -0.01em;
+}
+
+.foundation > p {
+  margin: 0 0 30px;
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.card {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.card p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.todo {
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.todo ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: todo;
+}
+
+.todo li {
+  counter-increment: todo;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.todo li::before {
+  content: counter(todo, decimal-leading-zero);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  padding-top: 3px;
+}
+
+.todo b { font-weight: 600; }
+
+.recommend {
+  margin-top: 44px;
+  padding: 26px 28px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+}
+
+.recommend h2 {
+  margin: 0 0 10px;
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: clamp(26px, 3.2vw, 34px);
+  letter-spacing: -0.01em;
+}
+
+.recommend p {
+  margin: 0;
+  max-width: 74ch;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.recommend p + p { margin-top: 12px; }
+
+footer {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 900px) {
+  .masthead,
+  .direction__head { grid-template-columns: minmax(0, 1fr); }
+  .masthead { gap: 28px; padding-block: 48px 32px; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  .notes { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .screen .app { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .screen .rail { display: none; }
+  .screen .main { padding: 16px; gap: 14px; }
+  .screen .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .screen .panels { grid-template-columns: minmax(0, 1fr); }
+  .screen .strip { display: none; }
+  .s--a .kpis { border: 0; }
+  .s--a .kpi { border-left: 0; padding: 10px 0; border-top: 1px solid var(--m-line); }
+  .s--a .kpi:nth-child(2) { border-top: 1px solid var(--m-line); }
+  .s--a .kpi:first-child { border-top: 0; }
+  .frame { padding: 6px; border-radius: 14px; }
+  .screen .top h4 { font-size: 18px; }
+  .screen .kpi b { font-size: 23px; }
+  .todo li { grid-template-columns: 26px minmax(0, 1fr); }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .recommend { padding: 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead__main">
+      <p class="eyebrow">BarStock · Design directions · October 2026</p>
+      <h1>Three faces for the same well-run bar.</h1>
+      <p class="standfirst">
+        The screens below are the same dashboard, styled three ways. The rail, the four
+        headline figures, the attention list and the trend all stay put. What changes is the
+        character: how the app reads to a committee, to the person on the floor, and to a
+        club that has never seen it before.
+      </p>
+    </div>
+    <div class="masthead__aside">
+      <dl class="factlist">
+        <div><dt>Purpose</dt><dd>Choose one identity to take to other clubs</dd></div>
+        <div><dt>Scope</dt><dd>Colour, type, density and layout only. No workflow changes.</dd></div>
+        <div><dt>Cost</dt><dd>One setting, because colours and fonts already live in <code>ui_theme.py</code></dd></div>
+      </dl>
+    </div>
+  </header>
+
+  <nav class="jump" aria-label="Directions">
+    <a href="#ledger">A · The Ledger</a>
+    <a href="#night">B · Night Service</a>
+    <a href="#green">C · The Green</a>
+    <a href="#foundation">Shared foundation</a>
+    <a href="#recommend">Recommendation</a>
+  </nav>
+
+  <!-- ===================== A · THE LEDGER ===================== -->
+  <section class="direction" id="ledger">
+    <div class="direction__head">
+      <div>
+        <p class="dirnum">Direction A</p>
+        <h2>The Ledger</h2>
+        <p class="thesis">
+          The club's bar, reported like the club's accounts. Ruled lines, serif figures and
+          nothing that looks like a gadget. It is built to survive a finance committee.
+        </p>
+      </div>
+      <dl class="specs">
+        <div>
+          <dt>Palette</dt>
+          <dd class="palette">
+            <span><i style="--c:#F7F6F0"></i>Chalk</span>
+            <span><i style="--c:#16443B"></i>Bottle</span>
+            <span><i style="--c:#8E5A2B"></i>Copper</span>
+            <span><i style="--c:#1B221E"></i>Ink</span>
+          </dd>
+        </div>
+        <div><dt>Type</dt><dd>Source Serif 4 for figures and headings (Georgia in the app) · Public Sans for labels (SF Pro Text in the app) · IBM Plex Mono for dates (Menlo in the app)</dd></div>
+        <div><dt>Density</dt><dd>High. Four figures on one line, no boxes, one rule under every heading.</dd></div>
+      </dl>
+    </div>
+
+    <figure class="frame">
+      <div class="screen s--a">
+        <div class="app">
+          <aside class="rail">
+            <div class="club">
+              <span class="crest">PGC</span>
+              <span class="clubname"><b>Prestonfield</b><i>Golf Club</i></span>
+            </div>
+            <nav class="nav">
+              <span class="on">Dashboard</span>
+              <span>Deliveries</span>
+              <span>Stocktake</span>
+              <span>Sales upload</span>
+              <span>Reports</span>
+              <span>Transactions</span>
+            </nav>
+            <div class="railfoot">Stock control · 2.1.0</div>
+          </aside>
+
+          <main class="main">
+            <div class="top">
+              <div>
+                <p class="date">Thursday 22 October</p>
+                <h4>Good evening, Chris</h4>
+              </div>
+              <div class="acts">
+                <span class="btn">Upload sales</span>
+                <span class="btn btn--solid">New delivery</span>
+              </div>
+            </div>
+
+            <div class="kpis">
+              <div class="kpi"><span class="k">Stock holding</span><b>£8,604</b><span class="f">At cost, ex VAT</span></div>
+              <div class="kpi"><span class="k">Sales this period</span><b>£7,704</b><span class="f">Since 1 October</span></div>
+              <div class="kpi"><span class="k">Active lines</span><b>95</b><span class="f">80 holding stock</span></div>
+              <div class="kpi kpi--warn"><span class="k">Needs attention</span><b>3</b><span class="f">2 stale tabs · upload due</span></div>
+            </div>
+
+            <div class="panels">
+              <section class="panel">
+                <div class="ph"><h5>Needs attention</h5><span class="ph__note">3 items</span></div>
+                <ul class="attn">
+                  <li><div><b>Scott Rodgers</b><span>Tab open since 6 August</span></div><span class="tag tag--warn">Tab</span></li>
+                  <li><div><b>BIRTHDAY TAB</b><span>Tab open since 31 August</span></div><span class="tag tag--warn">Tab</span></li>
+                  <li><div><b>Sales upload</b><span>Last sales file 12 October</span></div><span class="tag">Upload</span></li>
+                </ul>
+                <div class="panel__sub">
+                  <div class="ph"><h5>Latest sales uploads</h5><span class="ph__note">Ex VAT</span></div>
+                  <ul class="attn">
+                    <li><div><b>5–11 October</b><span>60 lines · 932 units</span></div><em>£2,868</em></li>
+                    <li><div><b>1–4 October</b><span>67 lines · 1,010 units</span></div><em>£3,435</em></li>
+                  </ul>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="ph"><h5>Most sold since 1 October</h5><span class="ph__note">Ex VAT</span></div>
+                <ul class="rank">
+                  <li>
+                    <div class="rank__top"><b>Tennents Lager</b><em>£1,291</em></div>
+                    <div class="rank__track"><i style="--w:100%"></i></div>
+                    <small>298 pints</small>
+                  </li>
+                  <li>
+                    <div class="rank__top"><b>Barista Coffee</b><em>£757</em></div>
+                    <div class="rank__track"><i style="--w:59%"></i></div>
+                    <small>267 cups</small>
+                  </li>
+                  <li>
+                    <div class="rank__top"><b>Poretti</b><em>£585</em></div>
+                    <div class="rank__track"><i style="--w:45%"></i></div>
+                    <small>119 pints</small>
+                  </li>
+                  <li>
+                    <div class="rank__top"><b>Guinness</b><em>£480</em></div>
+                    <div class="rank__track"><i style="--w:37%"></i></div>
+                    <small>82 pints</small>
+                  </li>
+                  <li>
+                    <div class="rank__top"><b>Prosecco</b><em>£472</em></div>
+                    <div class="rank__track"><i style="--w:37%"></i></div>
+                    <small>15 bottles</small>
+                  </li>
+                </ul>
+              </section>
+            </div>
+
+            <div class="strip">
+              <b>Latest deliveries</b>
+              <span>21 Oct · Booker · 11 lines</span>
+              <span>15 Oct · Tennent's · 4 lines</span>
+              <span>15 Oct · Booker · 10 lines</span>
+            </div>
+          </main>
+        </div>
+      </div>
+      <figcaption><span>Dashboard · the default screen</span><span>Prestonfield Golf Club · live figures, 22 October 2026</span></figcaption>
+    </figure>
+
+    <div class="notes">
+      <article>
+        <h3>Where it wins</h3>
+        <ul>
+          <li>Four figures a treasurer can check at a glance: stock at cost, sales since the last baseline, active lines and what needs chasing.</li>
+          <li>The same rules and serif figures carry into all 14 reports and the committee PDF, so the pack looks like the app rather than a spreadsheet export.</li>
+          <li>The attention list tells the operational truth — two stale tabs and an overdue sales upload — instead of inventing reorder levels the club does not set.</li>
+        </ul>
+      </article>
+      <article>
+        <h3>What it costs</h3>
+        <ul>
+          <li>Slower to scan on a busy Friday: urgency comes from the attention list and copper rules, not from colour blocks.</li>
+          <li>Dense report tables need width; the shell is comfortable at 1440px, but a small laptop will scroll.</li>
+          <li>Feels formal for a bar manager who wants a quick answer before service.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== B · NIGHT SERVICE ===================== -->
+  <section class="direction" id="night">
+    <div class="direction__head">
+      <div>
+        <p class="dirnum">Direction B</p>
+        <h2>Night Service</h2>
+        <p class="thesis">
+          For the person running the bar: a dark console that answers "what do I need to fix
+          before we open?" in about two seconds. Big figures, one amber signal, no decoration.
+        </p>
+      </div>
+      <dl class="specs">
+        <div>
+          <dt>Palette</dt>
+          <dd class="palette">
+            <span><i style="--c:#0F1418"></i>Graphite</span>
+            <span><i style="--c:#161D23"></i>Panel</span>
+            <span><i style="--c:#D9A75B"></i>Brass</span>
+            <span><i style="--c:#E9EEF2"></i>Chalk</span>
+          </dd>
+        </div>
+        <div><dt>Type</dt><dd>Archivo for interface text · IBM Plex Mono for every figure, so columns line up</dd></div>
+        <div><dt>Density</dt><dd>High, but spaced. Tiles carry their own border and sit on a darker ground.</dd></div>
+      </dl>
+    </div>
+
+    <figure class="frame">
+      <div class="screen s--b">
+        <div class="app">
+          <aside class="rail">
+            <div class="club">
+              <span class="crest">KP</span>
+              <span class="clubname"><b>Kestrel Park</b><i>Golf Club</i></span>
+            </div>
+            <nav class="nav">
+              <span class="on">Today</span>
+              <span>Deliveries</span>
+              <span>Stocktake</span>
+              <span>Sales upload</span>
+              <span>Reports</span>
+              <span>Transactions</span>
+            </nav>
+            <div class="railfoot">Cellar &amp; bar</div>
+          </aside>
+
+          <main class="main">
+            <div class="top">
+              <div>
+                <p class="date">Tuesday 21 October</p>
+                <h4>Good evening, Chris</h4>
+              </div>
+              <div class="acts">
+                <span class="btn">Upload sales</span>
+                <span class="btn btn--solid">New delivery</span>
+              </div>
+            </div>
+
+            <div class="kpis">
+              <div class="kpi"><span class="k">Stock holding</span><b>£9,240</b><span class="f">At cost, ex VAT</span></div>
+              <div class="kpi"><span class="k">Sales this period</span><b>£8,110</b><span class="f">Since 1 October</span></div>
+              <div class="kpi"><span class="k">Lines in stock</span><b>96</b><span class="f">7 retired</span></div>
+              <div class="kpi kpi--warn"><span class="k">Below par</span><b>3</b><span class="f">2 need ordering</span></div>
+            </div>
+
+            <div class="panels">
+              <section class="panel">
+                <div class="ph"><h5>Needs attention</h5><span class="ph__note">3 items</span></div>
+                <ul class="attn">
+                  <li><div><b>Birra Moretti 0%</b><span>4 left · par 12</span></div><span class="tag tag--warn">Order</span></li>
+                  <li><div><b>Gordons Gin</b><span>2.1 bottles · par 6</span></div><span class="tag tag--warn">Order</span></li>
+                  <li><div><b>Sales upload</b><span>Last file 11 October</span></div><span class="tag">Upload</span></li>
+                </ul>
+              </section>
+
+              <section class="panel">
+                <div class="ph"><h5>Weekly sales</h5><span class="ph__note">Ex VAT</span></div>
+                <div class="chart">
+                  <div class="bars">
+                    <div><span class="v">2,040</span><i style="--h:96%"></i></div>
+                    <div><span class="v">1,980</span><i style="--h:93%"></i></div>
+                    <div><span class="v">2,130</span><i style="--h:100%"></i></div>
+                    <div><span class="v">1,960</span><i style="--h:92%"></i></div>
+                  </div>
+                  <div class="xaxis"><span>24 Sep</span><span>1 Oct</span><span>8 Oct</span><span>15 Oct</span></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="strip">
+              <b>Latest deliveries</b>
+              <span>21 Oct · Booker · 11 lines</span>
+              <span>15 Oct · Tennent's · 4 lines</span>
+              <span>15 Oct · Booker · 10 lines</span>
+            </div>
+          </main>
+        </div>
+      </div>
+      <figcaption><span>Dashboard · the default screen</span><span>Sample club, sample figures</span></figcaption>
+    </figure>
+
+    <div class="notes">
+      <article>
+        <h3>Where it wins</h3>
+        <ul>
+          <li>Designed for the cellar at six in the evening: low light, a glance, a decision.</li>
+          <li>Status colour has room to read as a signal, so "below par" and "order" stand out immediately.</li>
+          <li>Photographs well on a projector or a laptop at a trade stand, and looks like modern software.</li>
+        </ul>
+      </article>
+      <article>
+        <h3>What it costs</h3>
+        <ul>
+          <li>Dark interfaces split opinion: some managers will ask for a light version on day one.</li>
+          <li>Reports and printed sheets need a light counterpart, so you carry two skins, not one.</li>
+          <li>The contrast budget is tighter; every new status colour has to be tested against graphite.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== C · THE GREEN ===================== -->
+  <section class="direction" id="green">
+    <div class="direction__head">
+      <div>
+        <p class="dirnum">Direction C</p>
+        <h2>The Green</h2>
+        <p class="thesis">
+          A light, calm clubhouse look that a manager can pick up without training. Soft
+          cards, a lot of air, and one green that does the work of a logo.
+        </p>
+      </div>
+      <dl class="specs">
+        <div>
+          <dt>Palette</dt>
+          <dd class="palette">
+            <span><i style="--c:#ECEEE8"></i>Stone</span>
+            <span><i style="--c:#FFFFFF"></i>White</span>
+            <span><i style="--c:#2E6B4E"></i>Club green</span>
+            <span><i style="--c:#B25A34"></i>Clay</span>
+          </dd>
+        </div>
+        <div><dt>Type</dt><dd>Bricolage Grotesque for headings · Instrument Sans for text and figures</dd></div>
+        <div><dt>Density</dt><dd>Low. Cards with generous padding, two panels per row, figures given room.</dd></div>
+      </dl>
+    </div>
+
+    <figure class="frame">
+      <div class="screen s--c">
+        <div class="app">
+          <aside class="rail">
+            <div class="club">
+              <span class="crest">KP</span>
+              <span class="clubname"><b>Kestrel Park</b><i>Golf Club</i></span>
+            </div>
+            <nav class="nav">
+              <span class="on">Today</span>
+              <span>Deliveries</span>
+              <span>Stocktake</span>
+              <span>Sales upload</span>
+              <span>Reports</span>
+              <span>Transactions</span>
+            </nav>
+            <div class="railfoot">Cellar &amp; bar</div>
+          </aside>
+
+          <main class="main">
+            <div class="top">
+              <div>
+                <p class="date">Tuesday 21 October</p>
+                <h4>Good evening, Chris</h4>
+              </div>
+              <div class="acts">
+                <span class="btn">Upload sales</span>
+                <span class="btn btn--solid">New delivery</span>
+              </div>
+            </div>
+
+            <div class="kpis">
+              <div class="kpi"><span class="k">Stock holding</span><b>£9,240</b><span class="f">At cost, ex VAT</span></div>
+              <div class="kpi"><span class="k">Sales this period</span><b>£8,110</b><span class="f">Since 1 October</span></div>
+              <div class="kpi"><span class="k">Lines in stock</span><b>96</b><span class="f">7 retired</span></div>
+              <div class="kpi kpi--warn"><span class="k">Below par</span><b>3</b><span class="f">2 need ordering</span></div>
+            </div>
+
+            <div class="panels">
+              <section class="panel">
+                <div class="ph"><h5>Needs attention</h5><span class="ph__note">3 items</span></div>
+                <ul class="attn">
+                  <li><div><b>Birra Moretti 0%</b><span>4 left · par 12</span></div><span class="tag tag--warn">Order</span></li>
+                  <li><div><b>Gordons Gin</b><span>2.1 bottles · par 6</span></div><span class="tag tag--warn">Order</span></li>
+                  <li><div><b>Sales upload</b><span>Last file 11 October</span></div><span class="tag">Upload</span></li>
+                </ul>
+              </section>
+
+              <section class="panel">
+                <div class="ph"><h5>Weekly sales</h5><span class="ph__note">Ex VAT</span></div>
+                <div class="chart">
+                  <div class="bars">
+                    <div><span class="v">2,040</span><i style="--h:96%"></i></div>
+                    <div><span class="v">1,980</span><i style="--h:93%"></i></div>
+                    <div><span class="v">2,130</span><i style="--h:100%"></i></div>
+                    <div><span class="v">1,960</span><i style="--h:92%"></i></div>
+                  </div>
+                  <div class="xaxis"><span>24 Sep</span><span>1 Oct</span><span>8 Oct</span><span>15 Oct</span></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="strip">
+              <b>Latest deliveries</b>
+              <span>21 Oct · Booker · 11 lines</span>
+              <span>15 Oct · Tennent's · 4 lines</span>
+              <span>15 Oct · Booker · 10 lines</span>
+            </div>
+          </main>
+        </div>
+      </div>
+      <figcaption><span>Dashboard · the default screen</span><span>Sample club, sample figures</span></figcaption>
+    </figure>
+
+    <div class="notes">
+      <article>
+        <h3>Where it wins</h3>
+        <ul>
+          <li>The easiest of the three to hand to someone who has never seen the app; hierarchy does the teaching.</li>
+          <li>Looks right on a website, in a proposal and on a phone, which matters when you are selling.</li>
+          <li>Friendly without being a toy, so it still suits a members' club committee.</li>
+        </ul>
+      </article>
+      <article>
+        <h3>What it costs</h3>
+        <ul>
+          <li>Cards and air cost vertical space, so fewer figures fit on a small laptop screen.</li>
+          <li>The soft-card look is common; the club's own accent colour has to carry the identity.</li>
+          <li>Needs discipline: one more card style and it turns into a dashboard of boxes.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== FOUNDATION ===================== -->
+  <section class="foundation" id="foundation">
+    <h2>What all three share</h2>
+    <p>
+      Every direction uses the same information architecture: the club rail, four headline
+      figures, a short attention list, a second panel and the latest deliveries. Picking a
+      look changes nothing about how the app works, which is why this is a decision you can
+      make on taste alone.
+    </p>
+
+    <div class="cards">
+      <article class="card">
+        <h3>Club identity at first run</h3>
+        <p>Club name, crest initials and one accent colour. Everything else stays quiet, so a new club looks set up rather than skinned.</p>
+      </article>
+      <article class="card">
+        <h3>One set of tokens</h3>
+        <p>Colours, type and spacing already live in <code>ui_theme.py</code>. A theme is a setting, not a rewrite, so you can sell the same build to every club.</p>
+      </article>
+      <article class="card">
+        <h3>Print parity</h3>
+        <p>Reports draw from the same tokens, so the committee PDF looks like the screen the manager showed them.</p>
+      </article>
+    </div>
+
+    <div class="todo">
+      <ol>
+        <li><span><b>Demo mode.</b> A sample club with sample figures, a visible "demo" badge, and a reset button. Sales demos never touch a real club's numbers.</span></li>
+        <li><span><b>First-run setup.</b> Club name, crest, VAT basis, suppliers, measures and an opening stocktake, in that order, with a sensible default at every step.</span></li>
+        <li><span><b>Committee pack.</b> One PDF a month: sales, gross profit, stock holding, variance and top movers, ready to attach to a board paper.</span></li>
+        <li><span><b>Invoice import that survives real paperwork.</b> Booker and Tennent's layouts, a price-check review, and a clear list of lines it could not match.</span></li>
+        <li><span><b>A backup you can hand over.</b> One dated file, restorable by the next manager without you on the phone.</span></li>
+        <li><span><b>An update path.</b> Signed builds, the version in the window title, and a quiet check for a newer release.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ===================== RECOMMENDATION ===================== -->
+  <section class="recommend" id="recommend">
+    <h2>Go with The Ledger</h2>
+    <p>
+      It is the direction chosen for Prestonfield: chalk paper, bottle green and copper,
+      with the club's real figures. It reads as a set of accounts, which is what a treasurer
+      or club secretary wants to sign, and it stays legible on the older laptops and
+      projectors in the club office.
+    </p>
+    <p>
+      It replaces the current dark copper/navy theme rather than sitting beside it, so every
+      screen, dialog and PDF carries one identity. Night Service and The Green remain useful
+      comparisons, not alternate skins to ship.
+    </p>
+  </section>
+
+  <footer>
+    <span>BarStock · design directions</span>
+    <span>Directions B and C use an invented club; The Ledger shows Prestonfield's live figures</span>
+  </footer>
+
+</div>

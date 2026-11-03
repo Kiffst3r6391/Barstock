@@ -72,6 +72,10 @@ EXCLUDED_ITEMS = {
     'simply_fruity',
     'soda_water',
     'tonic',
+    # Revenue-only line for a function paid by bank transfer. The drinks issued
+    # are recorded against their real stock items, so this line never holds or
+    # moves stock and must stay off the count sheet.
+    'wedding_bacs',
 }
 
 # Items excluded from the physical stock count sheet but still tracked in sales uploads.
@@ -82,6 +86,15 @@ SALES_INCLUDED_EXCLUDED_ITEMS = {
     'barista_coffee',
     'specialist_tea',
     'coffee_machine',
+    'dash',
+    'soda_water',
+}
+
+# Mixed-in soft drinks that the EPOS sells but the club holds no stock of.
+# Their sales count as revenue and never move inventory.
+UNTRACKED_SALES_ITEMS = {
+    'dash',
+    'soda_water',
 }
 
 # Items that have been removed from active stock but must still appear in
@@ -100,6 +113,7 @@ CATEGORY_MAP = {
     # Beers/Lagers
     'budweiser': 'Beers',
     'corona': 'Beers',
+    'estrella_damm': 'Beers',
     'peroni': 'Beers',
     'guinness_can': 'Beers',
     'belhaven_best': 'Beers',

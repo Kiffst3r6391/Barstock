@@ -19,8 +19,8 @@ SALES_TO_PARENT = {
     'caledonian_best_half': ('caledonian_best', 0.5, 'Caledonian Best Half Pint'),
     'carton_juice_half': ('carton_juice', 0.5, 'Carton Juice Half'),
 
-    # DASH -> deduct from Coke PM (0.15% of a pint)
-    'dash': ('coke_pm', 0.0015, 'Dash (0.15% of a pint from Coke PM)'),
+    # DASH is sold without club stock (see categories.UNTRACKED_SALES_ITEMS),
+    # so it has no parent stock to deduct from.
 
     # SHANDIES -> deduct from beer + lemonade
     'tennants_shandy_pint': (['tennents_lager', 'lemonade'], [0.5, 0.5], 'Tennents Shandy'),
@@ -221,6 +221,20 @@ def resolve_epos_item_id(raw_item_id):
     Checks explicit overrides first, then falls back to the raw ID.
     """
     return EPOS_NAME_TO_ITEM_ID.get(raw_item_id.lower(), raw_item_id)
+
+
+# Till-only products that must never be recorded by an upload. They are used as
+# in/out mechanisms (for example the Blue WKD staff-tip button) and hold no
+# stock, so any revenue they show is a pass-through rather than a sale.
+IGNORED_EPOS_ITEMS = {
+    'blue_wkd',
+}
+
+
+def is_ignored_epos_product(product_name):
+    """True when an EPOS product line should be ignored entirely."""
+    return resolve_epos_item_id(
+        normalize_product_name(product_name)) in IGNORED_EPOS_ITEMS
 
 
 def get_parent_for_sale(item_id):

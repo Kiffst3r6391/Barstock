@@ -10,7 +10,8 @@ from tkinter import messagebox, ttk
 
 import ui_theme
 from ui_theme import (
-    THEME_CARD, THEME_DANGER, THEME_TEXT, THEME_TEXT_MUTED, THEME_WARNING,
+    THEME_ACCENT, THEME_BG, THEME_BORDER, THEME_CARD, THEME_DANGER,
+    THEME_TEXT, THEME_TEXT_MUTED, THEME_WARNING,
     TBL_ROW_ALT, TBL_ROW_WARN, TBL_ROW_DANGER,
 )
 
@@ -31,11 +32,12 @@ from app_config import (
     get_script_directory,
 )
 from actions import ACTION_COMPLIMENTARY, ACTION_SALES, ACTION_WASTAGE
+from categories import is_delisted
 from conversions import DATE_FORMAT_DISPLAY, parse_display_date
 from data_manager import (
     InventoryDataManager, COL_REORDER_LEVEL, get_stocktake_history,
 )
-from pdf_generator import PDFReport, PriceHistoryPDF, StockOrderSheetPDF
+from pdf_generator import PDFReport, PriceHistoryPDF, StockOrderSheetPDF, format_report_period
 from reports import (
     filter_log_by_date,
     build_gp_report_data,
@@ -58,100 +60,141 @@ class ReportsMixin:
 
     def generate_reports(self):
         """Legacy entry point for the report screens; the hub is the single list.
-    
+
         Report screens still use this for their Back button, so it forwards to
         the hub rather than rendering a second, divergent menu.
         """
         self.show_reports()
 
+    # Shared Ledger furniture -------------------------------------------
+
+    def _begin_report(self, title, subtitle):
+        """Clear the content and put the report's name in the page heading."""
+        self.clear_main_menu()
+        self._set_page_heading(title, subtitle)
+        body = tk.Frame(self.main_menu, bg=THEME_BG)
+        body.pack(fill='both', expand=True)
+        return body
+
+    def _report_table(self, parent, columns, headings, widths, anchors=None):
+        """Build a ruled, sortable table sized to the report content."""
+        wrap = tk.Frame(parent, bg=THEME_BG)
+        wrap.pack(fill='both', expand=True)
+        tree = ttk.Treeview(wrap, columns=columns, show='headings')
+        anchors = anchors or {}
+        for column, heading in zip(columns, headings):
+            anchor = anchors.get(column, 'e')
+            tree.heading(column, text=heading, anchor=anchor)
+        for column, width in zip(columns, widths):
+            tree.column(column, width=width, minwidth=60,
+                        anchor=anchors.get(column, 'e'), stretch=True)
+        self._make_sortable(tree)
+        tree.tag_configure('alt', background=TBL_ROW_ALT, foreground=THEME_TEXT)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_treeview_mousewheel(tree)
+        return tree
+
+    def _report_totals(self, parent, rows):
+        """Ruled totals band: muted labels left, serif figures right."""
+        tk.Frame(parent, bg=THEME_BORDER, height=1).pack(fill='x', pady=(18, 0))
+        band = tk.Frame(parent, bg=THEME_BG)
+        band.pack(fill='x')
+        for index, (label, value) in enumerate(rows):
+            line = tk.Frame(band, bg=THEME_BG)
+            line.pack(fill='x', pady=(10 if index == 0 else 5, 0))
+            tk.Label(line, text=label.upper(), font=ui_theme.mono_font(9),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                     anchor='w').pack(side='left')
+            tk.Label(line, text=value, font=ui_theme.display_font(13),
+                     fg=THEME_TEXT, bg=THEME_BG,
+                     anchor='e').pack(side='right')
+        tk.Frame(parent, bg=THEME_BORDER, height=1).pack(fill='x', pady=(10, 0))
+
+    def _report_empty(self, parent, message):
+        """Replace a table with a quiet empty state."""
+        box = tk.Frame(parent, bg=THEME_BG)
+        box.pack(fill='both', expand=True, pady=(48, 48))
+        tk.Label(box, text=message, font=ui_theme.display_font(14),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).pack()
+
+    def _report_footer(self, actions=()):
+        """A ruled footer with Back on the left and any extras on the right.
+
+        ``actions`` is a sequence of ``(text, command, variant)`` tuples.
+        """
+        tk.Frame(self.main_menu, bg=THEME_BORDER, height=1).pack(
+            fill='x', pady=(22, 0))
+        footer = tk.Frame(self.main_menu, bg=THEME_BG)
+        footer.pack(fill='x', pady=(12, 0))
+        self.styled_button(footer, "Back", self.generate_reports,
+                           width=8, variant='secondary').pack(side='left')
+        for text, command, variant in reversed(tuple(actions)):
+            self.styled_button(footer, text, command, width=22,
+                               variant=variant).pack(side='right', padx=(8, 0))
+
 
     def generate_gp_report(self):
-        """Generate and display the Gross Profit report."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Gross Profit Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display the Gross Profit report."""
+        body = self._begin_report(
+            "Gross Profit",
+            "Retail, member and non-member margin for the period")
+
         try:
             self.refresh_data()
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("GP Report - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "GP Report - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             if filtered_log.empty:
-                tk.Label(self.main_menu, text="No transaction data available for selected period.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No transactions fall inside the selected period.")
+                self._report_footer()
                 return
-    
-            report_df = build_gp_report_data(filtered_log, member_discount_pct=int(self.get_member_discount_pct()))
-    
-            # Display report in treeview
-            columns = ('item_id', 'total_cost', 'total_revenue', 'gp', 'gp_pct', 'member_gp', 'member_gp_pct', 'non_member_gp', 'non_member_gp_pct')
-            report_tree = ttk.Treeview(frame, columns=columns, show='headings')
-    
-            report_tree.heading('item_id', text='Item ID')
-            report_tree.heading('total_cost', text='Total Cost')
-            report_tree.heading('total_revenue', text='Retail Revenue')
-            report_tree.heading('gp', text='Retail GP')
-            report_tree.heading('gp_pct', text='Retail GP%')
-            report_tree.heading('member_gp', text='Member GP')
-            report_tree.heading('member_gp_pct', text='Member GP%')
-            report_tree.heading('non_member_gp', text='Non-Mem GP')
-            report_tree.heading('non_member_gp_pct', text='Non-Mem GP%')
-    
-            report_tree.column('item_id', width=100, anchor='center')
-            report_tree.column('total_cost', width=90, anchor='center')
-            report_tree.column('total_revenue', width=90, anchor='center')
-            report_tree.column('gp', width=80, anchor='center')
-            report_tree.column('gp_pct', width=70, anchor='center')
-            report_tree.column('member_gp', width=80, anchor='center')
-            report_tree.column('member_gp_pct', width=70, anchor='center')
-            report_tree.column('non_member_gp', width=80, anchor='center')
-            report_tree.column('non_member_gp_pct', width=70, anchor='center')
-    
-            self._make_sortable(report_tree)
-    
-            report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            report_tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(report_tree)
-    
-            # Configure alternating row colors
-            report_tree.tag_configure('oddrow', background=TBL_ROW_ALT, foreground=THEME_TEXT)
-            report_tree.tag_configure('evenrow', background=THEME_CARD, foreground=THEME_TEXT)
-    
-            # Insert data
-            for item_id, row in report_df.iterrows():
-                values = (item_id, self.format_currency(row['Total Cost']),
-                         self.format_currency(row['Total Revenue']),
-                         self.format_currency(row['GP']),
-                         f"{row['GP%']:.1f}%",
-                         self.format_currency(row['Member GP']),
-                         f"{row['Member GP%']:.1f}%",
-                         self.format_currency(row['Non-Member GP']),
-                         f"{row['Non-Member GP%']:.1f}%")
-    
-                report_tree.insert('', tk.END, values=values)
-    
-            # Summary
-            summary_frame = tk.Frame(self.main_menu, relief='solid', borderwidth=1)
-            summary_frame.pack(pady=10, fill='x', padx=10)
-    
+
+            report_df = build_gp_report_data(
+                filtered_log,
+                member_discount_pct=int(self.get_member_discount_pct()))
+
+            # Show the stocked name rather than the key, so a committee reader
+            # sees "Tennents Lager", not "tennents_lager".
+            name_by_id = {}
+            if not self.inventory_df.empty:
+                name_by_id = {
+                    str(item_id): str(name)
+                    for item_id, name in zip(
+                        self.inventory_df[COL_ITEM_ID],
+                        self.inventory_df[COL_ITEM_NAME])
+                }
+
+            columns = ('item_id', 'total_cost', 'total_revenue', 'gp', 'gp_pct',
+                       'member_gp', 'member_gp_pct', 'non_member_gp',
+                       'non_member_gp_pct')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Cost', 'Retail revenue', 'Retail GP', 'GP %',
+                 'Member GP', 'Member %', 'Non-member GP', 'Non-member %'),
+                (200, 95, 115, 100, 75, 100, 80, 120, 100),
+                anchors={'item_id': 'w'})
+
+            for index, (item_id, row) in enumerate(report_df.iterrows()):
+                values = (name_by_id.get(str(item_id), item_id),
+                          self.format_currency(row['Total Cost']),
+                          self.format_currency(row['Total Revenue']),
+                          self.format_currency(row['GP']),
+                          f"{row['GP%']:.1f}%",
+                          self.format_currency(row['Member GP']),
+                          f"{row['Member GP%']:.1f}%",
+                          self.format_currency(row['Non-Member GP']),
+                          f"{row['Non-Member GP%']:.1f}%")
+                tree.insert('', tk.END, values=values,
+                            tags=('alt',) if index % 2 else ())
+
             total_gp = report_df['GP'].sum()
             total_member_gp = report_df['Member GP'].sum()
             total_non_member_gp = report_df['Non-Member GP'].sum()
@@ -161,381 +204,258 @@ class ReportsMixin:
             overall_gp_pct = (total_gp / total_revenue * 100) if total_revenue > 0 else 0
             overall_member_gp_pct = (total_member_gp / total_member_revenue * 100) if total_member_revenue > 0 else 0
             overall_non_member_gp_pct = (total_non_member_gp / total_non_member_revenue * 100) if total_non_member_revenue > 0 else 0
-    
-            tk.Label(summary_frame, text=f"Overall Retail GP: {self.format_currency(total_gp)} ({overall_gp_pct:.1f}%)",
-                    font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
+
             discount_pct = int(self.get_member_discount_pct())
-            tk.Label(summary_frame, text=f"Overall Member GP: {self.format_currency(total_member_gp)} ({overall_member_gp_pct:.1f}%) ({discount_pct}% member discount applied)",
-                    font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
-            tk.Label(summary_frame, text=f"Overall Non-Member GP: {self.format_currency(total_non_member_gp)} ({overall_non_member_gp_pct:.1f}%)",
-                    font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
-    
+            self._report_totals(body, [
+                ("Retail GP",
+                 f"{self.format_currency(total_gp)}  ·  {overall_gp_pct:.1f}%"),
+                (f"Member GP · {discount_pct}% discount applied",
+                 f"{self.format_currency(total_member_gp)}  ·  {overall_member_gp_pct:.1f}%"),
+                ("Non-member GP",
+                 f"{self.format_currency(total_non_member_gp)}  ·  {overall_non_member_gp_pct:.1f}%"),
+            ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def generate_surplus_report(self):
-        """Generate and display the Surplus/Variance Report."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Surplus/Variance Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display the Surplus/Variance report."""
+        body = self._begin_report(
+            "Surplus & Variance",
+            "Actual stock against what sales and wastage predict")
+
         try:
             self.refresh_data()
-    
+
             if self.inventory_df.empty:
-                tk.Label(self.main_menu, text="No inventory data available.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No inventory data available.")
+                self._report_footer()
                 return
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Surplus/Variance Report - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "Surplus/Variance Report - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             report_data = build_surplus_report_data(self.inventory_df, filtered_log)
             report_df = pd.DataFrame(report_data)
-    
-            # Display report in treeview
-            columns = ('item_id', 'expected', 'actual', 'variance', 'variance_pct', 'variance_value')
-            report_tree = ttk.Treeview(frame, columns=columns, show='headings')
-    
-            report_tree.heading('item_id', text='Item ID')
-            report_tree.heading('expected', text='Expected (Sold + Wastage)')
-            report_tree.heading('actual', text='Actual Stock')
-            report_tree.heading('variance', text='Variance')
-            report_tree.heading('variance_pct', text='Variance %')
-            report_tree.heading('variance_value', text='Variance (£)')
-    
-            report_tree.column('item_id', width=100, anchor='center')
-            report_tree.column('expected', width=150, anchor='center')
-            report_tree.column('actual', width=120, anchor='center')
-            report_tree.column('variance', width=100, anchor='center')
-            report_tree.column('variance_pct', width=100, anchor='center')
-            report_tree.column('variance_value', width=100, anchor='center')
-    
-            self._make_sortable(report_tree)
-    
-            report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            report_tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(report_tree)
-    
-            # Insert data
-            for _, row in report_df.iterrows():
+
+            columns = ('item_id', 'expected', 'actual', 'variance',
+                       'variance_pct', 'variance_value')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Expected (sold + wastage)', 'Actual stock',
+                 'Variance', 'Variance %', 'Variance £'),
+                (200, 180, 130, 110, 100, 110),
+                anchors={'item_id': 'w'})
+
+            for index, (_, row) in enumerate(report_df.iterrows()):
                 variance = row['Variance']
-                variance_str = f"{variance:+.1f}"
-                variance_pct_str = f"{row['Variance %']:+.1f}%"
-                variance_value_str = f"£{row['Variance Value']:+.2f}"
-    
                 values = (row[COL_ITEM_ID], f"{row['Expected']:.1f}",
-                         f"{row['Actual']:.1f}", variance_str, variance_pct_str, variance_value_str)
-    
-                report_tree.insert('', tk.END, values=values)
-    
+                          f"{row['Actual']:.1f}", f"{variance:+.1f}",
+                          f"{row['Variance %']:+.1f}%",
+                          f"£{row['Variance Value']:+.2f}")
+                tags = ('alt',) if index % 2 else ()
+                tree.insert('', tk.END, values=values, tags=tags)
+
+            if not report_df.empty:
+                self._report_totals(body, [
+                    ("Net variance",
+                     f"£{report_df['Variance Value'].sum():+.2f}"),
+                    ("Lines in variance",
+                     f"{int((report_df['Variance'].abs() >= 1).sum())} of {len(report_df)}"),
+                ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def generate_division_report(self):
-        """Generate and display sales by Division/Category report."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Division Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display sales by division/category."""
+        body = self._begin_report(
+            "Sales by Division",
+            "Revenue and margin grouped by product category")
+
         try:
             self.refresh_data()
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Division Report - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "Division Report - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             if filtered_log.empty:
-                tk.Label(self.main_menu, text="No transaction data available for selected period.", fg="gray").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                ttk.Button(btn_frame, text="🔙 Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No transactions fall inside the selected period.")
+                self._report_footer()
                 return
-    
+
             division_summary = build_division_report_data(
                 self.inventory_df, filtered_log,
                 member_discount_pct=int(self.get_member_discount_pct())
             )
-    
+
             if division_summary.empty:
-                tk.Label(self.main_menu, text="No sales transactions found for selected period.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No sales transactions found for the selected period.")
+                self._report_footer()
                 return
-    
-            # Display in treeview
-            columns = ('division', 'qty', 'revenue', 'cost', 'gp', 'gp_pct', 'member_gp', 'member_gp_pct', 'non_member_gp', 'non_member_gp_pct')
-            report_tree = ttk.Treeview(frame, columns=columns, show='headings')
-    
-            report_tree.heading('division', text='Division')
-            report_tree.heading('qty', text='Units Sold')
-            report_tree.heading('revenue', text='Revenue')
-            report_tree.heading('cost', text='Cost')
-            report_tree.heading('gp', text='Retail GP')
-            report_tree.heading('gp_pct', text='Retail GP%')
-            report_tree.heading('member_gp', text='Member GP')
-            report_tree.heading('member_gp_pct', text='Member GP%')
-            report_tree.heading('non_member_gp', text='Non-Mem GP')
-            report_tree.heading('non_member_gp_pct', text='Non-Mem GP%')
-    
-            report_tree.column('division', width=120, anchor='w')
-            report_tree.column('qty', width=70, anchor='center')
-            report_tree.column('revenue', width=80, anchor='center')
-            report_tree.column('cost', width=80, anchor='center')
-            report_tree.column('gp', width=70, anchor='center')
-            report_tree.column('gp_pct', width=65, anchor='center')
-            report_tree.column('member_gp', width=70, anchor='center')
-            report_tree.column('member_gp_pct', width=65, anchor='center')
-            report_tree.column('non_member_gp', width=70, anchor='center')
-            report_tree.column('non_member_gp_pct', width=65, anchor='center')
-    
-            self._make_sortable(report_tree)
-    
-            report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            report_tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(report_tree)
-    
-            # Insert data
-            for _, row in division_summary.iterrows():
+
+            columns = ('division', 'qty', 'revenue', 'cost', 'gp', 'gp_pct',
+                       'member_gp', 'member_gp_pct', 'non_member_gp',
+                       'non_member_gp_pct')
+            tree = self._report_table(
+                body, columns,
+                ('Division', 'Units', 'Revenue', 'Cost', 'Retail GP', 'GP %',
+                 'Member GP', 'Member %', 'Non-member GP', 'Non-member %'),
+                (170, 80, 100, 90, 100, 75, 100, 80, 120, 100),
+                anchors={'division': 'w'})
+
+            for index, (_, row) in enumerate(division_summary.iterrows()):
                 values = (row['Division'], f"{row['Total Quantity']:.1f}",
-                         self.format_currency(row['Total Revenue']),
-                         self.format_currency(row['Total Cost']),
-                         self.format_currency(row['GP']),
-                         f"{row['GP%']:.1f}%",
-                         self.format_currency(row['Member GP']),
-                         f"{row['Member GP%']:.1f}%",
-                         self.format_currency(row['Non-Member GP']),
-                         f"{row['Non-Member GP%']:.1f}%")
-    
-                report_tree.insert('', tk.END, values=values)
-    
-            # Summary
-            summary_frame = tk.Frame(self.main_menu, relief='solid', borderwidth=1)
-            summary_frame.pack(pady=10, fill='x', padx=10)
-    
+                          self.format_currency(row['Total Revenue']),
+                          self.format_currency(row['Total Cost']),
+                          self.format_currency(row['GP']),
+                          f"{row['GP%']:.1f}%",
+                          self.format_currency(row['Member GP']),
+                          f"{row['Member GP%']:.1f}%",
+                          self.format_currency(row['Non-Member GP']),
+                          f"{row['Non-Member GP%']:.1f}%")
+                tree.insert('', tk.END, values=values,
+                            tags=('alt',) if index % 2 else ())
+
             total_revenue = division_summary['Total Revenue'].sum()
             total_member_revenue = division_summary['Member Revenue'].sum()
             total_non_member_revenue = division_summary['Non-Member Revenue'].sum()
-            total_cost = division_summary['Total Cost'].sum()
             total_gp = division_summary['GP'].sum()
             total_member_gp = division_summary['Member GP'].sum()
             total_non_member_gp = division_summary['Non-Member GP'].sum()
-    
+
             overall_gp_pct = (total_gp / total_revenue * 100) if total_revenue > 0 else 0
             overall_member_gp_pct = (total_member_gp / total_member_revenue * 100) if total_member_revenue > 0 else 0
             overall_non_member_gp_pct = (total_non_member_gp / total_non_member_revenue * 100) if total_non_member_revenue > 0 else 0
-    
-            tk.Label(summary_frame, text=f"Total Revenue: {self.format_currency(total_revenue)}", font=(ui_theme.THEME_FONT, 11)).pack(pady=2)
-            tk.Label(summary_frame, text=f"Overall Retail GP: {self.format_currency(total_gp)} ({overall_gp_pct:.1f}%)", font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
-            tk.Label(summary_frame, text=f"Overall Member GP: {self.format_currency(total_member_gp)} ({overall_member_gp_pct:.1f}%)", font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
-            tk.Label(summary_frame, text=f"Overall Non-Member GP: {self.format_currency(total_non_member_gp)} ({overall_non_member_gp_pct:.1f}%)", font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=2)
-    
+
+            self._report_totals(body, [
+                ("Revenue", self.format_currency(total_revenue)),
+                ("Retail GP",
+                 f"{self.format_currency(total_gp)}  ·  {overall_gp_pct:.1f}%"),
+                ("Member GP",
+                 f"{self.format_currency(total_member_gp)}  ·  {overall_member_gp_pct:.1f}%"),
+                ("Non-member GP",
+                 f"{self.format_currency(total_non_member_gp)}  ·  {overall_non_member_gp_pct:.1f}%"),
+            ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def generate_draught_yield_report(self):
-        """Generate and display the Draught Yield Report."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Draught Yield Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display the draught yield report."""
+        body = self._begin_report(
+            "Draught Yield",
+            "What the kegs say went out, against sales, wastage and returns")
+
         try:
             self.refresh_data()
-    
+
             if self.inventory_df.empty or self.log_df.empty:
-                tk.Label(self.main_menu, text="Insufficient data. Need both inventory and transaction data.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "This report needs both inventory and transactions.")
+                self._report_footer()
                 return
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Draught Yield Report - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "Draught Yield Report - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             report_data = build_draught_yield_data(self.inventory_df, filtered_log)
-    
+
             if not report_data:
-                tk.Label(self.main_menu, text="No draught yield data found for the selected period.",
-                        wraplength=500).pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No draught yield data found for the selected period.")
+                self._report_footer()
                 return
-    
+
             report_df = pd.DataFrame(report_data)
-    
-            # Display report
-            columns = ('item_id', 'item_name', 'opening', 'deliveries', 'sales', 'wastage', 'comp', 'consumed', 'actual', 'loss', 'closing', 'yield')
-            report_tree = ttk.Treeview(frame, columns=columns, show='headings')
-    
-            report_tree.heading('item_id', text='Item ID')
-            report_tree.heading('item_name', text='Item Name')
-            report_tree.heading('opening', text='Opening')
-            report_tree.heading('deliveries', text='Deliveries')
-            report_tree.heading('sales', text=ACTION_SALES)
-            report_tree.heading('wastage', text=ACTION_WASTAGE)
-            report_tree.heading('comp', text='Comp')
-            report_tree.heading('consumed', text='Exp. Consumed')
-            report_tree.heading('actual', text='Actual Consumed')
-            report_tree.heading('loss', text='Unrecorded Loss')
-            report_tree.heading('closing', text='Closing')
-            report_tree.heading('yield', text='Yield %')
-    
-            report_tree.column('item_id', width=70, anchor='center')
-            report_tree.column('item_name', width=140, anchor='w')
-            report_tree.column('opening', width=55, anchor='center')
-            report_tree.column('deliveries', width=55, anchor='center')
-            report_tree.column('sales', width=50, anchor='center')
-            report_tree.column('wastage', width=50, anchor='center')
-            report_tree.column('comp', width=45, anchor='center')
-            report_tree.column('consumed', width=70, anchor='center')
-            report_tree.column('actual', width=70, anchor='center')
-            report_tree.column('loss', width=70, anchor='center')
-            report_tree.column('closing', width=55, anchor='center')
-            report_tree.column('yield', width=55, anchor='center')
-    
-            self._make_sortable(report_tree)
-    
-            report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            report_tree.configure(yscrollcommand=scrollbar.set)
-    
-            for _, row in report_df.iterrows():
+
+            columns = ('item_id', 'item_name', 'opening', 'deliveries', 'sales',
+                       'wastage', 'comp', 'consumed', 'actual', 'loss',
+                       'closing', 'yield')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Name', 'Opening', 'Deliveries', ACTION_SALES,
+                 ACTION_WASTAGE, 'Comp', 'Expected used', 'Actual used',
+                 'Unrecorded loss', 'Closing', 'Yield %'),
+                (90, 180, 75, 85, 70, 80, 60, 105, 100, 115, 75, 70),
+                anchors={'item_id': 'w', 'item_name': 'w'})
+
+            for index, (_, row) in enumerate(report_df.iterrows()):
                 yield_val = row['Yield %']
-                yield_str = f"{yield_val:.1f}%"
-                tag = ''
-                if yield_val < 95 or yield_val > 105:
-                    tag = 'yield_warning'
-    
                 loss_val = row['Unrecorded Loss']
-                if abs(loss_val) >= 5:
-                    tag = 'loss_warning'
-    
+                moved = any(abs(float(row[column])) > 0.001 for column in (
+                    'Opening Stock', 'Deliveries', ACTION_SALES,
+                    ACTION_WASTAGE, ACTION_COMPLIMENTARY, 'Current Stock',
+                    'Actual Consumption'))
+                tags = ('alt',) if index % 2 else ()
+                if is_delisted(str(row[COL_ITEM_ID])) or not moved:
+                    # Delisted or untouched lines have no yield to judge.
+                    tags = ('no_activity',)
+                elif yield_val < 90 or yield_val > 110 or abs(loss_val) >= 10:
+                    tags = ('yield_warning',)
+                elif yield_val < 95 or yield_val > 105 or abs(loss_val) >= 5:
+                    tags = ('loss_warning',)
+
                 values = (row[COL_ITEM_ID], row[COL_ITEM_NAME],
-                         f"{row['Opening Stock']:.1f}",
-                         f"{row['Deliveries']:.1f}",
-                         f"{row[ACTION_SALES]:.1f}",
-                         f"{row[ACTION_WASTAGE]:.1f}",
-                         f"{row[ACTION_COMPLIMENTARY]:.1f}",
-                         f"{row['Expected Consumption']:.1f}",
-                         f"{row['Actual Consumption']:.1f}",
-                         f"{loss_val:.1f}",
-                         f"{row['Current Stock']:.1f}",
-                         yield_str)
-    
-                report_tree.insert('', tk.END, values=values, tags=(tag,))
-    
-            report_tree.tag_configure('yield_warning', background=TBL_ROW_DANGER, foreground=THEME_DANGER)
-            report_tree.tag_configure('loss_warning', background=TBL_ROW_WARN, foreground=THEME_WARNING)
-    
+                          f"{row['Opening Stock']:.1f}",
+                          f"{row['Deliveries']:.1f}",
+                          f"{row[ACTION_SALES]:.1f}",
+                          f"{row[ACTION_WASTAGE]:.1f}",
+                          f"{row[ACTION_COMPLIMENTARY]:.1f}",
+                          f"{row['Expected Consumption']:.1f}",
+                          f"{row['Actual Consumption']:.1f}",
+                          f"{loss_val:.1f}",
+                          f"{row['Current Stock']:.1f}",
+                          f"{yield_val:.1f}%")
+
+                tree.insert('', tk.END, values=values, tags=tags)
+
+            tree.tag_configure('yield_warning', background=TBL_ROW_DANGER,
+                               foreground=THEME_DANGER)
+            tree.tag_configure('loss_warning', background=TBL_ROW_WARN,
+                               foreground=THEME_WARNING)
+            tree.tag_configure('no_activity', foreground=THEME_TEXT_MUTED)
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._report_footer()
 
 
     def generate_stocktake_report(self):
-        """Generate and display the Stocktake Variance Report."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Stocktake Variance Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display the stocktake variance report."""
+        body = self._begin_report(
+            "Stocktake Variance",
+            "The last physical count against the expected figure")
+
         try:
             self.refresh_data()
-    
+
             if self.inventory_df.empty:
-                tk.Label(self.main_menu, text="No inventory data available.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No inventory data available.")
+                self._report_footer()
                 return
-    
+
             # Load latest stocktake data
             stocktake_rows = get_stocktake_history(limit=1000)
             stocktake_df = None
@@ -548,128 +468,100 @@ class ReportsMixin:
                 stocktake_df = stocktake_df[
                     ~stocktake_df['note'].astype(str).str.contains('Baseline', case=False, na=False)
                 ]
-                # Keep only the most recent non-baseline entry per item_id
                 stocktake_df = stocktake_df.sort_values('timestamp', ascending=False)
                 stocktake_df = stocktake_df.drop_duplicates(subset='item_id', keep='first')
-    
+
             from reports import build_stocktake_variance_report
             report_data = build_stocktake_variance_report(self.inventory_df, self.log_df, stocktake_df)
-    
+
             if not report_data:
-                tk.Label(self.main_menu, text="No stocktake data available.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No stocktakes have been recorded yet.")
+                self._report_footer()
                 return
-    
+
             report_df = pd.DataFrame(report_data)
-    
-            # Display report
-            columns = ('item_id', 'item_name', 'expected', 'counted', 'variance', 'variance_pct', 'variance_value')
-            report_tree = ttk.Treeview(frame, columns=columns, show='headings')
-    
-            report_tree.heading('item_id', text='Item ID')
-            report_tree.heading('item_name', text='Item Name')
-            report_tree.heading('expected', text='Expected')
-            report_tree.heading('counted', text='Counted')
-            report_tree.heading('variance', text='Variance')
-            report_tree.heading('variance_pct', text='Var %')
-            report_tree.heading('variance_value', text='Value')
-    
-            report_tree.column('item_id', width=80, anchor='center')
-            report_tree.column('item_name', width=160, anchor='w')
-            report_tree.column('expected', width=70, anchor='center')
-            report_tree.column('counted', width=70, anchor='center')
-            report_tree.column('variance', width=70, anchor='center')
-            report_tree.column('variance_pct', width=60, anchor='center')
-            report_tree.column('variance_value', width=70, anchor='center')
-    
-            self._make_sortable(report_tree)
-    
-            report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=report_tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            report_tree.configure(yscrollcommand=scrollbar.set)
-    
-            for _, row in report_df.iterrows():
+
+            columns = ('item_id', 'item_name', 'expected', 'counted',
+                       'variance', 'variance_pct', 'variance_value')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Name', 'Expected', 'Counted', 'Variance',
+                 'Variance %', 'Value'),
+                (130, 220, 100, 100, 100, 100, 100),
+                anchors={'item_id': 'w', 'item_name': 'w'})
+
+            def _qty(value):
+                return f"{value:.1f}" if pd.notna(value) else '-'
+
+            for index, (_, row) in enumerate(report_df.iterrows()):
                 has_st = row.get('has_stocktake', False)
                 if has_st:
-                    expected = f"{row['expected_quantity']:.1f}" if row['expected_quantity'] is not None else '-'
-                    counted = f"{row['counted_quantity']:.1f}" if row['counted_quantity'] is not None else '-'
+                    expected = _qty(row['expected_quantity'])
+                    counted = _qty(row['counted_quantity'])
                     variance = row['variance']
                     var_pct = row['variance_pct']
                     var_val = row['variance_value']
                     var_str = f"{variance:+.1f}"
                     var_pct_str = f"{var_pct:+.1f}%"
                     var_val_str = f"£{var_val:.2f}"
-                    tag = ''
+                    tags = ('alt',) if index % 2 else ()
                     if abs(var_pct) > 5:
-                        tag = 'high_variance'
+                        tags = ('high_variance',)
                     elif abs(var_pct) > 2:
-                        tag = 'med_variance'
+                        tags = ('med_variance',)
                 else:
-                    expected = f"{row['expected_quantity']:.1f}" if row['expected_quantity'] is not None else '-'
+                    expected = _qty(row['expected_quantity'])
                     counted = '-'
                     var_str = '-'
                     var_pct_str = '-'
                     var_val_str = '-'
-                    tag = 'no_stocktake'
-    
-                values = (row['item_id'], row['item_name'], expected, counted, var_str, var_pct_str, var_val_str)
-                report_tree.insert('', tk.END, values=values, tags=(tag,))
-    
-            report_tree.tag_configure('high_variance', background=TBL_ROW_DANGER, foreground=THEME_DANGER)
-            report_tree.tag_configure('med_variance', background=TBL_ROW_WARN, foreground=THEME_WARNING)
-            report_tree.tag_configure('no_stocktake', foreground=THEME_TEXT_MUTED)
-    
-            # Summary label
+                    tags = ('no_stocktake',)
+
+                values = (row['item_id'], row['item_name'], expected, counted,
+                          var_str, var_pct_str, var_val_str)
+                tree.insert('', tk.END, values=values, tags=tags)
+
+            tree.tag_configure('high_variance', background=TBL_ROW_DANGER,
+                               foreground=THEME_DANGER)
+            tree.tag_configure('med_variance', background=TBL_ROW_WARN,
+                               foreground=THEME_WARNING)
+            tree.tag_configure('no_stocktake', foreground=THEME_TEXT_MUTED)
+
             st_items = report_df[report_df['has_stocktake'] == True]
             if not st_items.empty:
                 total_var_val = st_items['variance_value'].sum()
-                total_var_pct = (st_items['variance'].sum() / st_items['expected_quantity'].sum() * 100) if st_items['expected_quantity'].sum() > 0 else 0
-                summary_text = f"Total Variance Value: £{total_var_val:+.2f}  |  Total Variance %: {total_var_pct:+.1f}%  |  Items counted: {len(st_items)} / {len(report_df)}"
-                tk.Label(self.main_menu, text=summary_text, font=(ui_theme.THEME_FONT, 10, 'bold')).pack(pady=(5, 0))
-    
+                expected_total = st_items['expected_quantity'].sum()
+                total_var_pct = (st_items['variance'].sum() / abs(expected_total) * 100) if abs(expected_total) > 0 else 0
+                self._report_totals(body, [
+                    ("Net variance",
+                     f"£{total_var_val:+.2f}  ·  {total_var_pct:+.1f}%"),
+                    ("Items counted", f"{len(st_items)} of {len(report_df)}"),
+                ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-    
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._report_footer()
 
 
     def generate_reconciliation_report(self):
-        """Generate and display the inventory reconciliation report."""
-        self.clear_main_menu()
-    
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Reconciliation Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-        frame = tk.Frame(self.main_menu)
-        frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+        """Display the inventory reconciliation report."""
+        body = self._begin_report(
+            "Reconciliation",
+            "Where the inventory, transaction log and reference files disagree")
+
         try:
             self.refresh_data()
-    
+
             if self.inventory_df.empty:
-                tk.Label(self.main_menu, text="No inventory data available.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No inventory data available.")
+                self._report_footer()
                 return
-    
+
             from reports import build_reconciliation_report
             script_dir = get_script_directory()
             report = build_reconciliation_report(self.inventory_df, self.log_df, script_dir=script_dir)
-    
-            # Summary text area at top
+
             summary_lines = []
             sections = [
                 ("Missing conversion rules", report['missing_conversion'], lambda x: f"{x['item_name']} ({x['item_id']})"),
@@ -680,520 +572,385 @@ class ReportsMixin:
                 ("In Items.csv but not inventory", report['csv_mismatches']['in_csv_not_inventory'], lambda x: str(x)),
                 ("Recently negative items", report['recent_negative'], lambda x: f"{x['item_name']} ({x['item_id']}): {x['current_qty']:.1f}"),
             ]
-    
+
             for title, items, fmt in sections:
                 if items:
-                    summary_lines.append(f"{title} ({len(items)}):")
+                    summary_lines.append(f"{title} ({len(items)})")
                     for item in items[:5]:
-                        summary_lines.append(f"  - {fmt(item)}")
+                        summary_lines.append(f"    {fmt(item)}")
                     if len(items) > 5:
-                        summary_lines.append(f"  ... and {len(items) - 5} more")
+                        summary_lines.append(f"    ... and {len(items) - 5} more")
                     summary_lines.append("")
-    
+
             if not summary_lines:
                 summary_lines.append("No issues found. Inventory is fully in sync.")
-    
-            summary_text = tk.Text(frame, wrap=tk.WORD, height=16, font=(ui_theme.THEME_FONT, 10), bg='white', fg='black')
-            summary_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            summary_text.insert(tk.END, f"Generated: {report['generated_at']}\n\n" + "\n".join(summary_lines))
-            summary_text.config(state=tk.DISABLED)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=summary_text.yview)
+
+            text = tk.Text(body, wrap=tk.WORD, height=18,
+                           font=ui_theme.mono_font(10), bg=THEME_CARD,
+                           fg=THEME_TEXT, relief='flat', padx=14, pady=12,
+                           highlightthickness=1,
+                           highlightbackground=THEME_BORDER,
+                           highlightcolor=THEME_BORDER,
+                           insertbackground=THEME_TEXT)
+            text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            text.insert(tk.END, f"Generated {report['generated_at']}\n\n"
+                                 + "\n".join(summary_lines))
+            text.config(state=tk.DISABLED)
+
+            scrollbar = ttk.Scrollbar(body, orient=tk.VERTICAL,
+                                      command=text.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            summary_text.configure(yscrollcommand=scrollbar.set)
-    
+            text.configure(yscrollcommand=scrollbar.set)
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def generate_price_history_report(self):
-        """Generate and display price history report from delivery transactions."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Price History Report",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
+        """Display price history from delivery transactions."""
+        body = self._begin_report(
+            "Price History",
+            "What each supplier charged, and when it changed")
+
         try:
             self.refresh_data()
-    
+
             if self.log_df.empty:
-                tk.Label(self.main_menu, text="No transaction data available.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No transaction data available.")
+                self._report_footer()
                 return
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Price History Report - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "Price History Report - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             report_data = build_price_history_data(self.inventory_df, filtered_log)
-    
+
             if not report_data:
-                tk.Label(self.main_menu, text="No delivery transactions found for selected period.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No delivery transactions fall inside the selected period.")
+                self._report_footer()
                 return
-    
-            # Display in treeview
-            frame = tk.Frame(self.main_menu)
-            frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
-            columns = ('item_name', 'date', 'supplier', 'cost_price', 'prev_price', 'change')
-            tree = ttk.Treeview(frame, columns=columns, show='headings')
-            tree.heading('item_name', text='Item')
-            tree.heading('date', text='Date')
-            tree.heading('supplier', text='Supplier')
-            tree.heading('cost_price', text='Cost Price')
-            tree.heading('prev_price', text='Previous')
-            tree.heading('change', text='Change')
-    
-            tree.column('item_name', width=200, anchor='w')
-            tree.column('date', width=140, anchor='center')
-            tree.column('supplier', width=100, anchor='center')
-            tree.column('cost_price', width=80, anchor='center')
-            tree.column('prev_price', width=80, anchor='center')
-            tree.column('change', width=80, anchor='center')
-    
-            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(tree)
-    
-            for row in report_data:
+
+            columns = ('item_name', 'date', 'supplier', 'cost_price',
+                       'prev_price', 'change')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Date', 'Supplier', 'Cost price', 'Previous', 'Change'),
+                (260, 160, 160, 110, 110, 160),
+                anchors={'item_name': 'w', 'date': 'w', 'supplier': 'w'})
+
+            for index, row in enumerate(report_data):
                 change_str = f"{'+' if row['change'] >= 0 else ''}{row['change']:.2f} ({row['change_pct']:.1f}%)"
+                stamp = pd.to_datetime(row[COL_TIMESTAMP], errors='coerce')
+                date_text = (stamp.strftime('%d %b %Y')
+                             if pd.notna(stamp) else str(row[COL_TIMESTAMP]))
                 tree.insert('', tk.END, values=(
                     row[COL_ITEM_NAME],
-                    row[COL_TIMESTAMP],
+                    date_text,
                     row[COL_SUPPLIER],
                     f"£{row[COL_COST_PRICE]:.2f}",
                     f"£{row['prev_price']:.2f}",
                     change_str
-                ))
-    
-            # Download button
-            download_frame = tk.Frame(self.main_menu)
-            download_frame.pack(fill='x', padx=20, pady=10)
-            tk.Button(download_frame, text="Download Price History PDF",
-                      command=lambda: self.download_price_history_pdf(report_data),
-                      width=25).pack(pady=5)
-    
+                ), tags=('alt',) if index % 2 else ())
+
+            self._report_footer([
+                ("Download price history PDF",
+                 lambda: self.download_price_history_pdf(
+                     report_data, format_report_period(start_date, end_date)),
+                 'secondary'),
+            ])
+            return
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._report_footer()
 
 
-    def download_price_history_pdf(self, report_data):
+    def download_price_history_pdf(self, report_data, report_period=None):
         """Generate and save a price history PDF report."""
         try:
-            from fpdf import FPDF
-    
-            class PriceHistoryPDF(FPDF):
-                def header(self):
-                    self.set_font(ui_theme.THEME_FONT, 'B', 16)
-                    self.set_text_color(40, 40, 40)
-                    self.cell(0, 10, 'Prestonfield Golf Club - Price History Report', 0, 1, 'C')
-                    self.set_font(ui_theme.THEME_FONT, '', 10)
-                    self.set_text_color(100, 100, 100)
-                    self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
-                    self.ln(5)
-    
-                def footer(self):
-                    self.set_y(-15)
-                    self.set_font(ui_theme.THEME_FONT, 'I', 8)
-                    self.set_text_color(128, 128, 128)
-                    self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
-    
-            pdf = PriceHistoryPDF()
-            pdf.add_page()
-            pdf.set_font(ui_theme.THEME_FONT, '', 9)
-    
-            # Table header
-            pdf.set_fill_color(240, 240, 240)
-            pdf.set_font(ui_theme.THEME_FONT, 'B', 9)
-            headers = ['Item', 'Date', 'Supplier', 'Cost Price', 'Previous', 'Change']
-            widths = [60, 35, 35, 28, 28, 28]
-            for h, w in zip(headers, widths):
-                pdf.cell(w, 8, h, 1, 0, 'C', True)
-            pdf.ln()
-    
-            pdf.set_font(ui_theme.THEME_FONT, '', 9)
-            for row in report_data:
-                change_str = f"{'+' if row['change'] >= 0 else ''}{row['change']:.2f}"
-                values = [
-                    str(row[COL_ITEM_NAME])[:30],
-                    str(row[COL_TIMESTAMP])[:16],
-                    str(row[COL_SUPPLIER])[:15],
-                    f"£{row[COL_COST_PRICE]:.2f}",
-                    f"£{row['prev_price']:.2f}",
-                    change_str
-                ]
-                for v, w in zip(values, widths):
-                    pdf.cell(w, 7, v, 1, 0, 'C')
-                pdf.ln()
-    
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"Price_History_Report_{timestamp}.pdf"
-            downloads_dir = os.path.expanduser('~/Downloads')
-            filepath = os.path.join(downloads_dir, filename)
-            pdf.output(filepath)
-    
+            filepath = PriceHistoryPDF.generate(
+                report_data, report_period=report_period)
             messagebox.showinfo("Success", f"Price history report saved to:\n{filepath}")
-    
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate PDF: {e}")
 
 
     def generate_sales_analytics(self):
-        """Generate and display comprehensive sales trends and analytics."""
-        self.clear_main_menu()
-    
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Sales Trends & Analytics",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
+        """Display sales trends and analytics."""
+        body = self._begin_report(
+            "Sales Analytics",
+            "Category volume, movers, daily rhythm and margin")
+
         try:
             self.refresh_data()
-    
+
             if self.log_df.empty:
-                tk.Label(self.main_menu, text="No transaction data available for analytics.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(body, "No transaction data available for analytics.")
+                self._report_footer()
                 return
-    
-            # Date range filter
-            filtered_log, start_date, end_date = self.get_filtered_log("Sales Analytics - Date Range")
+
+            filtered_log, start_date, end_date = self.get_filtered_log(
+                "Sales Analytics - Date Range")
             if filtered_log is None:
                 self.generate_reports()
                 return
-    
+
             if filtered_log.empty:
-                tk.Label(self.main_menu, text="No transaction data available for selected period.").pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No transactions fall inside the selected period.")
+                self._report_footer()
                 return
-    
+
             # Temporarily replace log with filtered version for tab methods
             original_log = self.log_df
             self.log_df = filtered_log
             try:
-                # Create notebook for tabs
-                notebook = ttk.Notebook(self.main_menu)
-                notebook.pack(fill='both', expand=True, padx=10, pady=(10, 0))
-    
-                # Tab 1: Sales by Category
+                notebook = ttk.Notebook(body)
+                notebook.pack(fill='both', expand=True)
+
                 self._create_category_sales_tab(notebook)
-    
-                # Tab 2: Fast & Slow Movers
                 self._create_movers_tab(notebook)
-    
-                # Tab 3: Sales Timeline
                 self._create_timeline_tab(notebook)
-    
-                # Tab 4: Profit Margins
                 self._create_profit_margins_tab(notebook)
             finally:
                 self.log_df = original_log
-    
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        # Back button
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(side='bottom', fill='x', pady=10)
-    
-        tk.Button(btn_frame, text="Back to Menu", command=self.show_dashboard, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def _create_category_sales_tab(self, notebook):
         """Create the Sales by Category tab."""
-        tab = tk.Frame(notebook)
+        tab = tk.Frame(notebook, bg=THEME_BG)
         notebook.add(tab, text="Sales by Category")
-    
-        # Left frame for chart
-        chart_frame = tk.Frame(tab)
-        chart_frame.pack(side='left', fill='both', expand=True, padx=5, pady=5)
-    
-        # Right frame for data table
-        table_frame = tk.Frame(tab)
-        table_frame.pack(side='right', fill='both', expand=True, padx=5, pady=5)
-    
-        # Get sales data by category
+
         sales_df = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES].copy()
-    
+
         if sales_df.empty:
-            tk.Label(tab, text="No sales data available.").pack(pady=20)
+            self._report_empty(tab, "No sales data available.")
             return
-    
-        # Merge with inventory to get categories
+
         sales_with_cat = sales_df.merge(
             self.inventory_df[[COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY]],
             on=COL_ITEM_ID,
             how='left'
         )
-    
-        # Calculate sales by category
+
         category_sales = sales_with_cat.groupby(COL_CATEGORY).agg({
             COL_QUANTITY: 'sum',
             COL_ITEM_ID: 'nunique'
         }).reset_index()
         category_sales.columns = [COL_CATEGORY, 'Total Quantity', 'Unique Items']
         category_sales = category_sales.sort_values('Total Quantity', ascending=False)
-    
-        # Create chart if matplotlib is available
+
+        chart_frame = tk.Frame(tab, bg=THEME_BG)
+        chart_frame.pack(side='left', fill='both', expand=True, pady=14)
+        table_frame = tk.Frame(tab, bg=THEME_BG)
+        table_frame.pack(side='right', fill='y', padx=(24, 0), pady=14)
+
+        tk.Label(chart_frame, text="VOLUME BY CATEGORY",
+                 font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 8))
+        tk.Label(table_frame, text="CATEGORY BREAKDOWN",
+                 font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 8))
+
         if MATPLOTLIB_AVAILABLE and not category_sales.empty:
             fig = Figure(figsize=(6, 4), dpi=100)
             ax = fig.add_subplot(111)
-    
-            colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3B1F2B', '#95C623']
-            bars = ax.bar(category_sales[COL_CATEGORY], category_sales['Total Quantity'],
-                         color=colors[:len(category_sales)])
-    
-            ax.set_xlabel('Category', fontsize=10)
-            ax.set_ylabel('Sales Quantity', fontsize=10)
-            ax.set_title('Sales Volume by Category', fontsize=12, fontweight='bold')
-            ax.tick_params(axis='x', rotation=45)
-    
+            colors = list(ui_theme.CHART_COLORS)
+            ax.bar(category_sales[COL_CATEGORY], category_sales['Total Quantity'],
+                   color=colors[:len(category_sales)], width=0.62)
+            ax.set_ylabel('Units sold', fontsize=10)
+            ax.tick_params(axis='x', rotation=30)
+            self._style_chart(fig, ax)
+            fig.subplots_adjust(bottom=0.26, left=0.1, right=0.98, top=0.94)
+
             canvas = FigureCanvasTkAgg(fig, chart_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill='both', expand=True)
         else:
-            tk.Label(chart_frame, text="Chart not available\n(install matplotlib for charts)").pack(pady=20)
-    
-        # Create data table
-        tk.Label(table_frame, text="Sales by Category", font=(ui_theme.THEME_FONT, 12, 'bold')).pack(pady=5)
-    
-        tree = ttk.Treeview(table_frame, columns=('category', 'quantity', 'items'), show='headings', height=8)
-        tree.heading('category', text='Category')
-        tree.heading('quantity', text='Total Quantity')
-        tree.heading('items', text='Unique Items')
-        self._make_sortable(tree)
-        tree.column('category', width=100, anchor='center')
-        tree.column('quantity', width=100, anchor='center')
-        tree.column('items', width=100, anchor='center')
-    
-        scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-    
-        tree.pack(side='left', fill='both', expand=True)
-        scrollbar.pack(side='right', fill='y')
-        self._bind_treeview_mousewheel(tree)
-    
-        for _, row in category_sales.iterrows():
+            tk.Label(chart_frame, text="Charts need matplotlib installed.",
+                     font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG).pack(pady=20)
+
+        tree = self._report_table(
+            table_frame,
+            ('category', 'quantity', 'items'),
+            ('Category', 'Units', 'Items'),
+            (150, 95, 70),
+            anchors={'category': 'w'})
+        for index, (_, row) in enumerate(category_sales.iterrows()):
             tree.insert('', tk.END, values=(
                 row[COL_CATEGORY],
                 f"{row['Total Quantity']:.1f}",
                 int(row['Unique Items'])
-            ))
+            ), tags=('alt',) if index % 2 else ())
 
 
     def _create_movers_tab(self, notebook):
         """Create the Fast & Slow Movers tab."""
-        tab = tk.Frame(notebook)
+        tab = tk.Frame(notebook, bg=THEME_BG)
         notebook.add(tab, text="Fast & Slow Movers")
-    
-        # Get sales data
+
         sales_df = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES].copy()
-    
+
         if sales_df.empty:
-            tk.Label(tab, text="No sales data available.").pack(pady=20)
+            self._report_empty(tab, "No sales data available.")
             return
-    
-        # Merge with inventory
+
         sales_with_info = sales_df.merge(
             self.inventory_df[[COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY]],
             on=COL_ITEM_ID,
             how='left'
         )
-    
-        # Calculate sales by item
+
         item_sales = sales_with_info.groupby([COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY]).agg({
             COL_QUANTITY: 'sum'
         }).reset_index()
         item_sales.columns = [COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY, 'Total Sales']
         item_sales = item_sales.sort_values('Total Sales', ascending=False)
-    
-        # Split into fast and slow movers
+
         fast_movers = item_sales.head(10)
         slow_movers = item_sales.tail(10)
-    
-        # Create frames
-        left_frame = tk.LabelFrame(tab, text="Fast Movers (Top 10)", font=(ui_theme.THEME_FONT, 10, 'bold'))
-        left_frame.pack(side='left', fill='both', expand=True, padx=5, pady=5)
-    
-        right_frame = tk.LabelFrame(tab, text="Slow Movers (Bottom 10)", font=(ui_theme.THEME_FONT, 10, 'bold'))
-        right_frame.pack(side='right', fill='both', expand=True, padx=5, pady=5)
-    
-        # Fast movers table
-        fast_tree = ttk.Treeview(left_frame, columns=('name', 'category', 'sales'), show='headings')
-        fast_tree.heading('name', text='Item Name')
-        fast_tree.heading('category', text='Category')
-        fast_tree.heading('sales', text='Sales Qty')
-        self._make_sortable(fast_tree)
-        fast_tree.column('name', width=150, anchor='w')
-        fast_tree.column('category', width=80, anchor='center')
-        fast_tree.column('sales', width=80, anchor='center')
-    
-        fast_scroll = ttk.Scrollbar(left_frame, orient='vertical', command=fast_tree.yview)
-        fast_tree.configure(yscrollcommand=fast_scroll.set)
-        fast_tree.pack(side='left', fill='both', expand=True)
-        fast_scroll.pack(side='right', fill='y')
-        self._bind_treeview_mousewheel(fast_tree)
-    
-        for _, row in fast_movers.iterrows():
+
+        left_frame = tk.Frame(tab, bg=THEME_BG)
+        left_frame.pack(side='left', fill='both', expand=True, pady=14)
+        right_frame = tk.Frame(tab, bg=THEME_BG)
+        right_frame.pack(side='right', fill='both', expand=True, padx=(24, 0), pady=14)
+
+        for pane, heading in ((left_frame, "FAST MOVERS · TOP 10"),
+                              (right_frame, "SLOW MOVERS · BOTTOM 10")):
+            tk.Label(pane, text=heading, font=ui_theme.mono_font(9),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                     anchor='w').pack(fill='x', pady=(0, 8))
+            tk.Frame(pane, bg=THEME_BORDER, height=1).pack(fill='x', pady=(0, 8))
+
+        fast_tree = self._report_table(
+            left_frame, ('name', 'category', 'sales'),
+            ('Item', 'Category', 'Units'), (220, 110, 80),
+            anchors={'name': 'w', 'category': 'w'})
+        for index, (_, row) in enumerate(fast_movers.iterrows()):
             fast_tree.insert('', tk.END, values=(
-                row[COL_ITEM_NAME],
-                row[COL_CATEGORY],
+                row[COL_ITEM_NAME], row[COL_CATEGORY],
                 f"{row['Total Sales']:.1f}"
-            ))
-    
-        # Slow movers table
-        slow_tree = ttk.Treeview(right_frame, columns=('name', 'category', 'sales'), show='headings')
-        slow_tree.heading('name', text='Item Name')
-        slow_tree.heading('category', text='Category')
-        slow_tree.heading('sales', text='Sales Qty')
-        self._make_sortable(slow_tree)
-        slow_tree.column('name', width=150, anchor='w')
-        slow_tree.column('category', width=80, anchor='center')
-        slow_tree.column('sales', width=80, anchor='center')
-    
-        slow_scroll = ttk.Scrollbar(right_frame, orient='vertical', command=slow_tree.yview)
-        slow_tree.configure(yscrollcommand=slow_scroll.set)
-        slow_tree.pack(side='left', fill='both', expand=True)
-        slow_scroll.pack(side='right', fill='y')
-        self._bind_treeview_mousewheel(slow_tree)
-    
-        for _, row in slow_movers.iterrows():
+            ), tags=('alt',) if index % 2 else ())
+
+        slow_tree = self._report_table(
+            right_frame, ('name', 'category', 'sales'),
+            ('Item', 'Category', 'Units'), (220, 110, 80),
+            anchors={'name': 'w', 'category': 'w'})
+        for index, (_, row) in enumerate(slow_movers.iterrows()):
             slow_tree.insert('', tk.END, values=(
-                row[COL_ITEM_NAME],
-                row[COL_CATEGORY],
+                row[COL_ITEM_NAME], row[COL_CATEGORY],
                 f"{row['Total Sales']:.1f}"
-            ))
+            ), tags=('alt',) if index % 2 else ())
 
 
     def _create_timeline_tab(self, notebook):
         """Create the Sales Timeline tab."""
-        tab = tk.Frame(notebook)
+        tab = tk.Frame(notebook, bg=THEME_BG)
         notebook.add(tab, text="Sales Timeline")
-    
-        # Get sales data
+
         sales_df = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES].copy()
-    
+
         if sales_df.empty:
-            tk.Label(tab, text="No sales data available.").pack(pady=20)
+            self._report_empty(tab, "No sales data available.")
             return
-    
-        # Parse timestamps
+
         sales_df['date'] = pd.to_datetime(sales_df[COL_TIMESTAMP]).dt.date
-    
-        # Calculate daily sales
+
         daily_sales = sales_df.groupby('date').agg({
             COL_QUANTITY: 'sum'
         }).reset_index()
-    
-        # Create chart frame
-        chart_frame = tk.Frame(tab)
-        chart_frame.pack(fill='both', expand=True, padx=5, pady=5)
-    
-        # Create chart if matplotlib is available
+
+        tk.Label(tab, text="DAILY SALES VOLUME", font=ui_theme.mono_font(9),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w').pack(fill='x', pady=(14, 8))
+
+        chart_frame = tk.Frame(tab, bg=THEME_BG)
+        chart_frame.pack(fill='both', expand=True)
+
         if MATPLOTLIB_AVAILABLE and len(daily_sales) > 1:
             fig = Figure(figsize=(10, 5), dpi=100)
             ax = fig.add_subplot(111)
-    
+
             ax.plot(daily_sales['date'], daily_sales[COL_QUANTITY],
-                   marker='o', linestyle='-', color='#2E86AB', linewidth=2)
-    
-            ax.set_xlabel('Date', fontsize=10)
-            ax.set_ylabel('Sales Quantity', fontsize=10)
-            ax.set_title('Daily Sales Volume Over Time', fontsize=12, fontweight='bold')
-            ax.grid(True, alpha=0.3)
-    
-            # Format x-axis dates
+                    marker='o', markersize=3, linestyle='-',
+                    color=THEME_ACCENT, linewidth=2)
+
+            ax.set_ylabel('Units sold', fontsize=10)
+            self._style_chart(fig, ax)
+
             fig.autofmt_xdate()
-    
+            fig.subplots_adjust(bottom=0.22, left=0.08, right=0.98, top=0.96)
+
             canvas = FigureCanvasTkAgg(fig, chart_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill='both', expand=True)
         else:
-            tk.Label(chart_frame, text="Timeline chart requires matplotlib\nand multiple days of data.").pack(pady=20)
-    
-        # Summary stats
-        stats_frame = tk.Frame(tab)
-        stats_frame.pack(fill='x', padx=5, pady=5)
-    
+            tk.Label(chart_frame,
+                     text="The timeline needs matplotlib and more than one day of sales.",
+                     font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG).pack(pady=20)
+
         if not daily_sales.empty:
-            avg_daily = daily_sales[COL_QUANTITY].mean()
-            max_daily = daily_sales[COL_QUANTITY].max()
-            min_daily = daily_sales[COL_QUANTITY].min()
-    
-            tk.Label(stats_frame, text=f"Average Daily Sales: {avg_daily:.1f} units",
-                    font=(ui_theme.THEME_FONT, 10)).pack(anchor='w', pady=2)
-            tk.Label(stats_frame, text=f"Highest Daily Sales: {max_daily:.1f} units",
-                    font=(ui_theme.THEME_FONT, 10)).pack(anchor='w', pady=2)
-            tk.Label(stats_frame, text=f"Lowest Daily Sales: {min_daily:.1f} units",
-                    font=(ui_theme.THEME_FONT, 10)).pack(anchor='w', pady=2)
+            stats = tk.Frame(tab, bg=THEME_BG)
+            stats.pack(fill='x', pady=(14, 0))
+            tk.Frame(stats, bg=THEME_BORDER, height=1).pack(
+                fill='x', pady=(0, 10))
+            figures = [
+                ("Average day", f"{daily_sales[COL_QUANTITY].mean():.1f} units"),
+                ("Busiest day", f"{daily_sales[COL_QUANTITY].max():.1f} units"),
+                ("Quietest day", f"{daily_sales[COL_QUANTITY].min():.1f} units"),
+            ]
+            for label, value in figures:
+                cell = tk.Frame(stats, bg=THEME_BG)
+                cell.pack(side='left', padx=(0, 48))
+                tk.Label(cell, text=label.upper(), font=ui_theme.mono_font(9),
+                         fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                         anchor='w').pack(fill='x')
+                tk.Label(cell, text=value, font=ui_theme.display_font(14),
+                         fg=THEME_TEXT, bg=THEME_BG,
+                         anchor='w').pack(fill='x')
 
 
     def _create_profit_margins_tab(self, notebook):
         """Create the Profit Margins tab."""
-        tab = tk.Frame(notebook)
+        tab = tk.Frame(notebook, bg=THEME_BG)
         notebook.add(tab, text="Profit Margins")
-    
-        # Get sales data
+
         sales_df = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES].copy()
-    
+
         if sales_df.empty:
-            tk.Label(tab, text="No sales data available.").pack(pady=20)
+            self._report_empty(tab, "No sales data available.")
             return
-    
-        # Merge with inventory (avoid duplicate columns by only selecting needed columns)
+
         inventory_subset = self.inventory_df[[COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY, COL_COST_PRICE, COL_SELL_PRICE]].copy()
         inventory_subset.columns = [COL_ITEM_ID, COL_ITEM_NAME, COL_CATEGORY, 'inv_cost_price', 'inv_sell_price']
-    
+
         sales_with_info = sales_df.merge(
             inventory_subset,
             on=COL_ITEM_ID,
             how='left'
         )
-    
-        # Use inventory prices if log doesn't have them
+
         sales_with_info['cost_price'] = sales_with_info[COL_COST_PRICE].fillna(sales_with_info['inv_cost_price'])
         sales_with_info['sell_price'] = sales_with_info[COL_SELL_PRICE].fillna(sales_with_info['inv_sell_price'])
-    
-        # Calculate profit per sale
+
         sales_with_info['profit_per_unit'] = sales_with_info['sell_price'] - sales_with_info['cost_price']
         sales_with_info['total_profit'] = sales_with_info['profit_per_unit'] * sales_with_info[COL_QUANTITY]
         sales_with_info['profit_margin_pct'] = (sales_with_info['profit_per_unit'] / sales_with_info['sell_price']) * 100
-    
-        # Aggregate by category
+
         category_profit = sales_with_info.groupby(COL_CATEGORY).agg({
             'total_profit': 'sum',
             'profit_margin_pct': 'mean',
@@ -1201,114 +958,80 @@ class ReportsMixin:
         }).reset_index()
         category_profit.columns = [COL_CATEGORY, 'Total Profit', 'Avg Margin %', 'Quantity Sold']
         category_profit = category_profit.sort_values('Total Profit', ascending=False)
-    
-        # Create frames
-        chart_frame = tk.Frame(tab)
-        chart_frame.pack(side='top', fill='both', expand=True, padx=5, pady=5)
-    
-        table_frame = tk.Frame(tab)
-        table_frame.pack(side='bottom', fill='x', padx=5, pady=5)
-    
-        # Create chart
+
+        tk.Label(tab, text="PROFIT BY CATEGORY", font=ui_theme.mono_font(9),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w').pack(fill='x', pady=(14, 8))
+
+        chart_frame = tk.Frame(tab, bg=THEME_BG)
+        chart_frame.pack(fill='both', expand=True)
+
         if MATPLOTLIB_AVAILABLE and not category_profit.empty:
-            fig = Figure(figsize=(8, 4), dpi=100)
+            fig = Figure(figsize=(8, 3.6), dpi=100)
             ax = fig.add_subplot(111)
-    
-            colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3B1F2B', '#95C623']
-            bars = ax.bar(category_profit[COL_CATEGORY], category_profit['Total Profit'],
-                         color=colors[:len(category_profit)])
-    
-            ax.set_xlabel('Category', fontsize=10)
-            ax.set_ylabel('Total Profit (£)', fontsize=10)
-            ax.set_title('Total Profit by Category', fontsize=12, fontweight='bold')
-            ax.tick_params(axis='x', rotation=45)
-    
+
+            colors = list(ui_theme.CHART_COLORS)
+            ax.bar(category_profit[COL_CATEGORY], category_profit['Total Profit'],
+                   color=colors[:len(category_profit)], width=0.62)
+
+            ax.set_ylabel('Gross profit (£)', fontsize=10)
+            ax.tick_params(axis='x', rotation=30)
+            self._style_chart(fig, ax)
+            fig.subplots_adjust(bottom=0.3, left=0.1, right=0.98, top=0.94)
+
             canvas = FigureCanvasTkAgg(fig, chart_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill='both', expand=True)
         else:
-            tk.Label(chart_frame, text="Chart not available").pack(pady=10)
-    
-        # Create data table
-        tk.Label(table_frame, text="Profit Analysis by Category", font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=5)
-    
-        tree = ttk.Treeview(table_frame, columns=('category', 'profit', 'margin', 'quantity'), show='headings')
-        tree.heading('category', text='Category')
-        tree.heading('profit', text='Total Profit (£)')
-        tree.heading('margin', text='Avg Margin (%)')
-        tree.heading('quantity', text='Qty Sold')
-        self._make_sortable(tree)
-        tree.column('category', width=100, anchor='center')
-        tree.column('profit', width=120, anchor='center')
-        tree.column('margin', width=100, anchor='center')
-        tree.column('quantity', width=80, anchor='center')
-    
-        scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-    
-        tree.pack(side='left', fill='x', expand=True)
-        scrollbar.pack(side='right', fill='y')
-        self._bind_treeview_mousewheel(tree)
-    
-        for _, row in category_profit.iterrows():
+            tk.Label(chart_frame, text="Charts need matplotlib installed.",
+                     font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+                     bg=THEME_BG).pack(pady=20)
+
+        tk.Frame(tab, bg=THEME_BORDER, height=1).pack(fill='x', pady=(14, 0))
+        tk.Label(tab, text="MARGIN BY CATEGORY", font=ui_theme.mono_font(9),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w').pack(fill='x', pady=(10, 8))
+
+        tree = self._report_table(
+            tab, ('category', 'profit', 'margin', 'quantity'),
+            ('Category', 'Gross profit', 'Average margin', 'Units'),
+            (220, 150, 150, 110), anchors={'category': 'w'})
+        for index, (_, row) in enumerate(category_profit.iterrows()):
             tree.insert('', tk.END, values=(
                 row[COL_CATEGORY],
                 f"£{row['Total Profit']:.2f}",
                 f"{row['Avg Margin %']:.1f}%",
                 f"{row['Quantity Sold']:.1f}"
-            ))
+            ), tags=('alt',) if index % 2 else ())
 
 
     def generate_reorder_report(self):
-        """Display reorder suggestion report."""
+        """Display reorder suggestions."""
+        body = self._begin_report(
+            "Reorder Suggestions",
+            "Lines at or below their reorder level")
+
         try:
-            self.clear_main_menu()
-    
-            header_frame = tk.Frame(self.main_menu, height=60)
-            header_frame.pack(fill='x', pady=(0, 10))
-            header_frame.pack_propagate(False)
-            tk.Label(header_frame, text="Reorder Suggestions", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
-            frame = tk.Frame(self.main_menu)
-            frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
             self.refresh_data()
             report_data = build_reorder_report_data(self.inventory_df, self.log_df)
-    
+
             if not report_data:
-                tk.Label(frame, text="No items need reordering. All stock is above reorder level.",
-                        font=(ui_theme.THEME_FONT, 12)).pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "Nothing to reorder. Every line is above its reorder level.")
+                self._report_footer()
                 return
-    
-            columns = ('item_id', 'item_name', 'current_stock', 'reorder_level', 'suggested_order', 'last_delivery', 'supplier')
-            tree = ttk.Treeview(frame, columns=columns, show='headings')
-            tree.heading('item_id', text='Item ID')
-            tree.heading('item_name', text='Item Name')
-            tree.heading('current_stock', text='Current Stock')
-            tree.heading('reorder_level', text='Reorder Level')
-            tree.heading('suggested_order', text='Suggested Order')
-            tree.heading('last_delivery', text='Last Delivery')
-            tree.heading('supplier', text='Supplier')
-            self._make_sortable(tree)
-    
-            tree.column('item_id', width=80, anchor='center')
-            tree.column('item_name', width=150, anchor='w')
-            tree.column('current_stock', width=90, anchor='center')
-            tree.column('reorder_level', width=90, anchor='center')
-            tree.column('suggested_order', width=100, anchor='center')
-            tree.column('last_delivery', width=100, anchor='center')
-            tree.column('supplier', width=120, anchor='w')
-    
-            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(tree)
-    
-            for item in report_data:
+
+            columns = ('item_id', 'item_name', 'current_stock', 'reorder_level',
+                       'suggested_order', 'last_delivery', 'supplier')
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'Name', 'On hand', 'Reorder at', 'Suggested order',
+                 'Last delivery', 'Supplier'),
+                (140, 220, 90, 100, 130, 130, 170),
+                anchors={'item_id': 'w', 'item_name': 'w',
+                         'last_delivery': 'w', 'supplier': 'w'})
+
+            for index, item in enumerate(report_data):
                 tree.insert('', tk.END, values=(
                     item[COL_ITEM_ID],
                     item[COL_ITEM_NAME],
@@ -1317,23 +1040,18 @@ class ReportsMixin:
                     f"{item['suggested_order']:.1f}",
                     item['last_delivery_date'] or '-',
                     item[COL_SUPPLIER] or '-'
-                ))
-    
-            summary_frame = tk.Frame(self.main_menu, relief='solid', borderwidth=1)
-            summary_frame.pack(pady=10, fill='x', padx=10)
-            total_items = len(report_data)
+                ), tags=('alt',) if index % 2 else ())
+
             total_order = sum(i['suggested_order'] for i in report_data)
-            tk.Label(summary_frame, text=f"Items to reorder: {total_items}  |  Total suggested order quantity: {total_order:.1f}",
-                    font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=5)
-    
+            self._report_totals(body, [
+                ("Lines to reorder", f"{len(report_data)}"),
+                ("Total suggested quantity", f"{total_order:.1f}"),
+            ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
-    
-        self._apply_legacy_theme()
+
+        self._report_footer()
 
 
     def generate_stock_order_sheet(self):
@@ -1355,10 +1073,10 @@ class ReportsMixin:
 
 
     def generate_comparison_report(self):
-        """Display period comparison report."""
+        """Display the period comparison report."""
         try:
             # Get Period A (DateRangeDialog already blocks internally via wait_window)
-            dialog_a = DateRangeDialog(self.main_menu, title="Select Period A (Baseline)")
+            dialog_a = DateRangeDialog(self.root, title="Select Period A (Baseline)")
             if not dialog_a.result:
                 self.generate_reports()
                 return
@@ -1366,9 +1084,8 @@ class ReportsMixin:
                 start_a, end_a = None, None
             else:
                 start_a, end_a = dialog_a.result
-    
-            # Get Period B
-            dialog_b = DateRangeDialog(self.main_menu, title="Select Period B (Comparison)")
+
+            dialog_b = DateRangeDialog(self.root, title="Select Period B (Comparison)")
             if not dialog_b.result:
                 self.generate_reports()
                 return
@@ -1376,76 +1093,45 @@ class ReportsMixin:
                 start_b, end_b = None, None
             else:
                 start_b, end_b = dialog_b.result
-    
+
             self.refresh_data()
             log_a = filter_log_by_date(self.log_df, start_a, end_a)
             log_b = filter_log_by_date(self.log_df, start_b, end_b)
-    
+
             report_df = build_comparison_report_data(self.inventory_df, log_a, log_b,
                                                       member_discount_pct=int(self.get_member_discount_pct()))
-    
-            self.clear_main_menu()
-            header_frame = tk.Frame(self.main_menu, height=60)
-            header_frame.pack(fill='x', pady=(0, 10))
-            header_frame.pack_propagate(False)
-            tk.Label(header_frame, text="Period Comparison Report", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
+
             if start_a and end_a:
-                period_a_text = f"{start_a.strftime(DATE_FORMAT_DISPLAY)} - {end_a.strftime(DATE_FORMAT_DISPLAY)}"
+                period_a_text = f"{start_a.strftime(DATE_FORMAT_DISPLAY)} – {end_a.strftime(DATE_FORMAT_DISPLAY)}"
             else:
-                period_a_text = "All Time"
+                period_a_text = "All time"
             if start_b and end_b:
-                period_b_text = f"{start_b.strftime(DATE_FORMAT_DISPLAY)} - {end_b.strftime(DATE_FORMAT_DISPLAY)}"
+                period_b_text = f"{start_b.strftime(DATE_FORMAT_DISPLAY)} – {end_b.strftime(DATE_FORMAT_DISPLAY)}"
             else:
-                period_b_text = "All Time"
-    
-            period_label = tk.Label(self.main_menu,
-                    text=f"Period A: {period_a_text}  |  Period B: {period_b_text}",
-                    font=(ui_theme.THEME_FONT, 10))
-            period_label.pack(pady=5)
-    
-            frame = tk.Frame(self.main_menu)
-            frame.pack(pady=10, fill=tk.BOTH, expand=True, padx=10)
-    
+                period_b_text = "All time"
+
+            body = self._begin_report(
+                "Period Comparison",
+                f"A: {period_a_text}   ·   B: {period_b_text}")
+
             if report_df.empty:
-                tk.Label(frame, text="No sales data found for the selected periods.",
-                        font=(ui_theme.THEME_FONT, 12)).pack(pady=20)
-                btn_frame = tk.Frame(self.main_menu)
-                btn_frame.pack(pady=10)
-                tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+                self._report_empty(
+                    body, "No sales data found for the selected periods.")
+                self._report_footer()
                 return
-    
+
             columns = ('item_name', 'qty_a', 'qty_b', 'delta_qty',
                        'rev_a', 'rev_b', 'delta_rev',
                        'gp_a', 'gp_b', 'delta_gp', 'delta_gp_pct')
-            tree = ttk.Treeview(frame, columns=columns, show='headings')
-            tree.heading('item_name', text='Item')
-            tree.heading('qty_a', text='A Qty')
-            tree.heading('qty_b', text='B Qty')
-            tree.heading('delta_qty', text='Δ Qty')
-            tree.heading('rev_a', text='A Revenue')
-            tree.heading('rev_b', text='B Revenue')
-            tree.heading('delta_rev', text='Δ Revenue')
-            tree.heading('gp_a', text='A GP')
-            tree.heading('gp_b', text='B GP')
-            tree.heading('delta_gp', text='Δ GP')
-            tree.heading('delta_gp_pct', text='Δ GP%')
-            self._make_sortable(tree)
-    
-            tree.column('item_name', width=120, anchor='w')
-            for col in ['qty_a', 'qty_b', 'delta_qty']:
-                tree.column(col, width=60, anchor='center')
-            for col in ['rev_a', 'rev_b', 'delta_rev', 'gp_a', 'gp_b', 'delta_gp']:
-                tree.column(col, width=75, anchor='center')
-            tree.column('delta_gp_pct', width=60, anchor='center')
-    
-            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            tree.configure(yscrollcommand=scrollbar.set)
-            self._bind_treeview_mousewheel(tree)
-    
-            for _, row in report_df.iterrows():
+            tree = self._report_table(
+                body, columns,
+                ('Item', 'A units', 'B units', 'Δ units',
+                 'A revenue', 'B revenue', 'Δ revenue',
+                 'A GP', 'B GP', 'Δ GP', 'Δ GP %'),
+                (190, 70, 70, 75, 95, 95, 95, 85, 85, 85, 75),
+                anchors={'item_name': 'w'})
+
+            for index, (_, row) in enumerate(report_df.iterrows()):
                 delta_gp_pct_str = f"{row['delta_gp_pct']:+.1f}%" if row['total_revenue_a'] != 0 else '-'
                 tree.insert('', tk.END, values=(
                     row[COL_ITEM_NAME],
@@ -1459,26 +1145,22 @@ class ReportsMixin:
                     self.format_currency(row['total_gp_b']),
                     self.format_currency(row['delta_gp']),
                     delta_gp_pct_str
-                ))
-    
-            # Summary
-            summary_frame = tk.Frame(self.main_menu, relief='solid', borderwidth=1)
-            summary_frame.pack(pady=10, fill='x', padx=10)
+                ), tags=('alt',) if index % 2 else ())
+
             total_rev_a = report_df['total_revenue_a'].sum()
             total_rev_b = report_df['total_revenue_b'].sum()
             total_gp_a = report_df['total_gp_a'].sum()
             total_gp_b = report_df['total_gp_b'].sum()
-            tk.Label(summary_frame, text=f"Period A: {self.format_currency(total_rev_a)} revenue, {self.format_currency(total_gp_a)} GP  |  "
-                                          f"Period B: {self.format_currency(total_rev_b)} revenue, {self.format_currency(total_gp_b)} GP  |  "
-                                          f"Δ GP: {self.format_currency(total_gp_b - total_gp_a)}",
-                    font=(ui_theme.THEME_FONT, 11, 'bold')).pack(pady=5)
-    
+            self._report_totals(body, [
+                ("Period A", f"{self.format_currency(total_rev_a)} revenue  ·  {self.format_currency(total_gp_a)} GP"),
+                ("Period B", f"{self.format_currency(total_rev_b)} revenue  ·  {self.format_currency(total_gp_b)} GP"),
+                ("GP movement", self.format_currency(total_gp_b - total_gp_a)),
+            ])
+
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
-    
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack()
+
+        self._report_footer()
 
 
     def download_comprehensive_report(self):
@@ -1513,6 +1195,10 @@ class ReportsMixin:
             else:
                 start_date, end_date = dialog.result
                 filtered_log = filter_log_by_date(full_log_df, start_date, end_date)
+
+            # Printed in the PDF header and the confirmation dialog so the saved
+            # file states the period it was run for.
+            period_text = format_report_period(start_date, end_date)
     
             # Load latest stocktake data for meaningful variance calculation.
             # Baseline-reset snapshots are excluded from surplus/shortfall calculations
@@ -1524,6 +1210,12 @@ class ReportsMixin:
                 st_df = pd.DataFrame([dict(row) for row in stocktake_rows])
                 # Variance/surplus should only reflect true stocktake counts, not baselines
                 variance_st_df = st_df[~st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)]
+                # Delisted items are reset to zero when they are retired. That reset is
+                # bookkeeping, not a physical count, so it must not be reported as a
+                # surplus (and the item carries no value in this report either).
+                variance_st_df = variance_st_df[
+                    ~variance_st_df['item_id'].map(lambda x: is_delisted(str(x)))
+                ]
                 # Then keep the latest meaningful (non-baseline) snapshot per item
                 variance_st_df = variance_st_df.sort_values('timestamp', ascending=False)
                 variance_st_df = variance_st_df.drop_duplicates(subset='item_id', keep='first')
@@ -1544,8 +1236,9 @@ class ReportsMixin:
                     }
                     for _, row in variance_st_df.iterrows()
                 }
-                from reports import build_stocktake_variance_report
-                stocktake_data = build_stocktake_variance_report(self.inventory_df, full_log_df, variance_st_df)
+                if not variance_st_df.empty:
+                    from reports import build_stocktake_variance_report
+                    stocktake_data = build_stocktake_variance_report(self.inventory_df, full_log_df, variance_st_df)
     
                 # Running surplus/shortfall: cumulative value of every non-baseline stocktake
                 # variance across all time, surviving monthly baseline resets.
@@ -1555,6 +1248,11 @@ class ReportsMixin:
                 all_variance_st_df = all_variance_st_df[
                     ~all_variance_st_df['note'].astype(str).str.contains('Baseline', case=False, na=False)
                 ]
+                # Same rule for the cumulative figure: a delisting reset is not a
+                # physical surplus or shortfall.
+                all_variance_st_df = all_variance_st_df[
+                    ~all_variance_st_df['item_id'].map(lambda x: is_delisted(str(x)))
+                ]
                 cost_by_id = dict(zip(self.inventory_df[COL_ITEM_ID], self.inventory_df[COL_COST_PRICE]))
                 running_surplus_value = sum(
                     float(row['variance']) * float(cost_by_id.get(row['item_id'], 0) or 0)
@@ -1563,50 +1261,38 @@ class ReportsMixin:
             else:
                 running_surplus_value = 0.0
     
-            # Compute historical closing stock at end_date for date-range consistency.
-            # If a stocktake exists on or before the report end date, use its counted quantities
-            # as the authoritative closing stock. This avoids misclassifying CSV-uploaded
-            # rows (timestamped after upload but belonging to an earlier period) as
-            # post-period transactions.
+            # Compute closing stock at end_date for date-range consistency.
+            # Closing stock is always derived from the live inventory by backing out
+            # movements that happened after the period end. Stocktake snapshots are
+            # not used here: a baseline reset sits at the *start* of the period, so
+            # treating the latest snapshot as closing stock would report the opening
+            # value as the closing one (and disagree with the dashboard).
             closing_stock_map = None
             if end_date is not None:
                 end_ts = pd.Timestamp(end_date)
-                closing_stock_map = {}
-    
-                if stocktake_rows:
-                    # Find the latest stocktake on or before the report end date
-                    st_ts = pd.to_datetime(st_df['timestamp'], errors='coerce')
-                    valid_st = st_df[st_ts <= end_ts + pd.Timedelta(days=1)]
-                    if not valid_st.empty:
-                        latest_st = valid_st.sort_values('timestamp', ascending=False).drop_duplicates(subset='item_id', keep='first')
-                        st_closing_map = dict(zip(latest_st['item_id'], latest_st['counted_quantity']))
-                        for _, row in self.inventory_df.iterrows():
-                            item_id = row[COL_ITEM_ID]
-                            closing_stock_map[item_id] = st_closing_map.get(item_id, row[COL_QUANTITY])
-    
-                if not closing_stock_map:
-                    from reports import calculate_expected_remaining_series
-                    # Filter out CSV-uploaded rows whose sales period is actually inside
-                    # the selected range, so their upload timestamp doesn't fake a post-period
-                    # transaction.
-                    def _is_after_period(row):
-                        period = row.get('date_range')
-                        if isinstance(period, str) and ' - ' in period:
-                            try:
-                                parts = period.split(' - ')
-                                p_end = parse_display_date(parts[1].strip()).replace(hour=23, minute=59, second=59)
-                                return p_end > end_date
-                            except Exception:
-                                pass
-                        ts = pd.to_datetime(row.get('timestamp'), errors='coerce')
-                        return pd.notna(ts) and ts > end_ts
-    
-                    after_end_mask = full_log_df.apply(_is_after_period, axis=1)
-                    after_end_log = full_log_df[after_end_mask].copy()
-                    expected_after_end = calculate_expected_remaining_series(after_end_log)
-                    for _, row in self.inventory_df.iterrows():
-                        item_id = row[COL_ITEM_ID]
-                        closing_stock_map[item_id] = row[COL_QUANTITY] - expected_after_end.get(item_id, 0)
+                from reports import calculate_expected_remaining_series
+                # Filter out CSV-uploaded rows whose sales period is actually inside
+                # the selected range, so their upload timestamp doesn't fake a post-period
+                # transaction.
+                def _is_after_period(row):
+                    period = row.get('date_range')
+                    if isinstance(period, str) and ' - ' in period:
+                        try:
+                            parts = period.split(' - ')
+                            p_end = parse_display_date(parts[1].strip()).replace(hour=23, minute=59, second=59)
+                            return p_end > end_date
+                        except Exception:
+                            pass
+                    ts = pd.to_datetime(row.get('timestamp'), errors='coerce')
+                    return pd.notna(ts) and ts > end_ts
+
+                after_end_mask = full_log_df.apply(_is_after_period, axis=1)
+                after_end_log = full_log_df[after_end_mask].copy()
+                expected_after_end = calculate_expected_remaining_series(after_end_log)
+                closing_stock_map = {
+                    row[COL_ITEM_ID]: row[COL_QUANTITY] - expected_after_end.get(row[COL_ITEM_ID], 0)
+                    for _, row in self.inventory_df.iterrows()
+                }
     
             report_data = build_comprehensive_report_data(
                 self.inventory_df, filtered_log,
@@ -1626,6 +1312,7 @@ class ReportsMixin:
                 member_discount_pct=int(self.get_member_discount_pct()),
                 stocktake_data=stocktake_data,
                 running_surplus_value=running_surplus_value,
+                report_period=period_text,
             )
     
             # Generate timestamp for filename
@@ -1637,8 +1324,7 @@ class ReportsMixin:
             filepath = os.path.join(downloads_dir, filename)
             pdf.output(filepath)
     
-            messagebox.showinfo("Report Generated", f"Comprehensive PDF report saved to:\n{filepath}\n\nThe report includes:\n• Stock Summary by Division\n• Sales Performance\n• Wastage & Complimentary Summary\n• Draught Yield Report\n• Financial Summary with Totals\n• Stocktake Variance Report (if recorded)")
-            self._apply_legacy_theme()
-    
+            messagebox.showinfo("Report Generated", f"Comprehensive PDF report saved to:\n{filepath}\n\nReport period: {period_text}\n\nThe report includes:\n• Stock Summary by Division\n• Sales Performance\n• Wastage & Complimentary Summary\n• Draught Yield Report\n• Financial Summary with Totals\n• Stocktake Variance Report (if recorded)")
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate report: {e}")

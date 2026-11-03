@@ -16,8 +16,13 @@ Requirements:
 import os
 import re
 import sys
+import time
 import subprocess
 import shutil
+
+
+INSTALL_DIR = '/Applications'
+APP_NAME = 'BarStock.app'
 
 
 def project_version():
@@ -158,15 +163,70 @@ def build_with_pyinstaller():
         print("=" * 60)
         print("\nYour app is available at:")
         print("  dist/BarStock.app")
-        print("\nTo install:")
-        print("  1. Drag 'BarStock.app' to your Applications folder")
-        print("  2. Double-click to launch")
+        print("\nThe previous copy in /Applications will be replaced automatically.")
         print("\nNote: On first launch, you may need to right-click and select 'Open'")
         print("      to bypass Gatekeeper warnings.")
         return True
     else:
         print("\n✗ Build failed!")
         return False
+
+
+def app_is_running():
+    """True when a BarStock process is live (it holds the old bundle open)."""
+    return subprocess.run(
+        ['pgrep', '-x', 'BarStock'], capture_output=True
+    ).returncode == 0
+
+
+def install_app(app_dir, install_dir=INSTALL_DIR):
+    """Replace the previously installed copy so /Applications always matches dist.
+
+    The new bundle is staged first and only swapped in once it is complete, so a
+    failed copy never leaves Applications without a working app.
+    """
+    print("\n" + "=" * 60)
+    print("Installing to Applications (replacing previous build)...")
+    print("=" * 60)
+
+    target = os.path.join(install_dir, APP_NAME)
+    if not os.path.exists(target):
+        print(f"No existing {target}; copying new build into place.")
+
+    if app_is_running():
+        print("BarStock is running - asking it to quit so the old copy can be replaced...")
+        subprocess.run(
+            ['osascript', '-e', 'tell application "BarStock" to quit'],
+            capture_output=True,
+        )
+        for _ in range(20):
+            time.sleep(0.25)
+            if not app_is_running():
+                break
+        if app_is_running():
+            print(f"✗ BarStock is still running; {target} was left untouched.")
+            print("  Quit BarStock and re-run the build, or copy dist/BarStock.app manually.")
+            return False
+
+    if not os.access(install_dir, os.W_OK):
+        print(f"✗ {install_dir} is not writable; skipping install.")
+        print("  Copy dist/BarStock.app to Applications manually.")
+        return False
+
+    staging = os.path.join(install_dir, f'.{APP_NAME}.new')
+    if os.path.exists(staging):
+        shutil.rmtree(staging)
+
+    print(f"Copying new build to staging: {staging}")
+    shutil.copytree(app_dir, staging, symlinks=True)
+
+    if os.path.exists(target):
+        print(f"Deleting previous build: {target}")
+        shutil.rmtree(target)
+    os.rename(staging, target)
+
+    print(f"✓ Installed {target}")
+    return True
 
 
 def create_launch_script():
@@ -209,6 +269,10 @@ def main():
         print("\n✗ The built app failed verification; no archive was created.")
         sys.exit(1)
 
+    # Replace the installed copy so no stale build is ever left running from
+    # Applications. A failure here does not invalidate the build itself.
+    install_app(app_dir)
+
     # Create a ZIP for distribution
     print("\n" + "=" * 60)
     print("Creating distribution archive...")
@@ -227,12 +291,12 @@ def main():
     print(f"""
 Files created:
   - dist/BarStock.app (launchable app)
+  - /Applications/BarStock.app (previous build replaced)
   - {zip_name}.zip (distribution archive)
 
 To use:
-  1. Extract {zip_name}.zip
-  2. Drag 'BarStock.app' to Applications
-  3. Double-click to run
+  1. Launch BarStock from Applications
+  2. Or extract {zip_name}.zip on another Mac and drag 'BarStock.app' to Applications
 
 Your database will be created automatically in
 ~/Library/Application Support/BarStockManagement/barstock.db on first run.

@@ -76,7 +76,7 @@ DATA_DIR = get_resource_path()
 DB_PATH = os.path.join(DATA_DIR, 'barstock.db')
 # Bump when a migration changes the schema. The first launch after an upgrade
 # takes a safety backup before any schema change is applied.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 INVENTORY_FILE = os.path.join(DATA_DIR, 'stock.csv')
 LOG_FILE = os.path.join(DATA_DIR, 'transaction_log.csv')
 
@@ -89,46 +89,134 @@ def _get_connection():
     return conn
 
 
+_TRANSACTIONS_COLUMNS_SQL = """
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    timestamp TEXT NOT NULL,
+    cost_price REAL DEFAULT 0,
+    sell_price REAL DEFAULT 0,
+    supplier TEXT DEFAULT '',
+    date_range TEXT DEFAULT '',
+    reason TEXT DEFAULT '',
+    user TEXT DEFAULT '',
+    member_qty REAL,
+    non_member_qty REAL,
+    open_tab_id INTEGER DEFAULT NULL
+"""
+
+
+_INVENTORY_COLUMNS_SQL = """
+    item_id TEXT PRIMARY KEY,
+    item_name TEXT NOT NULL,
+    quantity REAL DEFAULT 0,
+    cost_price REAL DEFAULT 0,
+    sell_price REAL DEFAULT 0,
+    measure TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    price_locked INTEGER DEFAULT 0,
+    allow_negative INTEGER DEFAULT 0,
+    reorder_level REAL DEFAULT 0,
+    division TEXT DEFAULT ''
+"""
+
+
+def _ensure_inventory_primary_key(cursor):
+    """Rebuild inventory if item_id is not its primary key.
+
+    Early databases declared ``item_id TEXT`` with no constraint, so the
+    upsert in ``_insert_inventory_row`` failed ("ON CONFLICT clause does not
+    match any PRIMARY KEY or UNIQUE constraint") and new stock items could not
+    be added. Rebuild the table with the current schema, keeping every row.
+    """
+    info = cursor.execute("PRAGMA table_info(inventory)").fetchall()
+    id_column = next((row for row in info if row[1] == 'item_id'), None)
+    if id_column is not None and int(id_column[5] or 0) == 1:
+        return
+
+    columns = {row[1] for row in info}
+    cursor.execute("ALTER TABLE inventory RENAME TO inventory_legacy_pk")
+    cursor.execute(f"CREATE TABLE inventory ({_INVENTORY_COLUMNS_SQL})")
+
+    fields = []
+    for name, fallback in (
+            ('item_id', "''"), ('item_name', "''"), ('quantity', '0'),
+            ('cost_price', '0'), ('sell_price', '0'), ('measure', "''"),
+            ('category', "''"), ('price_locked', '0'),
+            ('allow_negative', '0'), ('reorder_level', '0'),
+            ('division', "''")):
+        fields.append(name if name in columns else f"{fallback} AS {name}")
+
+    cursor.execute(
+        "INSERT OR REPLACE INTO inventory (item_id, item_name, quantity, "
+        "cost_price, sell_price, measure, category, price_locked, "
+        "allow_negative, reorder_level, division) "
+        f"SELECT {', '.join(fields)} FROM inventory_legacy_pk ORDER BY rowid"
+    )
+    cursor.execute("DROP TABLE inventory_legacy_pk")
+    logger.info("Rebuilt inventory table with item_id as primary key")
+
+
+def _ensure_transaction_ids(cursor):
+    """Rebuild transactions if its id column cannot hold row ids.
+
+    Databases created before ids were used declared ``id REAL`` with no
+    primary key, so every row kept a NULL id and a log save could not match
+    a frame row back to its table row (it raised ``int(None)``). Rebuild the
+    table with the current schema, carrying the rows across in insertion
+    order so each one gains a stable integer id.
+    """
+    info = cursor.execute("PRAGMA table_info(transactions)").fetchall()
+    id_column = next((row for row in info if row[1] == 'id'), None)
+    if (id_column is not None
+            and int(id_column[5] or 0) == 1
+            and 'INT' in str(id_column[2] or '').upper()):
+        return
+
+    columns = {row[1] for row in info}
+    cursor.execute("ALTER TABLE transactions RENAME TO transactions_legacy_ids")
+    cursor.execute(f"CREATE TABLE transactions ({_TRANSACTIONS_COLUMNS_SQL})")
+
+    fields = []
+    for name, fallback in (
+            ('item_id', "''"), ('action', "''"), ('quantity', '0'),
+            ('timestamp', "''"), ('cost_price', '0'), ('sell_price', '0'),
+            ('supplier', "''"), ('date_range', "''"), ('reason', "''"),
+            ('member_qty', 'NULL'), ('non_member_qty', 'NULL')):
+        fields.append(name if name in columns else f"{fallback} AS {name}")
+    if 'open_tab_id' in columns:
+        fields.append(
+            "CASE WHEN open_tab_id IS NULL "
+            "OR TRIM(CAST(open_tab_id AS TEXT)) IN ('', 'None') "
+            "THEN NULL ELSE CAST(open_tab_id AS INTEGER) END AS open_tab_id")
+    else:
+        fields.append("NULL AS open_tab_id")
+
+    cursor.execute(
+        "INSERT INTO transactions (item_id, action, quantity, timestamp, "
+        "cost_price, sell_price, supplier, date_range, reason, member_qty, "
+        "non_member_qty, open_tab_id) "
+        f"SELECT {', '.join(fields)} FROM transactions_legacy_ids ORDER BY rowid"
+    )
+    cursor.execute("DROP TABLE transactions_legacy_ids")
+    logger.info("Rebuilt transactions table with integer row ids")
+
+
 def _init_db_schema(conn):
     """Initialize the database schema."""
     cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS inventory (
-            item_id TEXT PRIMARY KEY,
-            item_name TEXT NOT NULL,
-            quantity REAL DEFAULT 0,
-            cost_price REAL DEFAULT 0,
-            sell_price REAL DEFAULT 0,
-            measure TEXT DEFAULT '',
-            category TEXT DEFAULT '',
-            price_locked INTEGER DEFAULT 0,
-            allow_negative INTEGER DEFAULT 0,
-            reorder_level REAL DEFAULT 0,
-            division TEXT DEFAULT ''
-        )
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS inventory ({_INVENTORY_COLUMNS_SQL})
     """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_id TEXT NOT NULL,
-            action TEXT NOT NULL,
-            quantity REAL NOT NULL,
-            timestamp TEXT NOT NULL,
-            cost_price REAL DEFAULT 0,
-            sell_price REAL DEFAULT 0,
-            supplier TEXT DEFAULT '',
-            date_range TEXT DEFAULT '',
-            reason TEXT DEFAULT '',
-            user TEXT DEFAULT '',
-            member_qty REAL,
-            non_member_qty REAL,
-            open_tab_id INTEGER DEFAULT NULL
-        )
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS transactions ({_TRANSACTIONS_COLUMNS_SQL})
     """)
 
     # Add new columns to existing tables (backward compat)
+    _ensure_transaction_ids(cursor)
     cursor.execute("PRAGMA table_info(transactions)")
     existing_cols = {row[1] for row in cursor.fetchall()}
     if 'member_qty' not in existing_cols:
@@ -138,6 +226,7 @@ def _init_db_schema(conn):
     if 'open_tab_id' not in existing_cols:
         cursor.execute("ALTER TABLE transactions ADD COLUMN open_tab_id INTEGER DEFAULT NULL")
 
+    _ensure_inventory_primary_key(cursor)
     cursor.execute("PRAGMA table_info(inventory)")
     existing_inv_cols = {row[1] for row in cursor.fetchall()}
     if 'division' not in existing_inv_cols:
@@ -956,6 +1045,7 @@ def _apply_log_changes(cursor, df, allow_shrink=False, baseline_ids=None):
 
     existing_ids = {
         int(row[0]) for row in cursor.execute("SELECT id FROM transactions")
+        if row[0] is not None
     }
     frame_ids = set()
     new_rows = []
@@ -1333,9 +1423,10 @@ class InventoryDataManager:
                     t.cost_price,
                     t.sell_price
                 FROM open_tabs ot
-                JOIN transactions t ON ot.id = t.open_tab_id
+                LEFT JOIN transactions t
+                    ON ot.id = t.open_tab_id AND t.action = 'Open Tab'
                 LEFT JOIN inventory i ON t.item_id = i.item_id
-                WHERE ot.status = ? AND t.action = 'Open Tab'
+                WHERE ot.status = ?
                 ORDER BY ot.created_at DESC, t.item_id
             """, (status,))
             rows = cursor.fetchall()
@@ -2190,8 +2281,13 @@ def is_duplicate_upload(file_hash, upload_type=''):
 
 
 def get_backups_dir():
-    """Get or create the backups directory."""
-    backups_dir = os.path.join(DATA_DIR, 'backups')
+    """Get or create the backups directory.
+
+    Backups sit beside the database they protect rather than beside the live
+    data folder, so a test or tool pointed at a temporary database cannot
+    write into -- or prune the retention of -- the real backups.
+    """
+    backups_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), 'backups')
     os.makedirs(backups_dir, exist_ok=True)
     return backups_dir
 

@@ -75,22 +75,22 @@ class DateRangeDialog:
             start_frame = tk.LabelFrame(calendars_frame, text="Start Date", font=(ui_theme.THEME_FONT, 9, 'bold'))
             start_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
             self.start_cal = Calendar(start_frame, selectmode='day', date_pattern='dd-mm-y', font=(ui_theme.THEME_FONT, 16),
-                                       background='#2b2b2b', normalbackground='#2b2b2b', weekendbackground='#333333',
-                                       othermonthbackground='#1e1e1e', othermonthwebackground='#262626',
-                                       foreground='white', normalforeground='white', weekendforeground='white',
-                                       othermonthforeground='white', othermonthweforeground='white',
-                                       selectbackground='#0078d7', selectforeground='white', headersbackground='#444444', headersforeground='white')
+                                       background=ui_theme.THEME_CARD, normalbackground=ui_theme.THEME_CARD, weekendbackground=ui_theme.THEME_SIDEBAR,
+                                       othermonthbackground=ui_theme.THEME_BG, othermonthwebackground=ui_theme.THEME_SIDEBAR,
+                                       foreground=ui_theme.THEME_TEXT, normalforeground=ui_theme.THEME_TEXT, weekendforeground=ui_theme.THEME_TEXT,
+                                       othermonthforeground=ui_theme.THEME_TEXT_MUTED, othermonthweforeground=ui_theme.THEME_TEXT_MUTED,
+                                       selectbackground=ui_theme.THEME_ACCENT, selectforeground=ui_theme.THEME_ACCENT_INK, headersbackground=ui_theme.THEME_SIDEBAR, headersforeground=ui_theme.THEME_TEXT)
             self.start_cal.pack(padx=5, pady=5)
 
             # End calendar
             end_frame = tk.LabelFrame(calendars_frame, text="End Date", font=(ui_theme.THEME_FONT, 9, 'bold'))
             end_frame.pack(side='left', fill='both', expand=True, padx=(10, 0))
             self.end_cal = Calendar(end_frame, selectmode='day', date_pattern='dd-mm-y', font=(ui_theme.THEME_FONT, 16),
-                                     background='#2b2b2b', normalbackground='#2b2b2b', weekendbackground='#333333',
-                                     othermonthbackground='#1e1e1e', othermonthwebackground='#262626',
-                                     foreground='white', normalforeground='white', weekendforeground='white',
-                                     othermonthforeground='white', othermonthweforeground='white',
-                                     selectbackground='#0078d7', selectforeground='white', headersbackground='#444444', headersforeground='white')
+                                     background=ui_theme.THEME_CARD, normalbackground=ui_theme.THEME_CARD, weekendbackground=ui_theme.THEME_SIDEBAR,
+                                     othermonthbackground=ui_theme.THEME_BG, othermonthwebackground=ui_theme.THEME_SIDEBAR,
+                                     foreground=ui_theme.THEME_TEXT, normalforeground=ui_theme.THEME_TEXT, weekendforeground=ui_theme.THEME_TEXT,
+                                     othermonthforeground=ui_theme.THEME_TEXT_MUTED, othermonthweforeground=ui_theme.THEME_TEXT_MUTED,
+                                     selectbackground=ui_theme.THEME_ACCENT, selectforeground=ui_theme.THEME_ACCENT_INK, headersbackground=ui_theme.THEME_SIDEBAR, headersforeground=ui_theme.THEME_TEXT)
             self.end_cal.pack(padx=5, pady=5)
 
             # Apply caller-supplied defaults if present

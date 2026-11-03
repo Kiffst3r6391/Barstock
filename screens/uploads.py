@@ -14,8 +14,8 @@ from tkinter import filedialog, messagebox, ttk
 
 import ui_theme
 from ui_theme import (
-    THEME_BG, THEME_CARD, THEME_DANGER, THEME_SUCCESS, THEME_TEXT,
-    THEME_TEXT_MUTED, THEME_WARNING,
+    THEME_BG, THEME_BORDER, THEME_CARD, THEME_DANGER, THEME_SUCCESS,
+    THEME_TEXT, THEME_TEXT_MUTED, THEME_WARNING, TBL_ROW_ALT,
 )
 
 try:
@@ -34,16 +34,19 @@ from actions import (
     ACTION_COMPLIMENTARY, ACTION_PARENT_STOCK_ADJ, ACTION_PRICE_UPDATE,
     ACTION_SALES,
 )
-from categories import SALES_INCLUDED_EXCLUDED_ITEMS, should_exclude
+from categories import (SALES_INCLUDED_EXCLUDED_ITEMS, should_exclude,
+                        is_delisted, UNTRACKED_SALES_ITEMS)
 from conversions import DATE_FORMAT_DISPLAY, format_quantity_display, get_conversion
 from data_manager import (
     COL_ALLOW_NEGATIVE, COL_MEMBER_QTY, COL_NON_MEMBER_QTY,
     add_upload_hash, is_duplicate_upload,
 )
 from inventory_sync import update_items_csv_total_value
+from money import allocate_money, inc_vat, round_money, sum_money
 from sales_mapping import (
     apply_sale_to_parent, check_apply_sale_to_parent, get_effective_cost_price,
-    has_parent_stock, normalize_product_name, resolve_epos_item_id,
+    has_parent_stock, is_ignored_epos_product, normalize_product_name,
+    resolve_epos_item_id,
 )
 
 
@@ -60,15 +63,9 @@ class UploadsMixin:
         """Add sales with option to upload weekly report."""
         self.clear_main_menu()
     
-        # Header
-        header_frame = self.themed_frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 20))
-        header_frame.pack_propagate(False)
-        self.themed_label(header_frame, "Add Sales", font=(ui_theme.THEME_FONT, 24, 'bold')).pack(side='left')
-    
         # Upload card
-        upload_card = self._card(self.main_menu, title="Upload Weekly Sales Report")
-        upload_card.pack(fill='x', padx=20, pady=(0, 20))
+        upload_card = self._card(self.main_menu, title="Upload weekly sales report")
+        upload_card.pack(fill='x', pady=(0, 20))
     
         self.themed_label(upload_card,
                           "Upload CSV file with sales data to auto-populate transactions.",
@@ -80,9 +77,8 @@ class UploadsMixin:
                            width=26, variant='primary').pack(anchor='w', padx=14, pady=(0, 12))
     
         # Recent uploads
-        self._section_title(self.main_menu, "Recent Uploads").pack(fill='x', padx=20, pady=(10, 10))
-        history_card = self._card(self.main_menu, title="Recent Uploads")
-        history_card.pack(fill='x', padx=20, pady=(0, 20))
+        history_card = self._card(self.main_menu, title="Recent uploads")
+        history_card.pack(fill='x', pady=(0, 20))
     
         if not self.log_df.empty and 'date_range' in self.log_df.columns:
             sales_uploads = self.log_df[self.log_df[COL_ACTION] == ACTION_SALES]
@@ -99,25 +95,45 @@ class UploadsMixin:
                 ).reset_index(drop=True)
                 recent = upload_batches.sort_values('timestamp', ascending=False).head(10)
                 if not recent.empty:
-                    for _, entry in recent.iterrows():
+                    for index, (_, entry) in enumerate(recent.iterrows()):
                         date_range = entry['date_range'] if pd.notna(entry['date_range']) else 'N/A'
                         ts = entry['timestamp'][:16] if pd.notna(entry['timestamp']) else 'N/A'
                         qty = entry['total_qty']
                         rev = entry['total_revenue']
     
-                        line1 = f"{date_range}  (uploaded {ts}, {int(entry['items'])} items)"
-                        line2_parts = [f"Qty: {qty:.1f}", f"Revenue: £{rev:.2f}"]
+                        line1 = str(date_range)
+                        meta = f"UPLOADED {ts}  ·  {int(entry['items'])} ITEMS"
+                        # Inc VAT first so an upload can be checked against the
+                        # EPOS export, which totals sales inc VAT.
+                        line2_parts = [f"Qty {qty:.1f}",
+                                       f"Revenue £{inc_vat(rev):,.2f} inc VAT",
+                                       f"£{rev:,.2f} ex"]
                         if has_member:
                             mem_qty = entry.get(COL_MEMBER_QTY, 0)
                             non_mem_qty = entry.get(COL_NON_MEMBER_QTY, 0)
                             if mem_qty > 0 or non_mem_qty > 0:
-                                line2_parts.append(f"Member: {mem_qty:.1f}  Non-Member: {non_mem_qty:.1f}")
-                        line2 = "  " + "  |  ".join(line2_parts)
+                                line2_parts.append(f"Member {mem_qty:.1f}  ·  Non-member {non_mem_qty:.1f}")
+                        line2 = "   ·   ".join(line2_parts)
     
+                        if index:
+                            tk.Frame(history_card, bg=THEME_BORDER,
+                                     height=1).pack(fill='x', padx=14)
                         row_frame = self.themed_frame(history_card, bg=THEME_CARD)
-                        row_frame.pack(fill='x', padx=14, pady=4)
-                        self.themed_label(row_frame, line1, font=(ui_theme.THEME_FONT, 10, 'bold'), fg=THEME_TEXT).pack(anchor='w')
-                        self.themed_label(row_frame, line2, font=(ui_theme.THEME_FONT, 9), fg=THEME_TEXT_MUTED).pack(anchor='w')
+                        row_frame.pack(fill='x', padx=14, pady=7)
+                        self.themed_label(row_frame, line1,
+                                          font=ui_theme.display_font(13),
+                                          fg=THEME_TEXT,
+                                          bg=THEME_CARD).pack(anchor='w')
+                        self.themed_label(row_frame, meta,
+                                          font=ui_theme.mono_font(8),
+                                          fg=THEME_TEXT_MUTED,
+                                          bg=THEME_CARD).pack(anchor='w',
+                                                              pady=(1, 0))
+                        self.themed_label(row_frame, line2,
+                                          font=ui_theme.mono_font(9),
+                                          fg=THEME_TEXT_MUTED,
+                                          bg=THEME_CARD).pack(anchor='w',
+                                                              pady=(3, 0))
                 else:
                     self.themed_label(history_card, "No uploads yet", font=(ui_theme.THEME_FONT, 9),
                                       fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
@@ -129,8 +145,8 @@ class UploadsMixin:
                               fg=THEME_TEXT_MUTED).pack(padx=14, pady=10)
     
         # Manual entry card
-        manual_card = self._card(self.main_menu, title="Manual Entry")
-        manual_card.pack(fill='x', padx=20, pady=(0, 20))
+        manual_card = self._card(self.main_menu, title="Manual entry")
+        manual_card.pack(fill='x', pady=(0, 20))
     
         self.themed_label(manual_card, "Or add individual sales transaction:",
                           font=(ui_theme.THEME_FONT, 11), fg=THEME_TEXT).pack(anchor='w', padx=14, pady=(8, 0))
@@ -140,8 +156,8 @@ class UploadsMixin:
     
         # Back button
         back_frame = self.themed_frame(self.main_menu)
-        back_frame.pack(fill='x', padx=20, pady=(0, 20))
-        self.styled_button(back_frame, "Back", self.show_dashboard, width=20, variant='ghost').pack(side='left')
+        back_frame.pack(fill='x', pady=(0, 20))
+        self.styled_button(back_frame, "Back", self.show_dashboard, width=20, variant='secondary').pack(side='left')
     
         self._apply_legacy_theme()
 
@@ -206,6 +222,53 @@ class UploadsMixin:
             raise ValueError("Sales report must have a 'Product' column.")
         return file_hash, sales_df
 
+    @staticmethod
+    def _epos_line_total(row):
+        """Return an EPOS line total in pence-inclusive pounds, if present.
+
+        EPOS product-transaction exports carry the line total in a column named
+        'Sales'; some older exports call it 'Totals'. Reports that only split
+        the sale carry 'Member Sales' and 'Non Member Sales' instead.
+        """
+        for column in ('Totals', 'Sales', 'Total Sales'):
+            if column in row.index:
+                value = pd.to_numeric(
+                    str(row.get(column)).replace(',', ''), errors='coerce')
+                if pd.notna(value):
+                    return float(value)
+
+        parts = []
+        for column in ('Member Sales', 'Non Member Sales'):
+            if column in row.index:
+                value = pd.to_numeric(
+                    str(row.get(column)).replace(',', ''), errors='coerce')
+                if pd.notna(value):
+                    parts.append(float(value))
+        return sum(parts) if parts else None
+
+
+    @staticmethod
+    def _effective_sell_price(csv_revenue, quantity, sell_price):
+        """Return the per-unit price implied by the EPOS line revenue.
+
+        A zero total is a real figure (a comped line) and must stay zero; only
+        a missing total falls back to the shelf price.
+        """
+        if csv_revenue is not None and quantity > 0:
+            return csv_revenue / quantity
+        return sell_price
+
+    @staticmethod
+    def _tracks_stock(item_id, current_qty):
+        """Whether a sale of this item should move stock.
+
+        Mixed-in soft drinks are sold without club stock, and a delisted item
+        holds no stock, but both still earn revenue; recording them without a
+        movement avoids a negative-stock block.
+        """
+        if str(item_id).lower() in UNTRACKED_SALES_ITEMS:
+            return False
+        return not (is_delisted(item_id) and current_qty <= 0)
 
     def upload_sales_report(self):
         """Upload and process weekly sales report CSV with preview and backup."""
@@ -256,6 +319,22 @@ class UploadsMixin:
                         else:
                             member_qty_col = col
     
+                # The export's own inc-VAT total across every product line,
+                # including lines this upload cannot record. Shown in the
+                # preview so the recorded figure can be checked against the
+                # CSV, exactly as the EPOS report totals it.
+                file_total_inc = 0.0
+                for _, file_row in sales_df.iterrows():
+                    product = str(file_row.get('Product', '')).strip()
+                    if not product or product.lower() in ('nan', 'total'):
+                        continue
+                    if is_ignored_epos_product(product):
+                        continue
+                    line_total = self._epos_line_total(file_row)
+                    if line_total is not None:
+                        file_total_inc += line_total
+                file_total_inc = round_money(file_total_inc)
+
                 # Parse CSV into preview data without modifying inventory
                 self.refresh_data()
                 preview_items = []
@@ -267,6 +346,11 @@ class UploadsMixin:
                     try:
                         product_name = str(row['Product']).strip()
                         if not product_name or product_name.lower() == 'nan' or product_name.lower() == 'total':
+                            continue
+                        # Till-only in/out lines (e.g. the Blue WKD staff-tip
+                        # button) are not sales and are ignored entirely, so
+                        # they never appear as skipped or unrecorded revenue.
+                        if is_ignored_epos_product(product_name):
                             continue
                         try:
                             quantity = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
@@ -312,15 +396,25 @@ class UploadsMixin:
                         cost_price = get_effective_cost_price(item_id, self.inventory_df, COL_ITEM_ID, COL_COST_PRICE)
                         sell_price = item_row[COL_SELL_PRICE]
                         current_qty = item_row[COL_QUANTITY]
-                        projected = current_qty - quantity
+                        # A delisted item holds no stock, but its EPOS sales are
+                        # still revenue; record them without driving stock
+                        # negative or blocking the upload.
+                        track_stock = self._tracks_stock(item_id, current_qty)
+                        has_parent = has_parent_stock(item_id)
+                        # Only an item that deducts its own stock changes here.
+                        # Child items (half pints, shandies, TG items) deduct
+                        # from their parent and untracked mixes never move
+                        # stock, so showing a negative "after upload" for them
+                        # would be a false alarm.
+                        if has_parent or not track_stock:
+                            projected = current_qty
+                        else:
+                            projected = current_qty - quantity
     
-                        # The CSV gross total is inc-VAT from the EPOS. The system now stores
-                        # revenue ex-VAT, so divide by 1.2 before recording.
-                        csv_total = row.get('Totals')
-                        try:
-                            csv_revenue_inc = float(csv_total) if pd.notna(csv_total) else None
-                        except Exception:
-                            csv_revenue_inc = None
+                        # The EPOS line total is inc-VAT. The system records revenue
+                        # ex-VAT, so divide by 1.2 before recording. EPOS exports
+                        # name the column 'Sales'; older ones use 'Totals'.
+                        csv_revenue_inc = self._epos_line_total(row)
                         csv_revenue = csv_revenue_inc / 1.2 if csv_revenue_inc is not None and csv_revenue_inc >= 0 else None
                         line_revenue = csv_revenue if csv_revenue is not None else quantity * sell_price
     
@@ -333,11 +427,17 @@ class UploadsMixin:
                             'cost': cost_price,
                             'sell': sell_price,
                             'csv_revenue': csv_revenue,
+                            # Kept as the export stated it (not re-derived from
+                            # the ex-VAT price) so the preview's inc-VAT total
+                            # matches the CSV to the penny.
+                            'revenue_inc': (csv_revenue_inc if csv_revenue_inc is not None
+                                            else inc_vat(line_revenue)),
                             'revenue': line_revenue,
                             'cost_total': quantity * cost_price,
                             'member_qty': member_qty,
                             'non_member_qty': non_member_qty,
-                            'has_parent': has_parent_stock(item_id)
+                            'has_parent': has_parent,
+                            'track_stock': track_stock
                         })
                         total_revenue += line_revenue
                         total_cost += quantity * cost_price
@@ -349,11 +449,24 @@ class UploadsMixin:
                     messagebox.showwarning("No Transactions", "No valid transactions found in the CSV file.")
                     return
     
+                # Round each line to the penny so the previewed rows add up
+                # exactly to the revenue and GP shown above them.
+                for item, revenue, cost_total in zip(
+                        preview_items,
+                        allocate_money([p['revenue'] for p in preview_items]),
+                        allocate_money([p['cost_total'] for p in preview_items])):
+                    item['revenue'] = revenue
+                    item['cost_total'] = cost_total
+                total_revenue = sum_money(p['revenue'] for p in preview_items)
+                total_cost = sum_money(p['cost_total'] for p in preview_items)
+                reported_inc = sum_money(p['revenue_inc'] for p in preview_items)
+                unrecorded_inc = round_money(file_total_inc - reported_inc)
+
                 # Negative stock guard: block unless allow_negative is True
                 blocking_negative = []
                 warning_negative = []
                 for p in preview_items:
-                    if p['projected'] < 0 and not p['has_parent']:
+                    if p['projected'] < 0 and not p['has_parent'] and p.get('track_stock', True):
                         allow_neg = bool(self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == p['item_id'], COL_ALLOW_NEGATIVE].values[0])
                         if allow_neg:
                             warning_negative.append(p)
@@ -414,28 +527,47 @@ class UploadsMixin:
                 dialog.geometry("900x600")
                 self._fit_dialog(dialog, 900, 600)
     
-                tk.Label(dialog, text=f"Sales Upload Preview  |  Period: {date_range_str}",
-                        font=(ui_theme.THEME_FONT, 12, 'bold')).pack(pady=10)
+                dialog.configure(bg=THEME_BG)
+                tk.Label(dialog, text="SALES UPLOAD PREVIEW",
+                         font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                         bg=THEME_BG).pack(anchor='w', padx=18, pady=(16, 2))
+                tk.Label(dialog, text=f"Period {date_range_str}",
+                         font=ui_theme.display_font(16), fg=THEME_TEXT,
+                         bg=THEME_BG).pack(anchor='w', padx=18)
     
-                summary_frame = tk.Frame(dialog)
-                summary_frame.pack(fill='x', padx=10, pady=5)
-                tk.Label(summary_frame, text=f"Items: {len(preview_items)}  |  Revenue: £{total_revenue:,.2f}  |  GP: £{total_revenue - total_cost:,.2f}  |  Skipped: {len(skipped_items)}",
-                        font=(ui_theme.THEME_FONT, 10)).pack()
+                summary_frame = tk.Frame(dialog, bg=THEME_BG)
+                summary_frame.pack(fill='x', padx=18, pady=(6, 12))
+                tk.Label(summary_frame, text=f"{len(preview_items)} items  ·  GP £{total_revenue - total_cost:,.2f}  ·  {len(skipped_items)} skipped",
+                        font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
+                        bg=THEME_BG).pack(anchor='w')
+                if abs(unrecorded_inc) < 0.005:
+                    match_text = "matches the EPOS file total"
+                else:
+                    match_text = f"£{unrecorded_inc:,.2f} in the file not recorded"
+                tk.Label(summary_frame,
+                         text=(f"Recorded £{reported_inc:,.2f} inc VAT "
+                               f"(£{total_revenue:,.2f} ex)  ·  "
+                               f"EPOS file £{file_total_inc:,.2f} inc  ·  "
+                               f"{match_text}"),
+                         font=ui_theme.mono_font(9), fg=THEME_TEXT,
+                         bg=THEME_BG).pack(anchor='w', pady=(3, 0))
     
-                tree_frame = tk.Frame(dialog)
-                tree_frame.pack(fill='both', expand=True, padx=10, pady=5)
+                tree_frame = tk.Frame(dialog, bg=THEME_BG)
+                tree_frame.pack(fill='both', expand=True, padx=18)
     
                 tree = ttk.Treeview(tree_frame, columns=('name', 'qty', 'current', 'projected', 'revenue'), show='headings', height=15)
-                tree.heading('name', text='Item')
-                tree.heading('qty', text='Qty Sold')
-                tree.heading('current', text='Current Stock')
-                tree.heading('projected', text='After Upload')
-                tree.heading('revenue', text='Revenue')
-                tree.column('name', width=220)
-                tree.column('qty', width=100, anchor='center')
-                tree.column('current', width=110, anchor='center')
-                tree.column('projected', width=110, anchor='center')
+                tree.heading('name', text='Item', anchor='w')
+                tree.heading('qty', text='Qty Sold', anchor='e')
+                tree.heading('current', text='Current Stock', anchor='e')
+                tree.heading('projected', text='After Upload', anchor='e')
+                tree.heading('revenue', text='Revenue', anchor='e')
+                tree.column('name', width=220, anchor='w')
+                tree.column('qty', width=100, anchor='e')
+                tree.column('current', width=110, anchor='e')
+                tree.column('projected', width=110, anchor='e')
                 tree.column('revenue', width=90, anchor='e')
+                tree.tag_configure('alt', background=TBL_ROW_ALT,
+                                   foreground=THEME_TEXT)
                 tree.pack(side=tk.LEFT, fill='both', expand=True)
     
                 sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
@@ -443,14 +575,18 @@ class UploadsMixin:
                 tree.configure(yscrollcommand=sb.set)
                 self._bind_treeview_mousewheel(tree)
     
-                for p in preview_items:
-                    tag = 'negative' if p['projected'] < 0 and not p['has_parent'] else ''
+                for index, p in enumerate(preview_items):
+                    tag = ('negative' if (p['projected'] < 0
+                                         and not p['has_parent']
+                                         and p.get('track_stock', True))
+                           else ('alt' if index % 2 else ''))
                     current_display = format_quantity_display(p['item_id'], p['current'])
                     projected_display = format_quantity_display(p['item_id'], p['projected'])
                     qty_display = format_quantity_display(p['item_id'], p['qty'])
-                    tree.insert('', tk.END, values=(p['name'], qty_display, current_display,
-                                                   projected_display, f"£{p['revenue']:.2f}"), tags=(tag,))
-                tree.tag_configure('negative', foreground='red', font=(ui_theme.THEME_FONT, 9, 'bold'))
+                    tree.insert('', tk.END, tags=(tag,) if tag else (),
+                                values=(p['name'], qty_display, current_display,
+                                        projected_display, f"£{p['revenue']:.2f}"))
+                tree.tag_configure('negative', foreground=ui_theme.THEME_DANGER)
     
                 def confirm_upload():
                     dialog.destroy()
@@ -460,10 +596,12 @@ class UploadsMixin:
                     dialog.destroy()
                     self._set_status("Upload cancelled. No changes were made.", 'info')
     
-                btn_frame = tk.Frame(dialog)
-                btn_frame.pack(pady=15)
-                tk.Button(btn_frame, text="Confirm Upload", command=confirm_upload, width=15, bg='green', fg='white').pack(side=tk.LEFT, padx=10)
-                tk.Button(btn_frame, text="Cancel", command=cancel_upload, width=15).pack(side=tk.LEFT, padx=10)
+                tk.Frame(dialog, bg=THEME_BORDER, height=1).pack(
+                    fill='x', padx=18, pady=(14, 0))
+                btn_frame = tk.Frame(dialog, bg=THEME_BG)
+                btn_frame.pack(fill='x', padx=18, pady=12)
+                self.styled_button(btn_frame, "Confirm Upload", confirm_upload, width=15, variant='primary').pack(side=tk.LEFT, padx=10)
+                self.styled_button(btn_frame, "Cancel", cancel_upload, width=15, variant='secondary').pack(side=tk.LEFT, padx=10)
     
             self._run_in_background(
                 "Reading sales report…",
@@ -485,10 +623,11 @@ class UploadsMixin:
             backup_path = create_backup('before_sales_upload')
             if backup_path:
                 print(f"Pre-upload backup created: {backup_path}")
-    
+
             self.refresh_data()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             transactions = []
+            recorded_revenue = 0.0
     
             for p in preview_items:
                 item_id = p['item_id']
@@ -499,7 +638,10 @@ class UploadsMixin:
                 non_member_qty = p['non_member_qty']
     
                 parent_adjustments = []
-                if has_parent_stock(item_id):
+                if not p.get('track_stock', True):
+                    # Delisted item with no stock: revenue only, no movement.
+                    pass
+                elif has_parent_stock(item_id):
                     parent_ok, parent_issues = check_apply_sale_to_parent(
                         item_id, quantity, self.inventory_df,
                         COL_ITEM_ID, COL_QUANTITY, COL_ALLOW_NEGATIVE
@@ -514,16 +656,19 @@ class UploadsMixin:
                 else:
                     self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_QUANTITY] -= quantity
     
-                # Store the CSV's actual gross line revenue as the effective sell price,
-                # so reports match the source CSV 'Totals' column.
-                csv_revenue = p.get('csv_revenue')
-                effective_sell_price = (csv_revenue / quantity if quantity > 0 and csv_revenue is not None else sell_price)
-                if not (effective_sell_price > 0 and csv_revenue is not None):
-                    effective_sell_price = sell_price
+                # Store the line's actual EPOS revenue as the effective sell price,
+                # so reports match the source CSV (already ex-VAT and struck to
+                # the penny when the preview was built). A line the EPOS exported
+                # at zero (a comped drink) keeps that zero; only a line with no
+                # revenue figure at all falls back to the shelf price.
+                csv_revenue = p.get('revenue')
+                effective_sell_price = self._effective_sell_price(
+                    csv_revenue, quantity, sell_price)
     
                 new_log_entry = pd.DataFrame([[item_id, ACTION_SALES, quantity, timestamp, cost_price, effective_sell_price, "", date_range_str, "", member_qty, non_member_qty]],
                                               columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON, COL_MEMBER_QTY, COL_NON_MEMBER_QTY])
                 self.log_df = pd.concat([self.log_df, new_log_entry], ignore_index=True)
+                recorded_revenue += float(csv_revenue or 0.0)
     
                 for parent_id, deduction, desc in parent_adjustments:
                     parent_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == parent_id].iloc[0]
@@ -542,7 +687,9 @@ class UploadsMixin:
                 success_msg = f"Sales report uploaded successfully!\n\nBackup created before upload.\n\n"
                 if date_range_str:
                     success_msg += f"Period: {date_range_str}\n\n"
-                success_msg += f"Transactions recorded: {len(transactions)}\n\n"
+                success_msg += f"Transactions recorded: {len(transactions)}\n"
+                success_msg += (f"Revenue: £{inc_vat(recorded_revenue):,.2f} inc VAT "
+                                f"(£{round_money(recorded_revenue):,.2f} ex)\n\n")
                 if skipped_items:
                     success_msg += f"Skipped items: {len(skipped_items)}\n"
                     if len(skipped_items) <= 10:
@@ -621,7 +768,10 @@ class UploadsMixin:
                         product_name = str(row['Product']).strip()
                         if not product_name or product_name.lower() == 'nan' or product_name.lower() == 'total':
                             continue
-    
+                        # Till-only in/out lines hold no stock and are ignored.
+                        if is_ignored_epos_product(product_name):
+                            continue
+
                         try:
                             quantity = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
                         except:
@@ -656,8 +806,11 @@ class UploadsMixin:
                         item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
                         cost_price = get_effective_cost_price(item_id, self.inventory_df, COL_ITEM_ID, COL_COST_PRICE)
                         current_qty = item_row[COL_QUANTITY]
-                        projected = current_qty - quantity
-    
+                        has_parent = has_parent_stock(item_id)
+                        # A child item deducts from its parent, so its own
+                        # stock does not move.
+                        projected = current_qty if has_parent else current_qty - quantity
+
                         preview_items.append({
                             'item_id': item_id,
                             'name': item_row[COL_ITEM_NAME],
@@ -666,7 +819,7 @@ class UploadsMixin:
                             'projected': projected,
                             'cost': cost_price,
                             'cost_total': quantity * cost_price,
-                            'has_parent': has_parent_stock(item_id)
+                            'has_parent': has_parent
                         })
                         total_cost += quantity * cost_price
     
@@ -677,8 +830,19 @@ class UploadsMixin:
                     messagebox.showwarning("No Transactions", "No valid transactions found in the CSV file.")
                     return
     
+                # Round each line so the previewed costs add up exactly to
+                # the total cost shown above them.
+                for item, cost_total in zip(
+                        preview_items,
+                        allocate_money([p['cost_total'] for p in preview_items])):
+                    item['cost_total'] = cost_total
+                total_cost = sum_money(p['cost_total'] for p in preview_items)
+
                 # Negative stock warning
-                negative_count = sum(1 for p in preview_items if p['projected'] < 0 and not p['has_parent'])
+                negative_count = sum(
+                    1 for p in preview_items
+                    if p['projected'] < 0 and not p['has_parent']
+                    and p.get('track_stock', True))
                 pct_negative = (negative_count / len(preview_items)) * 100
                 if pct_negative > 10:
                     if not messagebox.askyesno(
@@ -715,28 +879,36 @@ class UploadsMixin:
                 dialog.geometry("900x600")
                 self._fit_dialog(dialog, 900, 600)
     
-                tk.Label(dialog, text=f"Complimentary Upload Preview  |  Period: {date_range_str}",
-                         font=(ui_theme.THEME_FONT, 12, 'bold')).pack(pady=10)
+                dialog.configure(bg=THEME_BG)
+                tk.Label(dialog, text="COMPLIMENTARY UPLOAD PREVIEW",
+                         font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                         bg=THEME_BG).pack(anchor='w', padx=18, pady=(16, 2))
+                tk.Label(dialog, text=f"Period {date_range_str}",
+                         font=ui_theme.display_font(16), fg=THEME_TEXT,
+                         bg=THEME_BG).pack(anchor='w', padx=18)
     
-                summary_frame = tk.Frame(dialog)
-                summary_frame.pack(fill='x', padx=10, pady=5)
-                tk.Label(summary_frame, text=f"Items: {len(preview_items)}  |  Total Cost: £{total_cost:,.2f}  |  Skipped: {len(skipped_items)}",
-                         font=(ui_theme.THEME_FONT, 10)).pack()
+                summary_frame = tk.Frame(dialog, bg=THEME_BG)
+                summary_frame.pack(fill='x', padx=18, pady=(6, 12))
+                tk.Label(summary_frame, text=f"{len(preview_items)} items  ·  Total cost £{total_cost:,.2f}  ·  {len(skipped_items)} skipped",
+                         font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
+                         bg=THEME_BG).pack(anchor='w')
     
-                tree_frame = tk.Frame(dialog)
-                tree_frame.pack(fill='both', expand=True, padx=10, pady=5)
+                tree_frame = tk.Frame(dialog, bg=THEME_BG)
+                tree_frame.pack(fill='both', expand=True, padx=18)
     
                 tree = ttk.Treeview(tree_frame, columns=('name', 'qty', 'current', 'projected', 'cost'), show='headings', height=15)
-                tree.heading('name', text='Item')
-                tree.heading('qty', text='Qty')
-                tree.heading('current', text='Current Stock')
-                tree.heading('projected', text='After Upload')
-                tree.heading('cost', text='Cost Impact')
-                tree.column('name', width=250)
-                tree.column('qty', width=80, anchor='center')
-                tree.column('current', width=100, anchor='center')
-                tree.column('projected', width=100, anchor='center')
+                tree.heading('name', text='Item', anchor='w')
+                tree.heading('qty', text='Qty', anchor='e')
+                tree.heading('current', text='Current Stock', anchor='e')
+                tree.heading('projected', text='After Upload', anchor='e')
+                tree.heading('cost', text='Cost Impact', anchor='e')
+                tree.column('name', width=250, anchor='w')
+                tree.column('qty', width=80, anchor='e')
+                tree.column('current', width=100, anchor='e')
+                tree.column('projected', width=100, anchor='e')
                 tree.column('cost', width=100, anchor='e')
+                tree.tag_configure('alt', background=TBL_ROW_ALT,
+                                   foreground=THEME_TEXT)
                 tree.pack(side=tk.LEFT, fill='both', expand=True)
     
                 sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
@@ -744,11 +916,15 @@ class UploadsMixin:
                 tree.configure(yscrollcommand=sb.set)
                 self._bind_treeview_mousewheel(tree)
     
-                for p in preview_items:
-                    tag = 'negative' if p['projected'] < 0 and not p['has_parent'] else ''
-                    tree.insert('', tk.END, values=(p['name'], f"{p['qty']:.1f}", f"{p['current']:.1f}",
-                                                   f"{p['projected']:.1f}", f"£{p['cost_total']:.2f}"), tags=(tag,))
-                tree.tag_configure('negative', foreground='red', font=(ui_theme.THEME_FONT, 9, 'bold'))
+                for index, p in enumerate(preview_items):
+                    tag = ('negative' if (p['projected'] < 0
+                                         and not p['has_parent']
+                                         and p.get('track_stock', True))
+                           else ('alt' if index % 2 else ''))
+                    tree.insert('', tk.END, tags=(tag,) if tag else (),
+                                values=(p['name'], f"{p['qty']:.1f}", f"{p['current']:.1f}",
+                                        f"{p['projected']:.1f}", f"£{p['cost_total']:.2f}"))
+                tree.tag_configure('negative', foreground=ui_theme.THEME_DANGER)
     
                 def confirm_upload():
                     dialog.destroy()
@@ -758,10 +934,12 @@ class UploadsMixin:
                     dialog.destroy()
                     self._set_status("Upload cancelled. No changes were made.", 'info')
     
-                btn_frame = tk.Frame(dialog)
-                btn_frame.pack(pady=15)
-                tk.Button(btn_frame, text="Confirm Upload", command=confirm_upload, width=15, bg='green', fg='white').pack(side=tk.LEFT, padx=10)
-                tk.Button(btn_frame, text="Cancel", command=cancel_upload, width=15).pack(side=tk.LEFT, padx=10)
+                tk.Frame(dialog, bg=THEME_BORDER, height=1).pack(
+                    fill='x', padx=18, pady=(14, 0))
+                btn_frame = tk.Frame(dialog, bg=THEME_BG)
+                btn_frame.pack(fill='x', padx=18, pady=12)
+                self.styled_button(btn_frame, "Confirm Upload", confirm_upload, width=15, variant='primary').pack(side=tk.LEFT, padx=10)
+                self.styled_button(btn_frame, "Cancel", cancel_upload, width=15, variant='secondary').pack(side=tk.LEFT, padx=10)
             self._run_in_background(
                 "Reading complimentary report…",
                 lambda: self._read_complimentary_file(filepath),
@@ -792,7 +970,10 @@ class UploadsMixin:
                 cost_price = p['cost']
     
                 parent_adjustments = []
-                if has_parent_stock(item_id):
+                if not p.get('track_stock', True):
+                    # Delisted item with no stock: revenue only, no movement.
+                    pass
+                elif has_parent_stock(item_id):
                     parent_ok, parent_issues = check_apply_sale_to_parent(
                         item_id, quantity, self.inventory_df,
                         COL_ITEM_ID, COL_QUANTITY, COL_ALLOW_NEGATIVE
@@ -1002,6 +1183,7 @@ class UploadsMixin:
             'diet coke bag in box': 'diet_coke_pm',
             'birra moretti 0%': 'birra_moretti_zero',
             'birra moretti nrb uk': 'Moretti_Bottle',
+            'estrella damm': 'estrella_damm',
             'aperol': 'aperol',
             'baileys irish cream': 'baileys_50ml',
             'captain morgan spiced rum': 'morgans',
@@ -1278,50 +1460,56 @@ class UploadsMixin:
         frame = tk.Frame(top, bg=THEME_BG)
         frame.pack(fill='both', expand=True, padx=15, pady=15)
     
-        tk.Label(frame, text=f"Price check for {filename}",
-                 font=(ui_theme.THEME_FONT, 14, 'bold'), fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 5))
+        tk.Label(frame, text="INVOICE PRICE CHECK", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x')
+        tk.Label(frame, text=filename, font=ui_theme.display_font(17),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x', pady=(2, 4))
     
-        summary_text = f"{len(comparison_rows)} matched items  |  {len(unmatched)} unmatched lines"
+        summary_text = (f"{len(comparison_rows)} matched items  ·  "
+                        f"{len(unmatched)} unmatched lines")
         tk.Label(frame, text=summary_text,
-                 font=(ui_theme.THEME_FONT, 10), fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 10))
+                 font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w').pack(fill='x', pady=(0, 12))
     
         tree_frame = tk.Frame(frame, bg=THEME_BG)
         tree_frame.pack(fill='both', expand=True)
     
         columns = ('invoice_desc', 'item_id', 'item_name', 'measure', 'invoice_unit', 'current_cost', 'invoice_cost', 'diff', 'diff_pct')
         tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=16)
-        tree.heading('invoice_desc', text='Invoice Product')
-        tree.heading('item_id', text='Item ID')
-        tree.heading('item_name', text='Name')
-        tree.heading('measure', text='System Unit')
-        tree.heading('invoice_unit', text='Invoice Unit')
-        tree.heading('current_cost', text='Current Cost')
-        tree.heading('invoice_cost', text='Invoice Cost')
-        tree.heading('diff', text='Difference')
-        tree.heading('diff_pct', text='Diff %')
+        tree.heading('invoice_desc', text='Invoice Product', anchor='w')
+        tree.heading('item_id', text='Item ID', anchor='w')
+        tree.heading('item_name', text='Name', anchor='w')
+        tree.heading('measure', text='System Unit', anchor='w')
+        tree.heading('invoice_unit', text='Invoice Unit', anchor='w')
+        tree.heading('current_cost', text='Current Cost', anchor='e')
+        tree.heading('invoice_cost', text='Invoice Cost', anchor='e')
+        tree.heading('diff', text='Difference', anchor='e')
+        tree.heading('diff_pct', text='Diff %', anchor='e')
         self._make_sortable(tree)
     
         tree.column('invoice_desc', width=180, anchor='w')
         tree.column('item_id', width=90, anchor='w')
         tree.column('item_name', width=110, anchor='w')
-        tree.column('measure', width=70, anchor='center')
-        tree.column('invoice_unit', width=80, anchor='center')
+        tree.column('measure', width=70, anchor='w')
+        tree.column('invoice_unit', width=80, anchor='w')
         tree.column('current_cost', width=100, anchor='e')
         tree.column('invoice_cost', width=100, anchor='e')
         tree.column('diff', width=90, anchor='e')
         tree.column('diff_pct', width=70, anchor='e')
+        tree.tag_configure('alt', background=TBL_ROW_ALT,
+                           foreground=THEME_TEXT)
     
         tree.tag_configure('higher', foreground=THEME_DANGER)
         tree.tag_configure('lower', foreground=THEME_SUCCESS)
         tree.tag_configure('neutral', foreground=THEME_TEXT)
     
-        for row in sorted(comparison_rows, key=lambda r: abs(r['diff_pct']), reverse=True):
+        for index, row in enumerate(sorted(comparison_rows, key=lambda r: abs(r['diff_pct']), reverse=True)):
             if row['diff_pct'] > 10:
                 tag = 'higher'
             elif row['diff_pct'] < -10:
                 tag = 'lower'
             else:
-                tag = 'neutral'
+                tag = 'alt' if index % 2 else 'neutral'
             values = (
                 row['invoice_desc'] or '-',
                 row['item_id'],
@@ -1341,10 +1529,12 @@ class UploadsMixin:
         tree.configure(yscrollcommand=scrollbar.set)
     
         if unmatched:
-            tk.Label(frame, text="Unmatched invoice lines (not in stock.csv):",
-                     font=(ui_theme.THEME_FONT, 10, 'bold'), fg=THEME_WARNING, bg=THEME_BG, anchor='w').pack(fill='x', pady=(10, 5))
+            tk.Label(frame, text="UNMATCHED INVOICE LINES", font=ui_theme.mono_font(8),
+                     fg=THEME_WARNING, bg=THEME_BG, anchor='w').pack(fill='x', pady=(12, 4))
             unmatched_text = tk.Text(frame, height=4, wrap='word', bg=THEME_CARD, fg=THEME_TEXT,
-                                     font=(ui_theme.THEME_FONT, 9), relief='flat')
+                                     font=ui_theme.mono_font(9), relief='flat',
+                                     highlightbackground=THEME_BORDER,
+                                     highlightthickness=1, padx=10, pady=8)
             unmatched_text.pack(fill='x')
             unmatched_text.insert('1.0', "\n".join(f"  • {u}" for u in sorted(unmatched)))
             unmatched_text.config(state='disabled')

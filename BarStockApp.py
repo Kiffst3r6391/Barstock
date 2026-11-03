@@ -248,56 +248,161 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             )
 
     def setup_theme(self):
-        """Configure the application-wide dark dashboard theme."""
+        """Configure the application-wide Ledger theme."""
         global THEME_FONT
         try:
             THEME_FONT = ui_theme.resolve_font(self.root)
-            # Screen modules read the family from ui_theme at draw time.
+            # Screen modules read the families from ui_theme at draw time.
             ui_theme.THEME_FONT = THEME_FONT
+            ui_theme.THEME_DISPLAY_FONT = ui_theme.resolve_display_font(self.root)
+            ui_theme.THEME_MONO_FONT = ui_theme.resolve_mono_font(self.root)
         except Exception:
             pass
 
         self.root.configure(bg=THEME_BG)
         # Theme standard Tk widgets at creation time as well as by recolouring
         # afterwards.  Without this every legacy dialog and option menu is
-        # built light and only turns dark once _apply_legacy_theme walks it,
-        # which shows as a white flash when the dialog opens.
+        # built with platform defaults and only turns light once
+        # _apply_legacy_theme walks it, which shows as a flash when it opens.
         self.root.option_add('*Background', THEME_BG)
         self.root.option_add('*Foreground', THEME_TEXT)
         self.root.option_add('*selectBackground', THEME_ACCENT)
-        self.root.option_add('*selectForeground', '#0f1419')
+        self.root.option_add('*selectForeground', THEME_ACCENT_INK)
         self.root.option_add('*highlightBackground', THEME_BORDER)
         self.root.option_add('*highlightColor', THEME_ACCENT)
         self.root.option_add('*TCombobox*Listbox.background', THEME_CARD)
         self.root.option_add('*TCombobox*Listbox.foreground', THEME_TEXT)
         self.root.option_add('*TCombobox*Listbox.selectBackground', THEME_ACCENT)
-        self.root.option_add('*TCombobox*Listbox.selectForeground', '#0f1419')
+        self.root.option_add('*TCombobox*Listbox.selectForeground', THEME_ACCENT_INK)
         self.root.option_add('*Menu.background', THEME_CARD)
         self.root.option_add('*Menu.foreground', THEME_TEXT)
         self.root.option_add('*Menu.activeBackground', THEME_ACCENT)
-        self.root.option_add('*Menu.activeForeground', '#0f1419')
+        self.root.option_add('*Menu.activeForeground', THEME_ACCENT_INK)
 
         style = ttk.Style()
         style.theme_use('clam')
         style.configure('TFrame', background=THEME_BG)
-        style.configure('TLabel', background=THEME_BG, foreground=THEME_TEXT, font=(THEME_FONT, 12))
-        style.configure('TButton', background=THEME_ACCENT, foreground='#ffffff', font=(THEME_FONT, 12))
+        style.configure('TLabel', background=THEME_BG, foreground=THEME_TEXT,
+                        font=(THEME_FONT, 12))
+        style.configure('TButton', background=THEME_ACCENT,
+                        foreground=THEME_ACCENT_INK, font=(THEME_FONT, 11),
+                        bordercolor=THEME_ACCENT, relief='flat')
+        style.map('TButton',
+                  background=[('pressed', THEME_ACCENT_HOVER),
+                              ('active', THEME_ACCENT_HOVER)],
+                  foreground=[('disabled', THEME_TEXT_MUTED)])
+        style.configure('Primary.TButton', background=THEME_ACCENT,
+                        foreground=THEME_ACCENT_INK,
+                        font=(THEME_FONT, 11), padding=(12, 7),
+                        borderwidth=0, focusthickness=1,
+                        focuscolor=THEME_ACCENT)
+        style.map('Primary.TButton',
+                  background=[('pressed', THEME_ACCENT_HOVER),
+                              ('active', THEME_ACCENT_HOVER)],
+                  foreground=[('disabled', THEME_TEXT_MUTED)])
+        style.configure('Secondary.TButton', background=THEME_CARD,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 11),
+                        padding=(12, 6), borderwidth=1,
+                        bordercolor=THEME_BORDER, lightcolor=THEME_CARD,
+                        darkcolor=THEME_BORDER, relief='solid',
+                        focusthickness=1, focuscolor=THEME_ACCENT)
+        style.map('Secondary.TButton',
+                  background=[('pressed', TBL_ROW_ALT),
+                              ('active', TBL_ROW_ALT)],
+                  bordercolor=[('focus', THEME_ACCENT)])
+        style.configure('Ghost.TButton', background=THEME_SIDEBAR,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 11),
+                        padding=(12, 7), borderwidth=0,
+                        focusthickness=1, focuscolor=THEME_ACCENT)
+        style.map('Ghost.TButton',
+                  background=[('pressed', TBL_ROW_ALT),
+                              ('active', TBL_ROW_ALT)])
+        style.configure('Danger.TButton', background=THEME_DANGER,
+                        foreground=THEME_ACCENT_INK,
+                        font=(THEME_FONT, 11), padding=(12, 7),
+                        borderwidth=0, focusthickness=1,
+                        focuscolor=THEME_DANGER)
+        style.map('Danger.TButton',
+                  background=[('pressed', THEME_DANGER_HOVER),
+                              ('active', THEME_DANGER_HOVER)],
+                  foreground=[('disabled', THEME_TEXT_MUTED)])
         style.configure('Card.TFrame', background=THEME_CARD)
-        style.configure('CardTitle.TLabel', background=THEME_CARD, foreground=THEME_TEXT_MUTED, font=(THEME_FONT, 10))
-        style.configure('CardValue.TLabel', background=THEME_CARD, foreground=THEME_TEXT, font=(THEME_FONT, 22, 'bold'))
-        style.configure('CardSub.TLabel', background=THEME_CARD, foreground=THEME_TEXT_MUTED, font=(THEME_FONT, 10))
-        style.configure('Treeview', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD, rowheight=26)
-        style.configure('Treeview.Heading', background=THEME_SIDEBAR, foreground=THEME_TEXT, font=(THEME_FONT, 11, 'bold'))
-        style.configure('TCombobox', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD, arrowcolor=THEME_ACCENT)
+        style.configure('CardTitle.TLabel', background=THEME_CARD,
+                        foreground=THEME_TEXT_MUTED, font=(THEME_FONT, 10))
+        style.configure('CardValue.TLabel', background=THEME_CARD,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 22, 'bold'))
+        style.configure('CardSub.TLabel', background=THEME_CARD,
+                        foreground=THEME_TEXT_MUTED, font=(THEME_FONT, 10))
+        style.configure('Treeview', background=THEME_BG, foreground=THEME_TEXT,
+                        fieldbackground=THEME_BG, rowheight=28,
+                        bordercolor=THEME_BORDER, lightcolor=THEME_BORDER,
+                        darkcolor=THEME_BORDER)
+        # A pale selection keeps per-row tag colours (warning, danger, muted)
+        # readable; a bottle fill would swallow their ink.
+        style.map('Treeview',
+                  background=[('selected', TBL_ROW_ALT)],
+                  foreground=[('selected', THEME_TEXT)])
+        style.configure('Treeview.Heading', background=THEME_SIDEBAR,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 10, 'bold'),
+                        relief='flat', bordercolor=THEME_BORDER,
+                        lightcolor=THEME_SIDEBAR, darkcolor=THEME_BORDER)
+        style.map('Treeview.Heading',
+                  background=[('active', THEME_BORDER)])
+        style.configure('TCombobox', background=THEME_CARD, foreground=THEME_TEXT,
+                        fieldbackground=THEME_CARD, arrowcolor=THEME_ACCENT,
+                        bordercolor=THEME_BORDER, lightcolor=THEME_BORDER,
+                        darkcolor=THEME_BORDER)
         style.map('TCombobox', fieldbackground=[('readonly', THEME_CARD)],
                   foreground=[('readonly', THEME_TEXT)],
                   selectbackground=[('readonly', THEME_CARD)],
-                  selectforeground=[('readonly', THEME_TEXT)])
-        style.configure('TEntry', background=THEME_CARD, foreground=THEME_TEXT, fieldbackground=THEME_CARD)
-        style.configure('TScrollbar', background=THEME_SIDEBAR, troughcolor=THEME_BG, bordercolor=THEME_BORDER)
+                  selectforeground=[('readonly', THEME_TEXT)],
+                  bordercolor=[('focus', THEME_ACCENT)])
+        style.configure('TEntry', background=THEME_CARD, foreground=THEME_TEXT,
+                        fieldbackground=THEME_CARD, insertcolor=THEME_TEXT,
+                        bordercolor=THEME_BORDER, lightcolor=THEME_BORDER,
+                        darkcolor=THEME_BORDER)
+        style.map('TEntry', bordercolor=[('focus', THEME_ACCENT)])
+        style.configure('TScrollbar', background=THEME_SIDEBAR,
+                        troughcolor=THEME_BG, bordercolor=THEME_BORDER,
+                        arrowcolor=THEME_TEXT_MUTED)
+        style.map('TScrollbar', background=[('active', THEME_BORDER)])
         style.configure('Horizontal.TProgressbar', background=THEME_ACCENT,
                         troughcolor=THEME_SIDEBAR, bordercolor=THEME_BORDER,
                         lightcolor=THEME_ACCENT, darkcolor=THEME_ACCENT)
+        style.configure('TNotebook', background=THEME_BG,
+                        borderwidth=0, tabmargins=(0, 4, 0, 0))
+        style.configure('TNotebook.Tab', background=THEME_BG,
+                        foreground=THEME_TEXT_MUTED, font=(THEME_FONT, 10),
+                        padding=(16, 7), borderwidth=0,
+                        bordercolor=THEME_BG, lightcolor=THEME_BG,
+                        darkcolor=THEME_BG)
+        style.map('TNotebook.Tab',
+                  background=[('selected', THEME_BG)],
+                  foreground=[('selected', THEME_TEXT)],
+                  font=[('selected', (THEME_FONT, 10, 'bold'))],
+                  lightcolor=[('selected', THEME_ACCENT)])
+        style.configure('TCheckbutton', background=THEME_BG,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 11),
+                        indicatorcolor=THEME_CARD,
+                        indicatorbackground=THEME_CARD)
+        style.map('TCheckbutton',
+                  background=[('active', THEME_BG)],
+                  indicatorcolor=[('selected', THEME_ACCENT),
+                                  ('active', THEME_CARD)])
+        style.configure('TRadiobutton', background=THEME_BG,
+                        foreground=THEME_TEXT, font=(THEME_FONT, 11),
+                        indicatorcolor=THEME_CARD)
+        style.map('TRadiobutton',
+                  background=[('active', THEME_BG)],
+                  indicatorcolor=[('selected', THEME_ACCENT),
+                                  ('active', THEME_CARD)])
+        style.configure('TSeparator', background=THEME_BORDER)
+        style.configure('TLabelFrame', background=THEME_BG,
+                        bordercolor=THEME_BORDER, relief='solid',
+                        labelmargins=6)
+        style.configure('TLabelFrame.Label', background=THEME_BG,
+                        foreground=THEME_TEXT_MUTED,
+                        font=(THEME_FONT, 9, 'bold'))
 
     def themed_frame(self, parent=None, bg=None, **kwargs):
         """Create a Frame with theme background."""
@@ -311,33 +416,37 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             fg=fg or THEME_TEXT, bg=bg or THEME_BG, **kwargs
         )
 
+    def styled_entry(self, parent, **kwargs):
+        """Create an Entry with a ruled paper field and visible focus ring."""
+        kwargs.setdefault('bg', THEME_CARD)
+        kwargs.setdefault('fg', THEME_TEXT)
+        kwargs.setdefault('insertbackground', THEME_TEXT)
+        kwargs.setdefault('relief', 'flat')
+        kwargs.setdefault('highlightthickness', 1)
+        kwargs.setdefault('highlightbackground', THEME_BORDER)
+        kwargs.setdefault('highlightcolor', THEME_ACCENT)
+        return tk.Entry(parent, **kwargs)
+
     def styled_button(self, parent, text, command, width=22, variant='primary', **kwargs):
-        """Create a theme-styled button matching the concept palette."""
-        if variant == 'primary':
-            bg, fg, hover = THEME_ACCENT, '#0f1419', THEME_ACCENT_HOVER
-        elif variant == 'danger':
-            bg, fg, hover = THEME_DANGER, '#ffffff', '#dc2626'
-        elif variant == 'ghost':
-            bg, fg, hover = THEME_SIDEBAR, THEME_TEXT, THEME_BORDER
-        else:
-            bg, fg, hover = THEME_CARD, THEME_TEXT, THEME_BORDER
+        """Create a Ledger button.
 
-        btn = tk.Button(
-            parent, text=text, command=command, width=width,
-            bg=bg, fg=fg, activebackground=hover, activeforeground=fg,
-            relief='flat', font=(THEME_FONT, 12), cursor='hand2',
-            padx=10, pady=6, **kwargs
-        )
-
-        def on_enter(event):
-            btn.config(bg=hover)
-
-        def on_leave(event):
-            btn.config(bg=bg)
-
-        btn.bind('<Enter>', on_enter)
-        btn.bind('<Leave>', on_leave)
-        return btn
+        ttk buttons are used because macOS ignores the background colour of a
+        classic ``tk.Button``; the clam theme honours these styles exactly.
+        """
+        style_name = {
+            'primary': 'Primary.TButton',
+            'danger': 'Danger.TButton',
+            'ghost': 'Ghost.TButton',
+            'secondary': 'Secondary.TButton',
+        }.get(variant, 'Secondary.TButton')
+        font = kwargs.pop('font', None)
+        if font:
+            # A caller-supplied font needs its own derived style.
+            derived = f"{style_name.split('.')[0]}{abs(hash(str(font))) % 10000}.TButton"
+            ttk.Style().configure(derived, font=font)
+            style_name = derived
+        return ttk.Button(parent, text=text, command=command, width=width,
+                          style=style_name, cursor='hand2', **kwargs)
 
     def tile_button(self, parent, text, command):
         """Create a clickable tile that also works from the keyboard.
@@ -360,13 +469,13 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             return 'break'
 
         def on_enter(event):
-            tile.config(bg=THEME_BORDER, fg='#ffffff')
+            tile.config(bg=TBL_ROW_ALT)
 
         def on_leave(event):
             tile.config(bg=THEME_CARD, fg=THEME_TEXT)
 
         def on_focus_in(event):
-            tile.config(bg=THEME_BORDER, highlightbackground=THEME_ACCENT)
+            tile.config(bg=TBL_ROW_ALT, highlightbackground=THEME_ACCENT)
 
         def on_focus_out(event):
             tile.config(bg=THEME_CARD, fg=THEME_TEXT,
@@ -380,9 +489,112 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         tile.bind('<FocusOut>', on_focus_out)
         return tile
 
+    def report_row(self, parent, title, description, command, badge=None):
+        """Create a compact report row with a description and an open affordance.
+
+        The whole row is the target: click, Return or Space runs the report.
+        Hover and focus share one highlight so the row behaves like a native
+        list item rather than a flat label.
+        """
+        row = tk.Frame(parent, bg=THEME_BG, cursor='hand2', takefocus=1,
+                       highlightthickness=1, highlightbackground=THEME_BG,
+                       highlightcolor=THEME_ACCENT)
+        body = tk.Frame(row, bg=THEME_BG)
+        body.pack(side='left', fill='x', expand=True, padx=(14, 8), pady=9)
+        body.grid_columnconfigure(0, minsize=280)
+        body.grid_columnconfigure(1, weight=1)
+
+        title_label = tk.Label(body, text=title, font=ui_theme.display_font(12),
+                               fg=THEME_TEXT, bg=THEME_BG, anchor='w')
+        title_label.grid(row=0, column=0, sticky='w')
+        description_label = tk.Label(body, text=description,
+                                     font=(THEME_FONT, 10),
+                                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w')
+        description_label.grid(row=0, column=1, sticky='w', padx=(16, 0))
+
+        right = tk.Frame(row, bg=THEME_BG)
+        right.pack(side='right', padx=(0, 14))
+        arrow = tk.Label(right, text='→', font=(THEME_FONT, 13),
+                         fg=THEME_WARNING, bg=THEME_BG)
+        arrow.pack(side='right')
+        badge_label = None
+        if badge:
+            badge_label = tk.Label(right, text=badge.upper(),
+                                   font=ui_theme.mono_font(8),
+                                   fg=THEME_WARNING, bg=THEME_BG, padx=6,
+                                   bd=1, relief='solid')
+            badge_label.pack(side='right', padx=(0, 10))
+
+        widgets = [row, body, title_label, description_label, right, arrow]
+        if badge_label:
+            widgets.append(badge_label)
+
+        state = {'hover': False, 'focus': False}
+        pending = [None]
+
+        def refresh():
+            active = state['hover'] or state['focus']
+            bg = TBL_ROW_ALT if active else THEME_BG
+            for widget in widgets:
+                widget.configure(bg=bg)
+            title_label.configure(fg=THEME_TEXT)
+            arrow.configure(fg=THEME_WARNING if active else THEME_TEXT_MUTED)
+
+        def set_hover(active):
+            state['hover'] = active
+            refresh()
+
+        def on_enter(event=None):
+            if pending[0] is not None:
+                row.after_cancel(pending[0])
+                pending[0] = None
+            set_hover(True)
+
+        def clear_hover():
+            pending[0] = None
+            if row.winfo_exists():
+                set_hover(False)
+
+        def on_leave(event=None):
+            # Moving onto a child fires Leave on the parent; wait one tick so
+            # the child's Enter can cancel the reset.
+            if pending[0] is not None:
+                row.after_cancel(pending[0])
+            pending[0] = row.after(40, clear_hover)
+
+        def on_focus_in(event=None):
+            state['focus'] = True
+            row.configure(highlightbackground=THEME_ACCENT)
+            refresh()
+
+        def on_focus_out(event=None):
+            state['focus'] = False
+            row.configure(highlightbackground=THEME_BG)
+            refresh()
+
+        def activate(event=None):
+            command()
+            return 'break'
+
+        def on_click(event=None):
+            command()
+            return 'break'
+
+        row.bind('<Enter>', on_enter)
+        row.bind('<Leave>', on_leave)
+        for widget in widgets:
+            widget.bind('<Enter>', on_enter, add='+')
+            widget.bind('<Leave>', on_leave, add='+')
+            widget.bind('<Button-1>', on_click)
+        row.bind('<Return>', activate)
+        row.bind('<space>', activate)
+        row.bind('<FocusIn>', on_focus_in)
+        row.bind('<FocusOut>', on_focus_out)
+        return row
+
     def create_card(self, parent, title, value, subtext='', status='normal'):
-        """Create a simplified dashboard summary card."""
-        card = tk.Frame(parent, bg=THEME_CARD, bd=1, relief='solid',
+        """Create a ruled summary block (no fill, one hairline border)."""
+        card = tk.Frame(parent, bg=THEME_BG, bd=0,
                          highlightbackground=THEME_BORDER, highlightthickness=1)
         if getattr(parent, '_cards_grid', False):
             # Grid keeps every card the same width; pack sized cards by their
@@ -394,8 +606,8 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         else:
             card.pack(side='left', fill='both', expand=True, padx=8, pady=5)
 
-        title_lbl = tk.Label(card, text=title.upper(), font=(THEME_FONT, 9, 'bold'),
-                             fg=THEME_TEXT_MUTED, bg=THEME_CARD)
+        title_lbl = tk.Label(card, text=title.upper(), font=ui_theme.mono_font(8),
+                             fg=THEME_TEXT_MUTED, bg=THEME_BG)
         title_lbl.pack(anchor='w', padx=14, pady=(12, 4))
 
         value_color = THEME_TEXT
@@ -403,18 +615,18 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             value_color = THEME_DANGER
         elif status == 'warning':
             value_color = THEME_WARNING
-        value_lbl = tk.Label(card, text=value, font=(THEME_FONT, 24, 'bold'),
-                             fg=value_color, bg=THEME_CARD)
+        value_lbl = tk.Label(card, text=value, font=ui_theme.display_font(24),
+                             fg=value_color, bg=THEME_BG)
         value_lbl.pack(anchor='w', padx=14)
 
         sub_lbl = None
         if subtext:
-            sub_lbl = tk.Label(card, text=subtext, font=(THEME_FONT, 10),
+            sub_lbl = tk.Label(card, text=subtext, font=(THEME_FONT, 9),
                                fg=THEME_TEXT_MUTED if status == 'normal' else value_color,
-                               bg=THEME_CARD)
+                               bg=THEME_BG)
             sub_lbl.pack(anchor='w', padx=14, pady=(4, 14))
         else:
-            tk.Label(card, text='', bg=THEME_CARD).pack(pady=(0, 8))
+            tk.Label(card, text='', bg=THEME_BG).pack(pady=(0, 8))
 
         # Cards share the row width equally, so on a narrower window the value
         # label (e.g. a full timestamp) used to be clipped by the card edge.
@@ -442,11 +654,12 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         return card
 
     def create_panel(self, parent, title):
-        """Create a themed panel with a title."""
-        panel = tk.Frame(parent, bg=THEME_PANEL, bd=1, relief='solid',
+        """Create a ruled panel with a mono heading."""
+        panel = tk.Frame(parent, bg=THEME_PANEL, bd=0,
                          highlightbackground=THEME_BORDER, highlightthickness=1)
         panel.pack(fill='x', padx=8, pady=8)
-        title_lbl = tk.Label(panel, text=title.upper(), font=(THEME_FONT, 11, 'bold'),
+        title_lbl = tk.Label(panel, text=title.upper(),
+                             font=ui_theme.mono_font(9, 'bold'),
                              fg=THEME_TEXT_MUTED, bg=THEME_PANEL)
         title_lbl.pack(anchor='w', padx=14, pady=(12, 8))
         return panel
@@ -503,6 +716,7 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         top.transient(parent_widget)
         top.grab_set()
         top.lift()
+        top.configure(bg=THEME_BG)
 
         # Parse current date from the variable
         current_text = date_var.get().strip()
@@ -515,11 +729,17 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         month = current_date.month
         day = current_date.day
 
-        header_frame = tk.Frame(top)
-        header_frame.pack(pady=5)
-
         month_var = tk.StringVar(value=calendar.month_name[month])
         year_var = tk.StringVar(value=str(year))
+
+        shell = tk.Frame(top, bg=THEME_BG, padx=20, pady=18)
+        shell.pack(fill='both', expand=True)
+
+        header_frame = tk.Frame(shell, bg=THEME_BG)
+        header_frame.pack(fill='x', pady=(0, 12))
+
+        days_frame = tk.Frame(shell, bg=THEME_BG)
+        days_frame.pack(fill='x')
 
         def refresh_days():
             for widget in days_frame.winfo_children():
@@ -529,8 +749,11 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             m = list(calendar.month_name).index(month_var.get())
 
             # Weekday headers
-            for i, wd in enumerate(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']):
-                tk.Label(days_frame, text=wd, font=(THEME_FONT, 10, 'bold'), width=5).grid(row=0, column=i, padx=3, pady=3)
+            for i, wd in enumerate(['Mon', 'Tue', 'Wed', 'Thu',
+                                    'Fri', 'Sat', 'Sun']):
+                tk.Label(days_frame, text=wd, font=ui_theme.mono_font(8),
+                         fg=THEME_TEXT_MUTED, bg=THEME_BG, width=5).grid(
+                    row=0, column=i, padx=2, pady=(0, 6))
 
             cal = calendar.Calendar()
             month_days = cal.monthdayscalendar(y, m)
@@ -538,12 +761,37 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             for r, week in enumerate(month_days, start=1):
                 for c, d in enumerate(week):
                     if d == 0:
-                        tk.Label(days_frame, text="", width=5).grid(row=r, column=c)
-                    else:
-                        btn = tk.Button(days_frame, text=str(d), width=5, font=(THEME_FONT, 10), command=lambda d=d: select_date(y, m, d))
-                        if d == day and y == year and m == month:
-                            btn.config(bg='#4a90d9', fg='white', font=(THEME_FONT, 10, 'bold'))
-                        btn.grid(row=r, column=c, padx=2, pady=2)
+                        tk.Label(days_frame, text="", width=5,
+                                 bg=THEME_BG).grid(row=r, column=c)
+                        continue
+                    selected = d == day and y == year and m == month
+                    cell = tk.Label(
+                        days_frame, text=str(d), width=5, pady=5,
+                        font=(THEME_FONT, 10, 'bold' if selected else 'normal'),
+                        fg=THEME_ACCENT_INK if selected else THEME_TEXT,
+                        bg=THEME_ACCENT if selected else THEME_BG,
+                        cursor='hand2', takefocus=1,
+                        highlightthickness=1,
+                        highlightbackground=THEME_BG,
+                        highlightcolor=THEME_ACCENT)
+                    cell.grid(row=r, column=c, padx=2, pady=2)
+                    cell.bind('<Button-1>',
+                              lambda e, y=y, m=m, d=d: select_date(y, m, d))
+                    cell.bind('<Return>',
+                              lambda e, y=y, m=m, d=d: select_date(y, m, d))
+                    cell.bind('<space>',
+                              lambda e, y=y, m=m, d=d: select_date(y, m, d))
+
+                    def hover_on(event, cell=cell, selected=selected):
+                        if not selected:
+                            cell.config(bg=TBL_ROW_ALT)
+
+                    def hover_off(event, cell=cell, selected=selected):
+                        if not selected:
+                            cell.config(bg=THEME_BG)
+
+                    cell.bind('<Enter>', hover_on)
+                    cell.bind('<Leave>', hover_off)
 
         def select_date(y, m, d):
             date_var.set(f"{d:02d}-{m:02d}-{y}")
@@ -571,13 +819,16 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             year_var.set(str(y))
             refresh_days()
 
-        tk.Button(header_frame, text="<", command=prev_month, width=3, font=(THEME_FONT, 12)).pack(side=tk.LEFT, padx=10)
-        tk.Label(header_frame, textvariable=month_var, font=(THEME_FONT, 12, 'bold'), width=10).pack(side=tk.LEFT)
-        tk.Label(header_frame, textvariable=year_var, font=(THEME_FONT, 12, 'bold'), width=6).pack(side=tk.LEFT)
-        tk.Button(header_frame, text=">", command=next_month, width=3, font=(THEME_FONT, 12)).pack(side=tk.LEFT, padx=10)
-
-        days_frame = tk.Frame(top)
-        days_frame.pack(pady=5)
+        self.styled_button(header_frame, "‹", prev_month, width=3,
+                           variant='secondary').pack(side='left')
+        tk.Label(header_frame, textvariable=month_var,
+                 font=ui_theme.display_font(15), fg=THEME_TEXT,
+                 bg=THEME_BG, width=10).pack(side='left', padx=(10, 2))
+        tk.Label(header_frame, textvariable=year_var,
+                 font=ui_theme.mono_font(10), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG).pack(side='left')
+        self.styled_button(header_frame, "›", next_month, width=3,
+                           variant='secondary').pack(side='right')
 
         refresh_days()
 
@@ -585,22 +836,32 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             now = datetime.now()
             select_date(now.year, now.month, now.day)
 
-        tk.Button(top, text="Today", command=select_today).pack(pady=5)
+        footer = tk.Frame(shell, bg=THEME_BG)
+        footer.pack(fill='x', pady=(14, 0))
+        tk.Frame(footer, bg=THEME_BORDER, height=1).pack(fill='x',
+                                                          pady=(0, 12))
+        self.styled_button(footer, "Today", select_today, width=12,
+                           variant='secondary').pack(side='left')
+        self.styled_button(footer, "Cancel", top.destroy, width=12,
+                           variant='secondary').pack(side='right')
 
     def _create_app_shell(self, active_tab):
-        """Build the sidebar navigation, status bar, and scrollable content area."""
+        """Build the Ledger rail, topbar, status bar and scrollable content."""
         for widget in self.shell_container.winfo_children():
             widget.destroy()
 
+        self.active_tab = active_tab
         self.shell_container.configure(bg=THEME_BG)
 
         # Status bar: routine feedback lands here instead of in a modal dialog.
         self.status_var = tk.StringVar(value="")
+        tk.Frame(self.shell_container, bg=THEME_BORDER, height=1).pack(
+            side='bottom', fill='x')
         status_bar = tk.Frame(self.shell_container, bg=THEME_SIDEBAR, height=26)
         status_bar.pack(side='bottom', fill='x')
         status_bar.pack_propagate(False)
         self.status_label = tk.Label(status_bar, textvariable=self.status_var,
-                                     font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED,
+                                     font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
                                      bg=THEME_SIDEBAR, anchor='w')
         self.status_label.pack(side='left', fill='x', padx=16)
         # A save usually navigates to another screen, which rebuilds this shell.
@@ -616,16 +877,27 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(1, weight=1)
 
-        # Left sidebar
-        sidebar = tk.Frame(body, bg=THEME_SIDEBAR, width=216)
-        sidebar.grid(row=0, column=0, sticky='ns')
-        sidebar.grid_propagate(False)
+        # Left rail ---------------------------------------------------------
+        rail_outer = tk.Frame(body, bg=THEME_BORDER, width=207)
+        rail_outer.grid(row=0, column=0, sticky='ns')
+        rail_outer.grid_propagate(False)
+        sidebar = tk.Frame(rail_outer, bg=THEME_SIDEBAR)
+        sidebar.pack(fill='both', expand=True, padx=(0, 1))
+        self.sidebar = sidebar
 
         brand = tk.Frame(sidebar, bg=THEME_SIDEBAR)
-        brand.pack(fill='x', padx=18, pady=(20, 14))
-        tk.Label(brand, text="PRESTONFIELD GC", font=(THEME_FONT, 12, 'bold'),
-                 fg=THEME_ACCENT, bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
-        tk.Label(brand, text="Bar Stock Management", font=(THEME_FONT, 9),
+        brand.pack(fill='x', padx=18, pady=(22, 16))
+        crest = tk.Frame(brand, bg=THEME_SIDEBAR, width=40, height=40,
+                         highlightbackground=THEME_TEXT, highlightthickness=1)
+        crest.pack(side='left')
+        crest.pack_propagate(False)
+        tk.Label(crest, text="PGC", font=ui_theme.display_font(13),
+                 fg=THEME_TEXT, bg=THEME_SIDEBAR).pack(expand=True)
+        names = tk.Frame(brand, bg=THEME_SIDEBAR)
+        names.pack(side='left', padx=(10, 0))
+        tk.Label(names, text="Prestonfield", font=ui_theme.display_font(14),
+                 fg=THEME_TEXT, bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
+        tk.Label(names, text="Golf Club", font=(THEME_FONT, 9),
                  fg=THEME_TEXT_MUTED, bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
 
         groups = [
@@ -647,37 +919,86 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             ]),
         ]
         for heading, items in groups:
-            tk.Label(sidebar, text=heading, font=(THEME_FONT, 8, 'bold'),
+            tk.Label(sidebar, text=heading, font=ui_theme.mono_font(8),
                      fg=THEME_TEXT_MUTED, bg=THEME_SIDEBAR, anchor='w').pack(
-                fill='x', padx=18, pady=(14, 4))
+                fill='x', padx=18, pady=(16, 4))
             for text, command in items:
                 self._nav_button(sidebar, text, command, active=(text == active_tab))
 
-        tk.Label(sidebar, text=f"v{APP_VERSION}", font=(THEME_FONT, 8),
-                 fg=THEME_TEXT_MUTED, bg=THEME_SIDEBAR, anchor='w').pack(
-            side='bottom', fill='x', padx=18, pady=12)
+        footer = tk.Frame(sidebar, bg=THEME_SIDEBAR)
+        footer.pack(side='bottom', fill='x', padx=18, pady=14)
+        exit_link = tk.Label(footer, text="Save & exit",
+                             font=(THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+                             bg=THEME_SIDEBAR, anchor='w', cursor='hand2',
+                             takefocus=1)
+        exit_link.pack(fill='x', pady=(0, 8))
+        exit_link.bind('<Button-1>', lambda e: (self.on_exit(), 'break')[1])
+        exit_link.bind('<Return>', lambda e: (self.on_exit(), 'break')[1])
+        tk.Label(footer, text=f"Stock control  ·  {APP_VERSION}",
+                 font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                 bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
 
-        # Main column: page header + scrollable content
+        # Main column -------------------------------------------------------
         main = tk.Frame(body, bg=THEME_BG)
         main.grid(row=0, column=1, sticky='nsew')
 
-        topbar = tk.Frame(main, bg=THEME_BG, height=56)
-        topbar.pack(fill='x', padx=20, pady=(16, 0))
-        topbar.pack_propagate(False)
+        topbar = tk.Frame(main, bg=THEME_BG)
+        topbar.pack(fill='x', padx=28, pady=(22, 0))
 
         title_frame = tk.Frame(topbar, bg=THEME_BG)
         title_frame.pack(side='left', fill='y')
-        tk.Label(title_frame, text=active_tab, font=(THEME_FONT, 18, 'bold'),
-                 fg=THEME_TEXT, bg=THEME_BG).pack(anchor='w')
-        tk.Label(title_frame, text="Bar Stock Management", font=(THEME_FONT, 10),
-                 fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(anchor='w')
+        now = datetime.now()
+        tk.Label(title_frame, text=now.strftime('%A %-d %B').upper(),
+                 font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 4))
+        if active_tab == "Dashboard":
+            hour = now.hour
+            part = "morning" if hour < 12 else ("afternoon" if hour < 18 else "evening")
+            heading = f"Good {part}, Chris"
+            subtitle = "Bar stock at Prestonfield Golf Club"
+        else:
+            heading = active_tab
+            subtitle = {
+                "Deliveries": "Record what arrived and what it cost",
+                "Stocktake": "Count the bar against the system",
+                "Sales Upload": "Bring in the EPOS sales file",
+                "Reports": "Fourteen views, one skin",
+                "Transactions": "Every movement, newest first",
+                "Delivery History": "What came in, and when",
+                "Open Tabs": "Tabs still running at the bar",
+                "More Actions": "Everything else, grouped",
+                "Manage Stock": "Add, edit, retire and restore products",
+                "Wastage": "Record broken, out-of-date or overpoured stock",
+                "Complimentary": "Drinks given away, with a reason",
+                "Supplier Return": "Send damaged or credited stock back",
+                "Single Sale": "Record one sale by hand",
+                "New Tab": "Start a tab and add items",
+                "Settings": "System preferences and data tools",
+            }.get(active_tab, "Bar Stock Management")
+        self._topbar_title = tk.Label(
+            title_frame, text=heading, font=ui_theme.display_font(20),
+            fg=THEME_TEXT, bg=THEME_BG)
+        self._topbar_title.pack(anchor='w')
+        self._topbar_subtitle = tk.Label(
+            title_frame, text=subtitle, font=(THEME_FONT, 9),
+            fg=THEME_TEXT_MUTED, bg=THEME_BG)
+        self._topbar_subtitle.pack(anchor='w', pady=(2, 0))
 
-        self.styled_button(topbar, "+ Add Delivery", self.show_deliveries,
-                           width=16, variant='primary').pack(side='right', pady=8)
+        actions = tk.Frame(topbar, bg=THEME_BG)
+        actions.pack(side='right', pady=(2, 0))
+        self.styled_button(actions, "New delivery", self.show_deliveries,
+                           width=12, variant='primary').pack(side='right')
+        if active_tab == "Dashboard":
+            self.styled_button(actions, "Upload sales", self.show_sales_upload,
+                               width=12, variant='secondary').pack(
+                side='right', padx=(0, 8))
+
+        tk.Frame(main, bg=THEME_BORDER, height=1).pack(
+            fill='x', padx=28, pady=(16, 0))
 
         # Scrollable content area
         content_outer = tk.Frame(main, bg=THEME_BG)
-        content_outer.pack(fill='both', expand=True, padx=20, pady=(16, 20))
+        content_outer.pack(fill='both', expand=True, padx=28, pady=(20, 24))
         content_outer.grid_rowconfigure(0, weight=1)
         content_outer.grid_columnconfigure(0, weight=1)
 
@@ -723,8 +1044,24 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         # Store helper so tab-specific scrollable widgets can reuse the same scrolling logic
         self._shell_canvas = canvas
 
+    def _style_chart(self, fig, ax):
+        """Paint a matplotlib chart in the Ledger palette."""
+        fig.patch.set_facecolor(THEME_BG)
+        ax.set_facecolor(THEME_BG)
+        ax.tick_params(colors=THEME_TEXT_MUTED, labelsize=9, length=0)
+        ax.xaxis.label.set_color(THEME_TEXT)
+        ax.yaxis.label.set_color(THEME_TEXT)
+        ax.title.set_color(THEME_TEXT)
+        # Rules, not boxes: keep the baseline and left scale, drop the frame.
+        for name, spine in ax.spines.items():
+            spine.set_color(THEME_BORDER)
+            spine.set_visible(name in ('left', 'bottom'))
+        ax.grid(True, axis='y', color=THEME_BORDER, linewidth=0.6, alpha=0.9)
+        ax.set_axisbelow(True)
+
     def _bind_treeview_mousewheel(self, tree):
         """Make a Treeview scroll with the mouse wheel on macOS and Linux."""
+
         def _tree_wheel(event):
             delta = event.delta
             if delta == 0:
@@ -741,30 +1078,44 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         tree.bind('<Button-5>', lambda e: (tree.yview_scroll(1, 'units'), 'break')[-1])
 
     def _nav_button(self, parent, text, command, active=False):
-        """Create a sidebar navigation button.
+        """Create a Ledger rail item.
 
-        Built on a Label for the flat look, but focusable and operable from the
-        keyboard (Tab to it, Enter/Space to activate) unlike the old tab strip.
+        The active item is ink and bold with a 2px bottle underline rather
+        than a filled block.  Built on a Label for the flat look, but
+        focusable and operable from the keyboard.
         """
-        bg = THEME_ACCENT if active else THEME_SIDEBAR
-        fg = '#0f1419' if active else THEME_TEXT
-        hover = THEME_ACCENT if active else THEME_CARD
+        wrap = tk.Frame(parent, bg=THEME_SIDEBAR)
+        wrap.pack(fill='x', padx=10, pady=1)
 
-        btn = tk.Label(parent, text=text, font=(THEME_FONT, 11, 'bold' if active else 'normal'),
-                       bg=bg, fg=fg, cursor='hand2', anchor='w', padx=14, pady=8,
+        btn = tk.Label(wrap, text=text,
+                       font=(THEME_FONT, 11, 'bold' if active else 'normal'),
+                       bg=THEME_SIDEBAR, fg=THEME_TEXT if active else THEME_TEXT_MUTED,
+                       cursor='hand2', anchor='w', padx=8, pady=6,
                        takefocus=1, highlightthickness=1,
-                       highlightbackground=THEME_SIDEBAR, highlightcolor=THEME_ACCENT)
-        btn.pack(fill='x', padx=10, pady=1)
+                       highlightbackground=THEME_SIDEBAR,
+                       highlightcolor=THEME_ACCENT)
+        btn.pack(fill='x')
+        underline = tk.Frame(wrap, bg=THEME_ACCENT if active else THEME_SIDEBAR,
+                             height=2)
+        underline.pack(fill='x', pady=(2, 0))
 
         def activate(event=None):
             command()
             return 'break'
 
+        def on_enter(event=None):
+            if not active:
+                btn.config(bg=TBL_ROW_ALT)
+
+        def on_leave(event=None):
+            if not active:
+                btn.config(bg=THEME_SIDEBAR)
+
         btn.bind('<Button-1>', activate)
         btn.bind('<Return>', activate)
         btn.bind('<space>', activate)
-        btn.bind('<Enter>', lambda e: btn.config(bg=hover))
-        btn.bind('<Leave>', lambda e: btn.config(bg=bg))
+        btn.bind('<Enter>', on_enter)
+        btn.bind('<Leave>', on_leave)
         btn.bind('<FocusIn>', lambda e: btn.config(highlightbackground=THEME_ACCENT))
         btn.bind('<FocusOut>', lambda e: btn.config(highlightbackground=THEME_SIDEBAR))
         return btn
@@ -974,36 +1325,28 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
 
     def _section_title(self, parent, text):
         """Create a muted uppercase section title."""
-        return tk.Label(parent, text=text.upper(), font=(THEME_FONT, 9, 'bold'),
+        return tk.Label(parent, text=text.upper(), font=ui_theme.mono_font(9),
                         fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w')
 
     def _pill(self, parent, text, variant='ok'):
-        """Create a status pill."""
-        colors = {
-            'ok': ('rgba(90,158,110,0.15)', THEME_SUCCESS),
-            'warn': ('rgba(201,154,70,0.15)', THEME_WARNING),
-            'danger': ('rgba(201,93,93,0.15)', THEME_DANGER),
-        }
-        bg, fg = colors.get(variant, colors['ok'])
-        # Tkinter doesn't support rgba, so use a close solid colour
-        if variant == 'ok':
-            bg = '#1e3a28'
-        elif variant == 'warn':
-            bg = '#3d2e1f'
-        else:
-            bg = '#3d2020'
-        pill = tk.Label(parent, text=text, font=(THEME_FONT, 8, 'bold'),
-                        fg=fg, bg=bg, padx=8, pady=2)
-        return pill
+        """Create an outlined status tag (no filled pill)."""
+        fg = {
+            'ok': THEME_SUCCESS,
+            'warn': THEME_WARNING,
+            'danger': THEME_DANGER,
+        }.get(variant, THEME_SUCCESS)
+        return tk.Label(parent, text=text.upper(), font=ui_theme.mono_font(8),
+                        fg=fg, bg=THEME_BG, padx=7, pady=2,
+                        bd=1, relief='solid')
 
     def _card(self, parent, title=None):
-        """Create a concept-style card frame."""
-        card = tk.Frame(parent, bg=THEME_CARD, bd=1, relief='solid',
+        """Create a ruled paper block with a mono section label."""
+        card = tk.Frame(parent, bg=THEME_CARD, bd=0,
                         highlightbackground=THEME_BORDER, highlightthickness=1)
         if title:
-            tk.Label(card, text=title, font=(THEME_FONT, 12, 'bold'),
-                     fg=THEME_ACCENT, bg=THEME_CARD, anchor='w').pack(
-                fill='x', padx=14, pady=(12, 8))
+            tk.Label(card, text=title.upper(), font=ui_theme.mono_font(9),
+                     fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(
+                fill='x', padx=14, pady=(12, 6))
         return card
 
     def _form_row(self, parent):
@@ -1035,93 +1378,117 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         return tree
 
     def _apply_legacy_theme(self, parent=None):
-        """Recolour a legacy screen so it matches the dark copper/navy concept.
+        """Normalise leftover legacy colours to the Ledger palette.
 
-        Preserves status colours (red/green/amber) and converts the common
-        light-grey/white legacy backgrounds to the dark theme palette.
+        This is a light-theme normaliser, not a restyler: it maps old white,
+        grey and dark-mode literals but leaves widgets already painted with
+        Ledger tokens alone.  Buttons built before the shared helper are given
+        the ruled paper treatment rather than being forced to accent green.
         """
         if parent is None:
             if not hasattr(self, 'main_menu') or not self.main_menu.winfo_exists():
                 return
             parent = self.main_menu
 
-        DARK_BG_MAP = {
-            '#ffffff': THEME_BG, 'white': THEME_BG,
-            '#f0f0f0': THEME_CARD, '#e0e0e0': THEME_CARD,
-            '#d0d0d0': THEME_PANEL,
-            '#333333': THEME_PANEL, '#2c2c2c': THEME_PANEL,
+        BG_MAP = {
+            '#ffffff': THEME_CARD, 'white': THEME_CARD,
+            '#fcfbf6': THEME_CARD,
+            '#f0f0f0': THEME_SIDEBAR, '#ececec': THEME_SIDEBAR,
+            '#e0e0e0': THEME_SIDEBAR, '#f5f5f5': THEME_SIDEBAR,
+            '#d0d0d0': THEME_BORDER,
+            '#333333': THEME_BG, '#2c2c2c': THEME_BG,
+            '#1e1e1e': THEME_BG, '#262626': THEME_BG,
+            '#0f1419': THEME_BG, '#1a2028': THEME_SIDEBAR,
+            '#232b36': THEME_CARD, '#2f3844': THEME_BORDER,
             'systemwindowbackgroundcolor': THEME_BG,
-            'systemWindowBackgroundColor': THEME_BG,
+            'systemdialogbackgroundcolor': THEME_BG,
+            'systembuttonface': THEME_CARD,
             '': THEME_BG,
         }
         FG_MAP = {
             'black': THEME_TEXT, '#000000': THEME_TEXT,
             'white': THEME_TEXT, '#ffffff': THEME_TEXT,
             'systemtextcolor': THEME_TEXT,
-            'gray': THEME_TEXT_MUTED, 'grey': THEME_TEXT_MUTED, '#808080': THEME_TEXT_MUTED,
-            'red': THEME_DANGER, '#ff0000': THEME_DANGER, '#ff4444': THEME_DANGER,
-            'green': THEME_SUCCESS, '#00ff00': THEME_SUCCESS, '#44cc44': THEME_SUCCESS,
+            'gray': THEME_TEXT_MUTED, 'grey': THEME_TEXT_MUTED,
+            '#808080': THEME_TEXT_MUTED,
+            '#aab4bf': THEME_TEXT_MUTED,
+            '#f5f2ec': THEME_TEXT,
+            '#c89f5e': THEME_TEXT, '#e8b86d': THEME_TEXT,
+            'red': THEME_DANGER, '#ff0000': THEME_DANGER,
+            '#ff4444': THEME_DANGER,
+            'green': THEME_SUCCESS, '#00ff00': THEME_SUCCESS,
+            '#44cc44': THEME_SUCCESS,
             '#cc6600': THEME_WARNING,
         }
+
+        def _map_bg(widget):
+            try:
+                bg = str(widget.cget('bg')).lower()
+            except Exception:
+                return
+            if bg in BG_MAP:
+                try:
+                    widget.configure(bg=BG_MAP[bg])
+                except Exception:
+                    pass
+
+        def _map_fg(widget):
+            try:
+                fg = str(widget.cget('fg')).lower()
+            except Exception:
+                return
+            if fg in FG_MAP:
+                try:
+                    widget.configure(fg=FG_MAP[fg])
+                except Exception:
+                    pass
 
         def _theme_widget(w, depth=0):
             if depth > 30:
                 return
             try:
                 wtype = w.winfo_class()
-                if wtype == 'Frame':
-                    bg = w.cget('bg')
-                    if bg.lower() in DARK_BG_MAP:
-                        w.configure(bg=DARK_BG_MAP[bg.lower()])
-                    else:
-                        # Fallback: any light-ish default becomes page bg
-                        try:
-                            w.configure(bg=THEME_BG)
-                        except Exception:
-                            pass
+                if wtype in ('Frame', 'Toplevel', 'Canvas', 'Listbox'):
+                    _map_bg(w)
                 elif wtype == 'LabelFrame':
-                    bg = w.cget('bg')
-                    if bg.lower() in DARK_BG_MAP:
-                        w.configure(bg=DARK_BG_MAP[bg.lower()])
-                    else:
-                        try:
-                            w.configure(bg=THEME_CARD)
-                        except Exception:
-                            pass
+                    _map_bg(w)
+                    _map_fg(w)
+                elif wtype == 'Label':
+                    _map_bg(w)
+                    _map_fg(w)
+                elif wtype == 'Button':
+                    bg = str(w.cget('bg')).lower()
+                    if bg in BG_MAP:
+                        w.configure(
+                            bg=THEME_CARD, fg=THEME_TEXT,
+                            activebackground=TBL_ROW_ALT,
+                            activeforeground=THEME_TEXT,
+                            relief='solid', bd=1,
+                            highlightthickness=1,
+                            highlightbackground=THEME_BORDER,
+                        )
+                elif wtype == 'Entry':
+                    bg = str(w.cget('bg')).lower()
+                    if bg in BG_MAP:
+                        w.configure(bg=THEME_CARD)
+                    w.configure(fg=THEME_TEXT, insertbackground=THEME_TEXT,
+                                highlightbackground=THEME_BORDER,
+                                highlightcolor=THEME_ACCENT)
+                elif wtype == 'Text':
+                    bg = str(w.cget('bg')).lower()
+                    if bg in BG_MAP:
+                        w.configure(bg=THEME_CARD)
+                    w.configure(fg=THEME_TEXT, insertbackground=THEME_TEXT)
+                elif wtype in ('Checkbutton', 'Radiobutton'):
+                    _map_bg(w)
+                    _map_fg(w)
                     try:
-                        w.configure(fg=THEME_ACCENT)
+                        w.configure(activebackground=THEME_BG,
+                                    selectcolor=THEME_CARD,
+                                    highlightbackground=THEME_BORDER,
+                                    highlightcolor=THEME_ACCENT)
                     except Exception:
                         pass
-                elif wtype == 'Label':
-                    bg = w.cget('bg')
-                    if bg.lower() in DARK_BG_MAP:
-                        w.configure(bg=DARK_BG_MAP[bg.lower()])
-                    elif bg.lower() in ('systemwindowbackgroundcolor', 'systemdialogbackgroundcolor'):
-                        w.configure(bg=THEME_BG)
-                    fg = w.cget('fg')
-                    if fg.lower() in FG_MAP:
-                        w.configure(fg=FG_MAP[fg.lower()])
-                    elif fg.lower() in ('systemtextcolor', 'black'):
-                        w.configure(fg=THEME_TEXT)
-                elif wtype == 'Button':
-                    w.configure(
-                        bg=THEME_ACCENT, fg='#0f1419',
-                        activebackground=THEME_ACCENT_HOVER, activeforeground='#0f1419',
-                        relief='flat', font=(THEME_FONT, 11),
-                        padx=10, pady=6,
-                        highlightbackground=THEME_ACCENT, highlightcolor=THEME_ACCENT
-                    )
-                elif wtype == 'Entry':
-                    w.configure(
-                        bg=THEME_CARD, fg=THEME_TEXT,
-                        insertbackground=THEME_TEXT, highlightbackground=THEME_BORDER
-                    )
-                elif wtype == 'Canvas':
-                    bg = w.cget('bg')
-                    if bg.lower() in DARK_BG_MAP:
-                        w.configure(bg=DARK_BG_MAP[bg.lower()])
-                    elif bg.lower() in ('systemwindowbackgroundcolor',):
-                        w.configure(bg=THEME_BG)
             except Exception:
                 pass
 
@@ -1147,90 +1514,154 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
 
     def show_more(self):
         """Show secondary actions that don't fit the primary tabs."""
-        self._create_app_shell('More')
+        self._create_app_shell('More Actions')
         self._render_more_menu()
 
     def _render_more_menu(self):
-        """Render the grid of secondary actions."""
-        header = self.themed_frame(self.main_menu)
-        header.pack(fill='x', pady=(0, 20))
-        self.themed_label(header, "More actions",
-                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
-
-        actions = [
-            ("Manage Stock", self.manage_initial_stock),
-            ("Add Wastage", self.add_wastage),
-            ("Add Complimentary", self.add_complimentary),
-            ("Supplier Return", self.add_supplier_return),
-            ("Open Tabs", self.show_open_tabs),
-            ("Line Clean", self.line_clean),
-            ("Transactions", self.show_transactions),
-            ("Delivery History", self.show_delivery_history),
-            ("Settings", self.open_settings),
-            ("Restore Backup", self.restore_from_backup_menu),
-            ("Refresh CSV Mirrors", self.refresh_csv_mirrors),
-            ("Init from Items.csv", self.initialize_stock_from_items_csv),
-            ("Reset System", self.reset_system),
-            ("Exit System", self.on_exit),
+        """Render secondary actions as the same ruled list used by Reports."""
+        groups = [
+            ("Stock", [
+                ("Manage Stock", "Add, edit, retire and restore products.",
+                 self.manage_initial_stock),
+                ("Add Wastage", "Record broken, out-of-date or overpoured stock.",
+                 self.add_wastage),
+                ("Add Complimentary", "Record drinks given away, with a reason.",
+                 self.add_complimentary),
+                ("Supplier Return", "Send damaged or credited stock back.",
+                 self.add_supplier_return),
+                ("Line Clean", "Record line-cleaning usage against a product.",
+                 self.line_clean),
+            ]),
+            ("Records", [
+                ("Transactions", "Every movement, newest first.",
+                 self.show_transactions),
+                ("Delivery History", "Deliveries and supplier returns by date.",
+                 self.show_delivery_history),
+                ("Open Tabs", "Tabs still running at the bar.",
+                 self.show_open_tabs),
+            ]),
+            ("System", [
+                ("Settings", "Member discount and system preferences.",
+                 self.open_settings),
+                ("Restore Backup", "Roll the database back to an earlier copy.",
+                 self.restore_from_backup_menu),
+                ("Refresh CSV Mirrors", "Rewrite stock.csv and the transaction log.",
+                 self.refresh_csv_mirrors),
+                ("Init from Items.csv", "Import the item list on a fresh system.",
+                 self.initialize_stock_from_items_csv),
+                ("Reset System", "Clear all data and start again.",
+                 self.reset_system),
+                ("Exit System", "Close BarStock safely.",
+                 self.on_exit),
+            ]),
         ]
 
-        grid = self.themed_frame(self.main_menu)
-        grid.pack(fill='x')
-        for i in range(3):
-            grid.grid_columnconfigure(i, weight=1)
+        for heading, items in groups:
+            head = self.themed_frame(self.main_menu)
+            head.pack(fill='x', pady=(16, 2))
+            self.themed_label(head, heading.upper(),
+                              font=ui_theme.mono_font(9),
+                              fg=THEME_TEXT_MUTED, anchor='w').pack(side='left')
+            self.themed_label(head, f"{len(items)} actions",
+                              font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                              anchor='e').pack(side='right')
+            tk.Frame(self.main_menu, bg=THEME_TEXT, height=1).pack(fill='x')
 
-        for i, (text, command) in enumerate(actions):
-            tile = self.tile_button(grid, text, command)
-            tile.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky='ew')
+            for index, (title, description, command) in enumerate(items):
+                row = self.report_row(self.main_menu, title, description, command)
+                row.pack(fill='x')
+                if index < len(items) - 1:
+                    tk.Frame(self.main_menu, bg=THEME_BORDER,
+                             height=1).pack(fill='x')
 
         hint = self.themed_label(
             self.main_menu,
             "Shortcuts:  ⌘/Ctrl + 1–9 navigate  ·  ⌘/Ctrl + N new delivery  ·  "
             "⌘/Ctrl + F find stock  ·  Esc closes a dialog",
-            font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, justify='left')
-        hint.pack(fill='x', pady=(18, 0))
+            font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED, justify='left')
+        hint.pack(fill='x', pady=(22, 0))
 
     def _render_reports_hub(self):
         """Render the single reports hub, listing every report the app offers."""
-        header = self.themed_frame(self.main_menu)
-        header.pack(fill='x', pady=(0, 12))
-        self.themed_label(header, "Reports",
-                          font=(THEME_FONT, 24, 'bold')).pack(side='left')
+        intro = self.themed_label(
+            self.main_menu,
+            "Reports open in this window. PDF reports are saved to your "
+            "Downloads folder.",
+            font=(THEME_FONT, 10), fg=THEME_TEXT_MUTED,
+            justify='left', anchor='w')
+        intro.pack(fill='x', pady=(0, 4))
 
         groups = [
             ("Summary", [
-                ("📄 Download Comprehensive PDF Report", self.download_comprehensive_report),
-                ("Gross Profit Report", self.generate_gp_report),
-                ("Division Report", self.generate_division_report),
-                ("Period Comparison Report", self.generate_comparison_report),
+                ("Comprehensive PDF Report",
+                 "Stock, sales, wastage, draught yield and variance in one PDF.",
+                 self.download_comprehensive_report, "PDF"),
+                ("Gross Profit Report",
+                 "Margin by product, with member and non-member splits.",
+                 self.generate_gp_report, None),
+                ("Division Report",
+                 "Sales and gross profit by bar division.",
+                 self.generate_division_report, None),
+                ("Period Comparison Report",
+                 "Two date ranges side by side.",
+                 self.generate_comparison_report, None),
             ]),
             ("Stock & orders", [
-                ("Reorder Suggestions", self.generate_reorder_report),
-                ("Stock Order Sheet", self.generate_stock_order_sheet),
-                ("Surplus/Variance Report", self.generate_surplus_report),
-                ("Reconciliation Report", self.generate_reconciliation_report),
+                ("Reorder Suggestions",
+                 "Items below reorder level, with suggested quantities.",
+                 self.generate_reorder_report, None),
+                ("Stock Order Sheet",
+                 "Printable order sheet grouped by supplier.",
+                 self.generate_stock_order_sheet, "PDF"),
+                ("Surplus & Variance Report",
+                 "Running surplus or shortfall by product.",
+                 self.generate_surplus_report, None),
+                ("Reconciliation Report",
+                 "Stock, conversion and Items.csv checks in one place.",
+                 self.generate_reconciliation_report, None),
             ]),
             ("Sales & margin", [
-                ("Sales Trends & Analytics", self.generate_sales_analytics),
-                ("Draught Yield Report", self.generate_draught_yield_report),
-                ("Price History Report", self.generate_price_history_report),
+                ("Sales Trends & Analytics",
+                 "Category sales, fast and slow movers, timeline and margins.",
+                 self.generate_sales_analytics, None),
+                ("Draught Yield Report",
+                 "Pints poured against kegs opened, by product.",
+                 self.generate_draught_yield_report, None),
+                ("Price History Report",
+                 "Delivery cost changes over time, by product.",
+                 self.generate_price_history_report, None),
             ]),
             ("Audit", [
-                ("Stocktake Variance Report", self.generate_stocktake_report),
-                ("Transaction Log", self.show_transactions),
-                ("Delivery History", self.show_delivery_history),
+                ("Stocktake Variance Report",
+                 "Counted against expected stock, for each stocktake.",
+                 self.generate_stocktake_report, None),
+                ("Transaction Log",
+                 "Every stock movement, filterable by date and type.",
+                 self.show_transactions, None),
+                ("Delivery History",
+                 "Deliveries and supplier returns by date.",
+                 self.show_delivery_history, None),
             ]),
         ]
 
         for heading, items in groups:
-            self._section_title(self.main_menu, heading).pack(fill='x', pady=(14, 6))
-            grid = self.themed_frame(self.main_menu)
-            grid.pack(fill='x')
-            grid.grid_columnconfigure(0, weight=1)
-            grid.grid_columnconfigure(1, weight=1)
-            for i, (text, command) in enumerate(items):
-                tile = self.tile_button(grid, text, command)
-                tile.grid(row=i // 2, column=i % 2, sticky='ew', padx=6, pady=4)
+            head = self.themed_frame(self.main_menu)
+            head.pack(fill='x', pady=(16, 2))
+            self.themed_label(head, heading.upper(),
+                              font=ui_theme.mono_font(9),
+                              fg=THEME_TEXT_MUTED, anchor='w').pack(side='left')
+            self.themed_label(head, f"{len(items)} reports",
+                              font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                              anchor='e').pack(side='right')
+            tk.Frame(self.main_menu, bg=THEME_TEXT, height=1).pack(fill='x')
+
+            for index, (title, description, command, badge) in enumerate(items):
+                row = self.report_row(self.main_menu, title, description,
+                                      command, badge)
+                row.pack(fill='x')
+                if index < len(items) - 1:
+                    tk.Frame(self.main_menu, bg=THEME_BORDER,
+                             height=1).pack(fill='x')
 
 
 
@@ -1254,6 +1685,22 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         """Remove all widgets from the main menu."""
         for widget in self.main_menu.winfo_children():
             widget.destroy()
+
+    def _set_page_heading(self, title, subtitle=None):
+        """Retitle the topbar without rebuilding the shell.
+
+        Report screens open inside the Reports shell, so the page heading is
+        the report's name rather than a second, centred title in the content.
+        """
+        title_label = getattr(self, '_topbar_title', None)
+        if title_label is None:
+            return
+        try:
+            title_label.config(text=title)
+            if subtitle is not None:
+                self._topbar_subtitle.config(text=subtitle)
+        except tk.TclError:
+            pass
 
     def refresh_data(self):
         """Reload data from SQLite and reset the save baselines."""
@@ -1297,8 +1744,8 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         return ok
 
     def format_currency(self, value):
-        """Format value as currency."""
-        return f"£{value:.2f}"
+        """Format value as currency, with thousands separators for reports."""
+        return f"£{value:,.2f}"
 
     def get_filtered_log(self, title="Select Date Range"):
         """Show date range dialog and return filtered log DataFrame.
@@ -1526,19 +1973,31 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         y = (top.winfo_screenheight() - top.winfo_height()) // 2
         top.geometry(f'+{x}+{y}')
 
-        main_frame = tk.Frame(top, padx=20, pady=20)
+        top.configure(bg=THEME_BG)
+        main_frame = tk.Frame(top, padx=24, pady=20, bg=THEME_BG)
         main_frame.pack(fill='both', expand=True)
 
-        tk.Label(main_frame, text="Settings", font=(THEME_FONT, 14, 'bold')).pack(pady=(0, 15))
+        tk.Label(main_frame, text="Settings", font=ui_theme.display_font(18),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x')
+        tk.Label(main_frame, text="Member discount and system preferences.",
+                 font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w').pack(fill='x', pady=(2, 16))
+        tk.Frame(main_frame, bg=THEME_BORDER, height=1).pack(fill='x')
 
         # Member discount
-        discount_frame = tk.Frame(main_frame)
-        discount_frame.pack(fill='x', pady=5)
-        tk.Label(discount_frame, text="Member Discount %:").pack(side='left')
+        discount_frame = tk.Frame(main_frame, bg=THEME_BG)
+        discount_frame.pack(fill='x', pady=(16, 4))
+        tk.Label(discount_frame, text="Member discount %",
+                 font=(THEME_FONT, 10, 'bold'), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG).pack(anchor='w')
+        entry_row = tk.Frame(main_frame, bg=THEME_BG)
+        entry_row.pack(fill='x')
         discount_var = tk.StringVar(value=str(int(self.get_member_discount_pct())))
-        discount_entry = tk.Entry(discount_frame, textvariable=discount_var, width=10)
-        discount_entry.pack(side='left', padx=5)
-        tk.Label(discount_frame, text="(e.g., 10 for 10% off)").pack(side='left')
+        discount_entry = ttk.Entry(entry_row, textvariable=discount_var,
+                                   width=10, font=(THEME_FONT, 12))
+        discount_entry.pack(side='left', ipady=3)
+        tk.Label(entry_row, text="e.g. 10 for 10% off", font=(THEME_FONT, 9),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(side='left', padx=(10, 0))
 
         def save_settings():
             try:
@@ -1554,13 +2013,15 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             except ValueError:
                 messagebox.showerror("Error", "Discount must be a valid number.")
 
-        btn_frame = tk.Frame(main_frame)
-        btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="Save", command=save_settings, width=15).pack(side='left', padx=10)
-        tk.Button(btn_frame, text="Cancel", command=top.destroy, width=15).pack(side='left', padx=10)
+        btn_frame = tk.Frame(main_frame, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(24, 0))
+        self.styled_button(btn_frame, "Save", save_settings, width=15,
+                           variant='primary').pack(side='right')
+        self.styled_button(btn_frame, "Cancel", top.destroy, width=15,
+                           variant='secondary').pack(side='right', padx=(0, 8))
 
         top.update_idletasks()
-        self._apply_legacy_theme()
+        self._apply_legacy_theme(top)
 
     def reset_system(self):
         """Reset all system data while preserving stock items.
@@ -1628,17 +2089,26 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             dialog.title("Restore from Backup")
             dialog.geometry("600x400")
             self._fit_dialog(dialog, 600, 400)
+            dialog.configure(bg=THEME_BG)
 
-            tk.Label(dialog, text="Select a backup to restore:", font=(THEME_FONT, 12, 'bold')).pack(pady=10)
+            tk.Label(dialog, text="Restore from backup",
+                     font=ui_theme.display_font(18), fg=THEME_TEXT,
+                     bg=THEME_BG, anchor='w').pack(fill='x', padx=24,
+                                                   pady=(20, 0))
+            tk.Label(dialog,
+                     text="Choose a copy to roll back to. The current database is kept first.",
+                     font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                     anchor='w').pack(fill='x', padx=24, pady=(2, 14))
+            tk.Frame(dialog, bg=THEME_BORDER, height=1).pack(fill='x', padx=24)
 
             tree = ttk.Treeview(dialog, columns=('timestamp', 'name', 'size'), show='headings', height=10)
             tree.heading('timestamp', text='Date/Time')
             tree.heading('name', text='Backup Name')
             tree.heading('size', text='Size (KB)')
-            tree.column('timestamp', width=150)
-            tree.column('name', width=300)
-            tree.column('size', width=80, anchor='center')
-            tree.pack(fill='both', expand=True, padx=10, pady=5)
+            tree.column('timestamp', width=170, anchor='w')
+            tree.column('name', width=300, anchor='w')
+            tree.column('size', width=90, anchor='e')
+            tree.pack(fill='both', expand=True, padx=24, pady=(12, 5))
             self._bind_treeview_mousewheel(tree)
 
             for b in backups:
@@ -1674,12 +2144,15 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                 else:
                     messagebox.showerror("Restore Failed", str(detail))
 
-            btn_frame = tk.Frame(dialog)
-            btn_frame.pack(pady=10)
-            tk.Button(btn_frame, text="Restore Selected", command=do_restore, width=15).pack(side=tk.LEFT, padx=5)
-            tk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
+            btn_frame = tk.Frame(dialog, bg=THEME_BG)
+            btn_frame.pack(fill='x', padx=24, pady=(8, 16))
+            self.styled_button(btn_frame, "Restore selected", do_restore,
+                               width=16, variant='primary').pack(side='right')
+            self.styled_button(btn_frame, "Cancel", dialog.destroy,
+                               width=15, variant='secondary').pack(
+                side='right', padx=(0, 8))
 
-            self._apply_legacy_theme()
+            self._apply_legacy_theme(dialog)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open restore dialog: {e}")

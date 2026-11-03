@@ -15,7 +15,7 @@ from ui_theme import (
 from app_config import (
     COL_CATEGORY, COL_ITEM_ID, COL_ITEM_NAME, COL_MEASURE, COL_QUANTITY,
 )
-from categories import get_category, should_exclude
+from categories import get_category, should_exclude, is_delisted
 from conversions import convert_to_input, get_conversion, requires_conversion
 from data_manager import record_stocktakes
 from pdf_generator import PDFReport
@@ -40,14 +40,7 @@ class StocktakeMixin:
     def record_stocktake(self):
         """Record a full stocktake snapshot with counted vs expected quantities."""
         self.clear_main_menu()
-    
-        # Header
-        header_frame = self.themed_frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-        self.themed_label(header_frame, "Stocktake",
-                          font=(ui_theme.THEME_FONT, 20, 'bold')).pack(expand=True)
-    
+
         self.refresh_data()
     
         if self.inventory_df.empty:
@@ -63,19 +56,17 @@ class StocktakeMixin:
     
         note_col = self.themed_frame(controls_row, bg=THEME_CARD)
         note_col.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
-        self.themed_label(note_col, "Note", font=(ui_theme.THEME_FONT, 10), bg=THEME_CARD).pack(anchor='w')
-        note_entry = tk.Entry(note_col, width=30, bg=THEME_CARD, fg=THEME_TEXT,
-                              insertbackground=THEME_TEXT, relief='solid', bd=1,
-                              highlightbackground=THEME_BORDER, highlightcolor=THEME_ACCENT)
-        note_entry.pack(fill='x')
+        self.themed_label(note_col, "NOTE", font=ui_theme.mono_font(8),
+                          fg=THEME_TEXT_MUTED, bg=THEME_CARD).pack(anchor='w')
+        note_entry = self.styled_entry(note_col, width=30)
+        note_entry.pack(fill='x', pady=(4, 0))
     
         search_col = self.themed_frame(controls_row, bg=THEME_CARD)
         search_col.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
-        self.themed_label(search_col, "Search", font=(ui_theme.THEME_FONT, 10), bg=THEME_CARD).pack(anchor='w')
-        search_entry = tk.Entry(search_col, width=30, bg=THEME_CARD, fg=THEME_TEXT,
-                                insertbackground=THEME_TEXT, relief='solid', bd=1,
-                                highlightbackground=THEME_BORDER, highlightcolor=THEME_ACCENT)
-        search_entry.pack(fill='x')
+        self.themed_label(search_col, "SEARCH", font=ui_theme.mono_font(8),
+                          fg=THEME_TEXT_MUTED, bg=THEME_CARD).pack(anchor='w')
+        search_entry = self.styled_entry(search_col, width=30)
+        search_entry.pack(fill='x', pady=(4, 0))
     
         # Progress + "uncounted only" filter.  The counter covers every
         # countable item (not just the filtered view), so it doubles as a
@@ -83,14 +74,14 @@ class StocktakeMixin:
         progress_row = tk.Frame(controls_card, bg=THEME_CARD)
         progress_row.pack(fill='x', padx=14, pady=(4, 0))
         progress_var = tk.StringVar(value='')
-        tk.Label(progress_row, textvariable=progress_var, font=(ui_theme.THEME_FONT, 10, 'bold'),
+        tk.Label(progress_row, textvariable=progress_var, font=ui_theme.mono_font(9),
                  fg=THEME_TEXT_MUTED, bg=THEME_CARD).pack(side='left')
         uncounted_only = tk.BooleanVar(value=False)
         tk.Checkbutton(progress_row, text='Uncounted only', variable=uncounted_only,
                        command=lambda: build_table(), bg=THEME_CARD, fg=THEME_TEXT,
                        activebackground=THEME_CARD, activeforeground=THEME_TEXT,
-                       selectcolor=THEME_SIDEBAR, highlightthickness=0, bd=0,
-                       font=(ui_theme.THEME_FONT, 10), cursor='hand2').pack(side='right')
+                       selectcolor=THEME_CARD, highlightthickness=0, bd=0,
+                       font=ui_theme.mono_font(9), cursor='hand2').pack(side='right')
     
         progress_canvas = tk.Canvas(controls_card, height=6, bg=THEME_SIDEBAR,
                                     highlightthickness=0, bd=0)
@@ -110,17 +101,17 @@ class StocktakeMixin:
     
         columns = ('item_name', 'expected', 'counted', 'variance', 'unit')
         tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
-        tree.heading('item_name', text='ITEM')
-        tree.heading('expected', text='EXPECTED')
-        tree.heading('counted', text='COUNTED')
-        tree.heading('variance', text='VARIANCE')
-        tree.heading('unit', text='UNIT')
+        tree.heading('item_name', text='ITEM', anchor='w')
+        tree.heading('expected', text='EXPECTED', anchor='e')
+        tree.heading('counted', text='COUNTED', anchor='e')
+        tree.heading('variance', text='VARIANCE', anchor='e')
+        tree.heading('unit', text='UNIT', anchor='w')
     
         tree.column('item_name', width=220, anchor='w')
-        tree.column('expected', width=100, anchor='center')
-        tree.column('counted', width=100, anchor='center')
-        tree.column('variance', width=100, anchor='center')
-        tree.column('unit', width=120, anchor='center')
+        tree.column('expected', width=100, anchor='e')
+        tree.column('counted', width=100, anchor='e')
+        tree.column('variance', width=100, anchor='e')
+        tree.column('unit', width=120, anchor='w')
     
         tree.tag_configure('success', foreground=THEME_SUCCESS)
         tree.tag_configure('danger', foreground=THEME_DANGER)
@@ -134,7 +125,8 @@ class StocktakeMixin:
         self._bind_treeview_mousewheel(tree)
     
         # Inline count editor, positioned over the Counted cell of the selected row
-        count_editor = tk.Entry(tree_frame, width=10, justify='center', font=(ui_theme.THEME_FONT, 11),
+        count_editor = tk.Entry(tree_frame, width=10, justify='right',
+                                font=ui_theme.mono_font(11),
                                 bg=THEME_CARD, fg=THEME_TEXT, insertbackground=THEME_TEXT,
                                 relief='solid', bd=1,
                                 highlightbackground=THEME_ACCENT, highlightcolor=THEME_ACCENT)
@@ -299,7 +291,11 @@ class StocktakeMixin:
     
                 if is_hidden_from_stock_view(item_id) or should_exclude(item_id):
                     continue
-    
+
+                # Delisted lines are out of stock, so they are not counted.
+                if is_delisted(item_id):
+                    continue
+
                 if hide_counted and str(counts.get(item_id, '')).strip() != '':
                     continue
     
@@ -672,7 +668,7 @@ class StocktakeMixin:
         save_baseline_btn.pack(side=tk.LEFT, padx=(0, 10))
         clean_btn = self.styled_button(actions_frame, "Roll Forward & Clean", roll_forward_and_clean_action, width=22, variant='danger')
         clean_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self.styled_button(actions_frame, "Back", back, width=12, variant='ghost').pack(side=tk.LEFT)
+        self.styled_button(actions_frame, "Back", back, width=12, variant='secondary').pack(side=tk.LEFT)
     
         self._apply_legacy_theme()
 
@@ -697,7 +693,8 @@ class StocktakeMixin:
                 item_id = row[COL_ITEM_ID]
     
                 # Skip excluded items (half pint, dash, coffee machine, etc.)
-                if should_exclude(item_id):
+                # and delisted lines, which no longer hold stock to count.
+                if should_exclude(item_id) or is_delisted(item_id):
                     excluded_count += 1
                     continue
     

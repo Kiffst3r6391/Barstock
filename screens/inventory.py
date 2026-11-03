@@ -10,7 +10,8 @@ from tkinter import messagebox, simpledialog, ttk
 
 import ui_theme
 from ui_theme import (
-    THEME_DANGER, THEME_TEXT, THEME_TEXT_MUTED, TBL_ROW_WARN, TBL_ROW_DANGER,
+    THEME_ACCENT, THEME_BG, THEME_BORDER, THEME_CARD, THEME_DANGER,
+    THEME_TEXT, THEME_TEXT_MUTED, TBL_ROW_ALT, TBL_ROW_WARN, TBL_ROW_DANGER,
 )
 from app_config import (
     CATEGORY_OPTIONS, DIVISION_OPTIONS, MEASURE_OPTIONS,
@@ -25,6 +26,7 @@ from data_manager import (
     InventoryDataManager, COL_ALLOW_NEGATIVE, COL_DIVISION, COL_REORDER_LEVEL,
 )
 from inventory_sync import append_item_to_items_csv
+from money import allocate_money, sum_money
 from sales_mapping import is_hidden_from_stock_view
 
 
@@ -33,57 +35,53 @@ class InventoryMixin:
 
     def manage_initial_stock(self):
         """Display the initial stock management interface."""
+        self._create_app_shell('Manage Stock')
         self.clear_main_menu()
     
-        # Header
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-    
-        tk.Label(header_frame, text="Stock Management",
-                font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
         # Search frame
-        search_frame = tk.Frame(self.main_menu)
-        search_frame.pack(fill='x', padx=10, pady=5)
+        search_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        search_frame.pack(fill='x', pady=(0, 14))
     
-        tk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
-        self.search_entry = tk.Entry(search_frame)
-        self.search_entry.pack(side=tk.LEFT, fill='x', expand=True, padx=5)
+        tk.Label(search_frame, text="SEARCH", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(side=tk.LEFT,
+                                                       padx=(0, 8))
+        self.search_entry = self.styled_entry(search_frame, width=60)
+        self.search_entry.pack(side=tk.LEFT, fill='x', expand=True,
+                               ipady=2, padx=(0, 8))
         self.search_entry.bind('<KeyRelease>', lambda e: self.search_stock())
     
-        tk.Button(search_frame, text="Search", command=self.search_stock).pack(side=tk.LEFT, padx=5)
-        tk.Button(search_frame, text="Clear", command=self.clear_search).pack(side=tk.LEFT, padx=5)
+        self.styled_button(search_frame, "Clear", self.clear_search,
+                           width=10, variant='secondary').pack(side=tk.LEFT)
     
         # Treeview frame
-        self.stock_frame = tk.Frame(self.main_menu)
-        self.stock_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        self.stock_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        self.stock_frame.pack(fill='both', expand=True, pady=(0, 10))
     
         # Create treeview with scrollbar
-        tree_container = tk.Frame(self.stock_frame)
+        tree_container = tk.Frame(self.stock_frame, bg=THEME_BG)
         tree_container.pack(fill='both', expand=True)
     
         self.stock_tree = ttk.Treeview(tree_container, columns=('item_id', 'item_name', 'quantity', 'cost_price', 'sell_price', 'stock_value', 'measure', 'category'), show='headings')
     
         # Define column headings
-        self.stock_tree.heading('item_id', text='Item ID')
-        self.stock_tree.heading('item_name', text='Item Name')
-        self.stock_tree.heading('quantity', text='Quantity')
-        self.stock_tree.heading('cost_price', text='Cost Price')
-        self.stock_tree.heading('sell_price', text='Sell Price')
-        self.stock_tree.heading('stock_value', text='Stock Value')
-        self.stock_tree.heading('measure', text='Measure')
-        self.stock_tree.heading('category', text='Category')
+        self.stock_tree.heading('item_id', text='Item ID', anchor='w')
+        self.stock_tree.heading('item_name', text='Item Name', anchor='w')
+        self.stock_tree.heading('quantity', text='Quantity', anchor='e')
+        self.stock_tree.heading('cost_price', text='Cost Price', anchor='e')
+        self.stock_tree.heading('sell_price', text='Sell Price', anchor='e')
+        self.stock_tree.heading('stock_value', text='Stock Value', anchor='e')
+        self.stock_tree.heading('measure', text='Measure', anchor='w')
+        self.stock_tree.heading('category', text='Category', anchor='w')
     
         # Set column widths
-        self.stock_tree.column('item_id', width=100, anchor='center')
-        self.stock_tree.column('item_name', width=150)
-        self.stock_tree.column('quantity', width=80, anchor='center')
-        self.stock_tree.column('cost_price', width=80, anchor='center')
-        self.stock_tree.column('sell_price', width=80, anchor='center')
-        self.stock_tree.column('stock_value', width=80, anchor='center')
-        self.stock_tree.column('measure', width=80, anchor='center')
-        self.stock_tree.column('category', width=100, anchor='center')
+        self.stock_tree.column('item_id', width=150, anchor='w')
+        self.stock_tree.column('item_name', width=200, anchor='w')
+        self.stock_tree.column('quantity', width=170, anchor='e')
+        self.stock_tree.column('cost_price', width=90, anchor='e')
+        self.stock_tree.column('sell_price', width=90, anchor='e')
+        self.stock_tree.column('stock_value', width=110, anchor='e')
+        self.stock_tree.column('measure', width=80, anchor='w')
+        self.stock_tree.column('category', width=150, anchor='w')
         self._make_sortable(self.stock_tree)
     
         self.stock_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -99,14 +97,25 @@ class InventoryMixin:
         self.load_stock_into_tree()
     
         # Button frame
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
+        btn_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(0, 4))
     
-        tk.Button(btn_frame, text="Add Item", command=self.add_stock_item).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Update Item", command=self.edit_selected_stock_item).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Delete Item", command=self.delete_stock_item).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Retired Items", command=self.show_retired_items).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Back", command=self.show_dashboard).pack(side=tk.LEFT, padx=5)
+        self.styled_button(btn_frame, "Add item", self.add_stock_item,
+                           width=14, variant='primary').pack(side=tk.LEFT,
+                                                             padx=(0, 8))
+        self.styled_button(btn_frame, "Update item",
+                           self.edit_selected_stock_item, width=14,
+                           variant='secondary').pack(side=tk.LEFT,
+                                                     padx=(0, 8))
+        self.styled_button(btn_frame, "Delete item", self.delete_stock_item,
+                           width=14, variant='danger').pack(side=tk.LEFT,
+                                                            padx=(0, 8))
+        self.styled_button(btn_frame, "Retired items",
+                           self.show_retired_items, width=14,
+                           variant='secondary').pack(side=tk.LEFT,
+                                                     padx=(0, 8))
+        self.styled_button(btn_frame, "Back", self.show_dashboard,
+                           width=12, variant='secondary').pack(side=tk.LEFT)
     
         self._apply_legacy_theme()
 
@@ -162,6 +171,7 @@ class InventoryMixin:
             self.stock_tree.delete(item)
     
         # Filter and insert data
+        row_index = 0
         for _, row in self.inventory_df.iterrows():
             item_id = row[COL_ITEM_ID]
     
@@ -192,16 +202,21 @@ class InventoryMixin:
                          self.format_currency(row[COL_COST_PRICE]), self.format_currency(row[COL_SELL_PRICE]),
                          self.format_currency(stock_value), measure, category)
     
-                # Determine tag based on stock status
-                tag = ''
+                # Determine tag based on stock status; status tints win over
+                # the zebra stripe so an alert row always reads as one.
+                tag = 'alt' if row_index % 2 else ''
                 if row[COL_QUANTITY] < 0 and not row.get(COL_ALLOW_NEGATIVE, False):
                     tag = 'negative_stock'
                 elif COL_REORDER_LEVEL in row and row[COL_REORDER_LEVEL] > 0 and row[COL_QUANTITY] <= row[COL_REORDER_LEVEL]:
                     tag = 'low_stock'
     
-                self.stock_tree.insert('', tk.END, values=values, tags=(tag,))
+                self.stock_tree.insert('', tk.END, values=values,
+                                       tags=(tag,) if tag else ())
+                row_index += 1
     
         # Configure tag styles
+        self.stock_tree.tag_configure('alt', background=TBL_ROW_ALT,
+                                      foreground=THEME_TEXT)
         self.stock_tree.tag_configure('low_stock', background=TBL_ROW_WARN, foreground=THEME_TEXT)
         self.stock_tree.tag_configure('negative_stock', background=TBL_ROW_DANGER, foreground=THEME_DANGER)
 
@@ -304,8 +319,9 @@ class InventoryMixin:
     
         top = tk.Toplevel(self.root)
         top.title("Add Stock Item")
-        top.geometry("450x550")
-        self._fit_dialog(top, 450, 550)
+        top.configure(bg=THEME_BG)
+        top.geometry("470x640")
+        self._fit_dialog(top, 470, 640)
         top.transient(self.root)
         top.grab_set()
     
@@ -321,23 +337,32 @@ class InventoryMixin:
         top.geometry(f'+{x}+{y}')
     
         # Create form
-        main_frame = tk.Frame(top, padx=20, pady=20)
+        main_frame = tk.Frame(top, bg=THEME_BG, padx=22, pady=18)
         main_frame.pack(fill='both', expand=True)
+    
+        tk.Label(main_frame, text="NEW STOCK ITEM", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 2))
+        tk.Label(main_frame, text="Add Stock Item", font=ui_theme.display_font(18),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').grid(
+            row=1, column=0, columnspan=2, sticky='w', pady=(0, 10))
     
         # Text entry fields
         fields = [
-            ("Item ID:", 'item_id'),
-            ("Item Name:", 'item_name'),
-            ("Quantity:", 'quantity'),
-            ("Cost Price:", 'cost_price'),
-            ("Sell Price:", 'sell_price'),
+            ("ITEM ID", 'item_id'),
+            ("ITEM NAME", 'item_name'),
+            ("QUANTITY", 'quantity'),
+            ("COST PRICE", 'cost_price'),
+            ("SELL PRICE", 'sell_price'),
         ]
     
         entries = {}
-        for i, (label, key) in enumerate(fields):
-            tk.Label(main_frame, text=label).grid(row=i, column=0, padx=5, pady=8, sticky="e")
-            entry = tk.Entry(main_frame, width=30)
-            entry.grid(row=i, column=1, padx=5, pady=8, sticky="ew")
+        for i, (label, key) in enumerate(fields, start=2):
+            tk.Label(main_frame, text=label, font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+                row=i, column=0, padx=(0, 12), pady=6, sticky="e")
+            entry = self.styled_entry(main_frame, width=30)
+            entry.grid(row=i, column=1, padx=0, pady=6, sticky="ew")
             entries[key] = entry
     
         entry_item_id = entries['item_id']
@@ -348,41 +373,59 @@ class InventoryMixin:
         entry_sell_price = entries['sell_price']
     
         # Measure dropdown
-        tk.Label(main_frame, text="Measure:").grid(row=5, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="MEASURE", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=7, column=0, padx=(0, 12), pady=6, sticky="e")
         measure_var = tk.StringVar(value=MEASURE_OPTIONS[0])
         measure_dropdown = ttk.Combobox(main_frame, textvariable=measure_var, values=MEASURE_OPTIONS, width=28, state="readonly")
-        measure_dropdown.grid(row=5, column=1, padx=5, pady=8, sticky="ew")
+        measure_dropdown.grid(row=7, column=1, pady=6, sticky="ew")
     
         # Category dropdown
-        tk.Label(main_frame, text="Category:").grid(row=6, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="CATEGORY", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=8, column=0, padx=(0, 12), pady=6, sticky="e")
         category_var = tk.StringVar(value=CATEGORY_OPTIONS[0])
         category_dropdown = ttk.Combobox(main_frame, textvariable=category_var, values=CATEGORY_OPTIONS, width=28, state="readonly")
-        category_dropdown.grid(row=6, column=1, padx=5, pady=8, sticky="ew")
+        category_dropdown.grid(row=8, column=1, pady=6, sticky="ew")
     
         # Allow Negative Stock checkbox
         allow_negative_var = tk.BooleanVar(value=False)
-        allow_negative_checkbox = tk.Checkbutton(main_frame, text="Allow Negative Stock",
-                                                   variable=allow_negative_var, wraplength=300, justify='left')
-        allow_negative_checkbox.grid(row=7, column=0, columnspan=2, padx=5, pady=4, sticky="w")
+        allow_negative_checkbox = tk.Checkbutton(
+            main_frame, text="Allow negative stock", variable=allow_negative_var,
+            bg=THEME_BG, fg=THEME_TEXT, activebackground=THEME_BG,
+            activeforeground=THEME_TEXT, selectcolor=THEME_CARD,
+            highlightthickness=0, bd=0, font=ui_theme.mono_font(9),
+            cursor='hand2')
+        allow_negative_checkbox.grid(row=9, column=1,
+                                     sticky="w", pady=4)
     
         # Reorder Level
-        tk.Label(main_frame, text="Reorder Level:").grid(row=8, column=0, padx=5, pady=8, sticky="e")
-        entry_reorder_level = tk.Entry(main_frame, width=30)
+        tk.Label(main_frame, text="REORDER LEVEL", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=10, column=0, padx=(0, 12), pady=6, sticky="e")
+        entry_reorder_level = self.styled_entry(main_frame, width=30)
         entry_reorder_level.insert(0, "0")
-        entry_reorder_level.grid(row=8, column=1, padx=5, pady=8, sticky="ew")
+        entry_reorder_level.grid(row=10, column=1, pady=6, sticky="ew")
     
         # Division dropdown
-        tk.Label(main_frame, text="Division:").grid(row=9, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="DIVISION", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=11, column=0, padx=(0, 12), pady=6, sticky="e")
         division_var = tk.StringVar(value=DIVISION_OPTIONS[-1])
         division_dropdown = ttk.Combobox(main_frame, textvariable=division_var, values=DIVISION_OPTIONS, width=28, state="readonly")
-        division_dropdown.grid(row=9, column=1, padx=5, pady=8, sticky="ew")
+        division_dropdown.grid(row=11, column=1, pady=6, sticky="ew")
     
         # Button frame
-        btn_frame = tk.Frame(main_frame)
-        btn_frame.grid(row=10, column=0, columnspan=2, pady=20)
+        tk.Frame(main_frame, bg=THEME_BORDER, height=1).grid(
+            row=12, column=0, columnspan=2, sticky='ew', pady=(14, 0))
+        btn_frame = tk.Frame(main_frame, bg=THEME_BG)
+        btn_frame.grid(row=13, column=0, columnspan=2, pady=(12, 0),
+                       sticky='w')
     
-        tk.Button(btn_frame, text="Save Item", command=save_item, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Cancel", command=top.destroy, width=15).pack(side=tk.LEFT, padx=10)
+        self.styled_button(btn_frame, "Save Item", save_item, width=15,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 10))
+        self.styled_button(btn_frame, "Cancel", top.destroy, width=15,
+                           variant='secondary').pack(side=tk.LEFT)
     
         main_frame.grid_columnconfigure(1, weight=1)
     
@@ -489,8 +532,9 @@ class InventoryMixin:
     
         top = tk.Toplevel(self.root)
         top.title("Update Stock Item")
-        top.geometry("450x560")
-        self._fit_dialog(top, 450, 560)
+        top.configure(bg=THEME_BG)
+        top.geometry("470x660")
+        self._fit_dialog(top, 470, 660)
         top.transient(self.root)
         top.grab_set()
     
@@ -505,89 +549,117 @@ class InventoryMixin:
         y = (top.winfo_screenheight() - top.winfo_height()) // 2
         top.geometry(f'+{x}+{y}')
     
-        main_frame = tk.Frame(top, padx=20, pady=20)
+        main_frame = tk.Frame(top, bg=THEME_BG, padx=22, pady=18)
         main_frame.pack(fill='both', expand=True)
     
-        tk.Label(main_frame, text=f"Item ID: {item_id}", font=(ui_theme.THEME_FONT, 10, 'bold')).grid(row=0, column=0, columnspan=2, pady=10)
+        tk.Label(main_frame, text="STOCK ITEM", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 2))
+        tk.Label(main_frame, text=item_id, font=ui_theme.display_font(18),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').grid(
+            row=1, column=0, columnspan=2, sticky='w', pady=(0, 10))
     
         # Text entry fields
         # Use input quantity for items requiring conversion
         if requires_conv:
-            quantity_label = f"Quantity ({input_unit}s):"
+            quantity_label = f"QUANTITY ({input_unit.upper()}S)"
             quantity_value = f"{current_input_qty:.1f}"
         else:
-            quantity_label = "Quantity:"
+            quantity_label = "QUANTITY"
             quantity_value = f"{current_system_qty:.1f}"
     
         fields = [
-            ("Item Name:", current_name, 'item_name'),
+            ("ITEM NAME", current_name, 'item_name'),
             (quantity_label, quantity_value, 'quantity'),
-            ("Cost Price:", item_values[3].replace('£', ''), 'cost_price'),
-            ("Sell Price:", item_values[4].replace('£', ''), 'sell_price'),
+            ("COST PRICE", item_values[3].replace('£', ''), 'cost_price'),
+            ("SELL PRICE", item_values[4].replace('£', ''), 'sell_price'),
         ]
     
         entries = {}
-        for i, (label, value, key) in enumerate(fields, 1):
-            tk.Label(main_frame, text=label).grid(row=i, column=0, padx=5, pady=8, sticky="e")
-            entry = tk.Entry(main_frame, width=30)
+        for i, (label, value, key) in enumerate(fields, 2):
+            tk.Label(main_frame, text=label, font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+                row=i, column=0, padx=(0, 12), pady=6, sticky="e")
+            entry = self.styled_entry(main_frame, width=30)
             entry.insert(0, value)
-            entry.grid(row=i, column=1, padx=5, pady=8, sticky="ew")
+            entry.grid(row=i, column=1, pady=6, sticky="ew")
             entries[key] = entry
     
         # Show conversion info if applicable (below the quantity entry)
         if requires_conv:
-            conversion_info = tk.Label(main_frame, text=f"1 {input_unit} = {conversion_factor} {output_unit}s", font=(ui_theme.THEME_FONT, 9, 'italic'), fg='gray')
-            conversion_info.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+            conversion_info = tk.Label(main_frame, text=f"1 {input_unit} = {conversion_factor} {output_unit}s", font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED, bg=THEME_BG)
+            conversion_info.grid(row=6, column=1, sticky="w")
     
         # Measure dropdown
-        tk.Label(main_frame, text="Measure:").grid(row=5, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="MEASURE", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=7, column=0, padx=(0, 12), pady=6, sticky="e")
         measure_var = tk.StringVar(value=current_measure if current_measure in MEASURE_OPTIONS else MEASURE_OPTIONS[0])
         measure_dropdown = ttk.Combobox(main_frame, textvariable=measure_var, values=MEASURE_OPTIONS, width=28, state="readonly")
-        measure_dropdown.grid(row=5, column=1, padx=5, pady=8, sticky="ew")
+        measure_dropdown.grid(row=7, column=1, pady=6, sticky="ew")
     
         # Category dropdown
-        tk.Label(main_frame, text="Category:").grid(row=6, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="CATEGORY", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=8, column=0, padx=(0, 12), pady=6, sticky="e")
         category_var = tk.StringVar(value=current_category if current_category in CATEGORY_OPTIONS else CATEGORY_OPTIONS[0])
         category_dropdown = ttk.Combobox(main_frame, textvariable=category_var, values=CATEGORY_OPTIONS, width=28, state="readonly")
-        category_dropdown.grid(row=6, column=1, padx=5, pady=8, sticky="ew")
+        category_dropdown.grid(row=8, column=1, pady=6, sticky="ew")
     
         # Price Locked checkbox
         price_locked_var = tk.BooleanVar(value=current_price_locked)
-        price_locked_checkbox = tk.Checkbutton(main_frame, text="Lock Price (prevent CSV uploads from changing buy/cost prices)",
-                                               variable=price_locked_var, wraplength=300, justify='left')
-        price_locked_checkbox.grid(row=7, column=0, columnspan=2, padx=5, pady=4, sticky="w")
+        price_locked_checkbox = tk.Checkbutton(
+            main_frame, text="Lock prices against CSV uploads",
+            variable=price_locked_var, bg=THEME_BG, fg=THEME_TEXT,
+            activebackground=THEME_BG, activeforeground=THEME_TEXT,
+            selectcolor=THEME_CARD, highlightthickness=0, bd=0,
+            font=ui_theme.mono_font(9), cursor='hand2')
+        price_locked_checkbox.grid(row=9, column=1, sticky="w", pady=4)
     
         # Allow Negative Stock checkbox
         current_allow_negative = InventoryDataManager.get_item_value_safe(self.inventory_df, item_id, COL_ALLOW_NEGATIVE, default=False)
         allow_negative_var = tk.BooleanVar(value=bool(current_allow_negative))
-        allow_negative_checkbox = tk.Checkbutton(main_frame, text="Allow Negative Stock",
-                                                   variable=allow_negative_var, wraplength=300, justify='left')
-        allow_negative_checkbox.grid(row=8, column=0, columnspan=2, padx=5, pady=4, sticky="w")
+        allow_negative_checkbox = tk.Checkbutton(
+            main_frame, text="Allow negative stock",
+            variable=allow_negative_var, bg=THEME_BG, fg=THEME_TEXT,
+            activebackground=THEME_BG, activeforeground=THEME_TEXT,
+            selectcolor=THEME_CARD, highlightthickness=0, bd=0,
+            font=ui_theme.mono_font(9), cursor='hand2')
+        allow_negative_checkbox.grid(row=10, column=1, sticky="w", pady=4)
     
         # Reorder Level
         current_reorder_level = InventoryDataManager.get_item_value_safe(self.inventory_df, item_id, COL_REORDER_LEVEL, default=0)
-        tk.Label(main_frame, text="Reorder Level:").grid(row=9, column=0, padx=5, pady=8, sticky="e")
-        entry_reorder_level = tk.Entry(main_frame, width=30)
+        tk.Label(main_frame, text="REORDER LEVEL", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=11, column=0, padx=(0, 12), pady=6, sticky="e")
+        entry_reorder_level = self.styled_entry(main_frame, width=30)
         entry_reorder_level.insert(0, str(current_reorder_level))
-        entry_reorder_level.grid(row=9, column=1, padx=5, pady=8, sticky="ew")
+        entry_reorder_level.grid(row=11, column=1, pady=6, sticky="ew")
     
         # Division dropdown
         current_division = InventoryDataManager.get_item_value_safe(self.inventory_df, item_id, COL_DIVISION, default='')
-        tk.Label(main_frame, text="Division:").grid(row=10, column=0, padx=5, pady=8, sticky="e")
+        tk.Label(main_frame, text="DIVISION", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+            row=12, column=0, padx=(0, 12), pady=6, sticky="e")
         division_var = tk.StringVar(value=current_division if current_division in DIVISION_OPTIONS else DIVISION_OPTIONS[-1])
         division_dropdown = ttk.Combobox(main_frame, textvariable=division_var, values=DIVISION_OPTIONS, width=28, state="readonly")
-        division_dropdown.grid(row=10, column=1, padx=5, pady=8, sticky="ew")
+        division_dropdown.grid(row=12, column=1, pady=6, sticky="ew")
     
         entry_name = entries['item_name']
         entry_quantity = entries['quantity']
         entry_cost_price = entries['cost_price']
         entry_sell_price = entries['sell_price']
     
-        btn_frame = tk.Frame(main_frame)
-        btn_frame.grid(row=11, column=0, columnspan=2, pady=20)
+        tk.Frame(main_frame, bg=THEME_BORDER, height=1).grid(
+            row=13, column=0, columnspan=2, sticky='ew', pady=(14, 0))
+        btn_frame = tk.Frame(main_frame, bg=THEME_BG)
+        btn_frame.grid(row=14, column=0, columnspan=2, pady=(12, 0),
+                       sticky='w')
     
-        tk.Button(btn_frame, text="Save Changes", command=save_update, width=15).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="Cancel", command=top.destroy, width=15).pack(side=tk.LEFT, padx=10)
+        self.styled_button(btn_frame, "Save Changes", save_update, width=15,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 10))
+        self.styled_button(btn_frame, "Cancel", top.destroy, width=15,
+                           variant='secondary').pack(side=tk.LEFT)
     
         main_frame.grid_columnconfigure(1, weight=1)
     
@@ -666,24 +738,36 @@ class InventoryMixin:
         top.title("Retired Items")
         top.geometry("620x420")
         self._fit_dialog(top, 620, 420)
+        top.configure(bg=THEME_BG)
     
-        tk.Label(top, text="Retired items keep their transaction history but are\n"
-                           "hidden from the stock list, order sheet and alerts.",
-                 font=(ui_theme.THEME_FONT, 10), justify='left').pack(pady=10)
+        tk.Label(top, text="STOCK", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(
+            fill='x', padx=24, pady=(20, 2))
+        tk.Label(top, text="Retired items",
+                 font=ui_theme.display_font(18), fg=THEME_TEXT,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=24)
+        tk.Label(top, text="They keep their transaction history but are hidden "
+                           "from the stock list, order sheet and alerts.",
+                 font=(ui_theme.THEME_FONT, 9), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=24,
+                                               pady=(2, 14))
+        tk.Frame(top, bg=THEME_BORDER, height=1).pack(fill='x', padx=24)
     
         tree = ttk.Treeview(top, columns=('item_id', 'item_name', 'quantity'),
                             show='headings', height=10)
-        tree.heading('item_id', text='Item ID')
-        tree.heading('item_name', text='Item Name')
-        tree.heading('quantity', text='Quantity')
-        tree.column('item_id', width=140, anchor='center')
-        tree.column('item_name', width=280)
-        tree.column('quantity', width=90, anchor='center')
-        tree.pack(fill='both', expand=True, padx=12, pady=4)
+        tree.heading('item_id', text='Item ID', anchor='w')
+        tree.heading('item_name', text='Item Name', anchor='w')
+        tree.heading('quantity', text='Quantity', anchor='e')
+        tree.column('item_id', width=180, anchor='w')
+        tree.column('item_name', width=300, anchor='w')
+        tree.column('quantity', width=90, anchor='e')
+        tree.tag_configure('alt', background=TBL_ROW_ALT,
+                           foreground=THEME_TEXT)
+        tree.pack(fill='both', expand=True, padx=24, pady=(12, 4))
         self._bind_treeview_mousewheel(tree)
 
         empty_label = tk.Label(top, text="", font=(ui_theme.THEME_FONT, 10),
-                               fg=THEME_TEXT_MUTED)
+                               fg=THEME_TEXT_MUTED, bg=THEME_BG)
         empty_label.pack(pady=4)
 
         def populate():
@@ -694,10 +778,11 @@ class InventoryMixin:
                              self.inventory_df[COL_ITEM_NAME]))
             quantities = dict(zip(self.inventory_df[COL_ITEM_ID],
                                   self.inventory_df[COL_QUANTITY]))
-            for item_id in sorted(retired):
+            for index, item_id in enumerate(sorted(retired)):
                 if item_id not in names:
                     continue
                 tree.insert('', tk.END, iid=item_id,
+                            tags=('alt',) if index % 2 else (),
                             values=(item_id, names[item_id],
                                     f"{float(quantities.get(item_id) or 0):.1f}"))
             empty_label.config(text="No retired items." if not tree.get_children() else "")
@@ -718,16 +803,17 @@ class InventoryMixin:
             self.update_dashboard_stats()
             self._set_status(f"Item '{item_id}' restored to stock.", 'success')
     
-        btn_frame = tk.Frame(top)
-        btn_frame.pack(pady=10)
-        self.styled_button(btn_frame, "Restore Selected", restore_selected,
-                           width=18, variant='primary').pack(side='left', padx=6)
+        btn_frame = tk.Frame(top, bg=THEME_BG)
+        btn_frame.pack(fill='x', padx=24, pady=(8, 16))
+        self.styled_button(btn_frame, "Restore selected", restore_selected,
+                           width=18, variant='primary').pack(side='right')
         self.styled_button(btn_frame, "Close", top.destroy,
-                           width=12, variant='ghost').pack(side='left', padx=6)
+                           width=12, variant='secondary').pack(side='right',
+                                                               padx=(0, 8))
     
         populate()
         top.update_idletasks()
-        self._apply_legacy_theme()
+        self._apply_legacy_theme(top)
 
 
     def show_delivery_history(self):
@@ -740,20 +826,20 @@ class InventoryMixin:
         """View and manage past deliveries."""
         self.clear_main_menu()
     
-        header_frame = tk.Frame(self.main_menu, height=60)
-        header_frame.pack(fill='x', pady=(0, 10))
-        header_frame.pack_propagate(False)
-        tk.Label(header_frame, text="Delivery History", font=(ui_theme.THEME_FONT, 16, 'bold')).pack(expand=True)
-    
         self.refresh_data()
     
         # Main frame with two panes
-        main_frame = tk.Frame(self.main_menu)
-        main_frame.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
+        main_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        main_frame.pack(fill=tk.BOTH, expand=True)
     
         # Left - Deliveries list
-        left_frame = tk.LabelFrame(main_frame, text="Deliveries", font=(ui_theme.THEME_FONT, 10, 'bold'))
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        left_frame = tk.Frame(main_frame, bg=THEME_BG,
+                              highlightbackground=THEME_BORDER,
+                              highlightthickness=1)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        tk.Label(left_frame, text="DELIVERIES", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(
+            fill='x', padx=12, pady=(8, 6))
     
         del_columns = ('timestamp', 'supplier', 'items', 'total_value')
         del_tree = ttk.Treeview(left_frame, columns=del_columns, show='headings', height=12)
@@ -762,10 +848,10 @@ class InventoryMixin:
         del_tree.heading('items', text='Items')
         del_tree.heading('total_value', text='Total Value')
         self._make_sortable(del_tree)
-        del_tree.column('timestamp', width=140, anchor='center')
-        del_tree.column('supplier', width=120, anchor='center')
-        del_tree.column('items', width=50, anchor='center')
-        del_tree.column('total_value', width=100, anchor='center')
+        del_tree.column('timestamp', width=150, anchor='w')
+        del_tree.column('supplier', width=120, anchor='w')
+        del_tree.column('items', width=60, anchor='e')
+        del_tree.column('total_value', width=110, anchor='e')
         del_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         del_scroll = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=del_tree.yview)
         del_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -773,8 +859,14 @@ class InventoryMixin:
         self._bind_treeview_mousewheel(del_tree)
     
         # Right - Items in selected delivery
-        right_frame = tk.LabelFrame(main_frame, text="Items in Selected Delivery", font=(ui_theme.THEME_FONT, 10, 'bold'))
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        right_frame = tk.Frame(main_frame, bg=THEME_BG,
+                               highlightbackground=THEME_BORDER,
+                               highlightthickness=1)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        tk.Label(right_frame, text="ITEMS IN SELECTED DELIVERY",
+                 font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=12,
+                                               pady=(8, 6))
     
         item_columns = ('item_id', 'item_name', 'quantity', 'cost_price', 'total')
         item_tree = ttk.Treeview(right_frame, columns=item_columns, show='headings', height=12)
@@ -784,11 +876,11 @@ class InventoryMixin:
         item_tree.heading('cost_price', text='Cost')
         item_tree.heading('total', text='Total')
         self._make_sortable(item_tree)
-        item_tree.column('item_id', width=80, anchor='center')
-        item_tree.column('item_name', width=120, anchor='w')
-        item_tree.column('quantity', width=60, anchor='center')
-        item_tree.column('cost_price', width=70, anchor='center')
-        item_tree.column('total', width=80, anchor='center')
+        item_tree.column('item_id', width=110, anchor='w')
+        item_tree.column('item_name', width=160, anchor='w')
+        item_tree.column('quantity', width=70, anchor='e')
+        item_tree.column('cost_price', width=80, anchor='e')
+        item_tree.column('total', width=90, anchor='e')
         item_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         item_scroll = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=item_tree.yview)
         item_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -820,7 +912,12 @@ class InventoryMixin:
         for key in sorted(delivery_groups.keys(), reverse=True):
             grp = delivery_groups[key]
             items_count = len(grp['items'])
-            total_val = sum(float(i.get(COL_COST_PRICE, 0)) * float(i.get(COL_QUANTITY, 0)) for i in grp['items'])
+            # Allocate the line values so the selected delivery's lines add up
+            # exactly to the total shown for it.
+            grp['line_values'] = allocate_money(
+                float(i.get(COL_COST_PRICE, 0)) * float(i.get(COL_QUANTITY, 0))
+                for i in grp['items'])
+            total_val = sum_money(grp['line_values'])
             supplier = grp['supplier'] if grp['supplier'] else 'Unknown'
             del_tree.insert('', tk.END, values=(grp['timestamp'], supplier, items_count, self.format_currency(total_val)), tags=(key,))
     
@@ -832,7 +929,8 @@ class InventoryMixin:
                 return
             ts = del_tree.item(selected[0], 'tags')[0]
             if ts in delivery_groups:
-                for row in delivery_groups[ts]['items']:
+                for row, line_value in zip(delivery_groups[ts]['items'],
+                                           delivery_groups[ts]['line_values']):
                     item_id = row.get(COL_ITEM_ID, '')
                     qty = float(row.get(COL_QUANTITY, 0))
                     cost = float(row.get(COL_COST_PRICE, 0))
@@ -846,13 +944,17 @@ class InventoryMixin:
                     name = ''
                     if not self.inventory_df.empty and item_id in self.inventory_df[COL_ITEM_ID].values:
                         name = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_ITEM_NAME].values[0]
-                    item_tree.insert('', tk.END, values=(item_id, name, f"{qty:.1f}", self.format_currency(display_cost), self.format_currency(cost * qty)))
+                    item_tree.insert('', tk.END, values=(item_id, name, f"{qty:.1f}", self.format_currency(display_cost), self.format_currency(line_value)))
     
         del_tree.bind('<<TreeviewSelect>>', on_delivery_select)
+        first_delivery = del_tree.get_children()
+        if first_delivery:
+            del_tree.selection_set(first_delivery[0])
+            on_delivery_select()
     
         # Action buttons
-        btn_frame = tk.Frame(self.main_menu)
-        btn_frame.pack(pady=10)
+        btn_frame = tk.Frame(self.main_menu, bg=THEME_BG)
+        btn_frame.pack(fill='x', pady=(12, 0))
     
         def edit_selected_delivery():
             selected = del_tree.selection()
@@ -878,9 +980,16 @@ class InventoryMixin:
                 self.delete_delivery(grp['timestamp'], grp['items'], supplier=grp['supplier'])
                 self.view_delivery_history()
     
-        tk.Button(btn_frame, text="Edit Selected", command=edit_selected_delivery, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Delete Selected", command=delete_selected_delivery, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Back", command=self.generate_reports, width=15).pack(side=tk.LEFT, padx=20)
+        self.styled_button(btn_frame, "Edit selected",
+                           edit_selected_delivery, width=15,
+                           variant='secondary').pack(side=tk.LEFT,
+                                                    padx=(0, 8))
+        self.styled_button(btn_frame, "Delete selected",
+                           delete_selected_delivery, width=15,
+                           variant='danger').pack(side=tk.LEFT,
+                                                  padx=(0, 8))
+        self.styled_button(btn_frame, "Back", self.generate_reports,
+                           width=15, variant='secondary').pack(side=tk.LEFT)
     
         self._apply_legacy_theme()
 
@@ -891,22 +1000,29 @@ class InventoryMixin:
         supplier = delivery_group.get('supplier', '')
         top = tk.Toplevel(self.root)
         top.title(f"Edit Delivery - {timestamp}")
-        top.geometry("500x400")
-        self._fit_dialog(top, 500, 400)
+        top.configure(bg=THEME_BG)
+        top.geometry("560x460")
+        self._fit_dialog(top, 560, 460)
         top.transient(self.root)
         top.grab_set()
         top.lift()
     
-        tk.Label(top, text=f"Editing Delivery: {timestamp}", font=(ui_theme.THEME_FONT, 12, 'bold')).pack(pady=10)
-        tk.Label(top, text=f"Supplier: {delivery_group['supplier']}", font=(ui_theme.THEME_FONT, 10)).pack(pady=2)
+        tk.Label(top, text="DELIVERY", font=ui_theme.mono_font(8),
+                 fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w').pack(
+            fill='x', padx=20, pady=(18, 2))
+        tk.Label(top, text=f"{delivery_group['supplier']}  ·  {timestamp}",
+                 font=ui_theme.display_font(16), fg=THEME_TEXT,
+                 bg=THEME_BG, anchor='w').pack(fill='x', padx=20)
     
-        frame = tk.Frame(top)
-        frame.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
+        frame = tk.Frame(top, bg=THEME_BG)
+        frame.pack(pady=12, padx=20, fill=tk.BOTH, expand=True)
     
         # Headers
         headers = ['Item', 'Quantity', 'Cost Price']
         for c, h in enumerate(headers):
-            tk.Label(frame, text=h, font=(ui_theme.THEME_FONT, 9, 'bold')).grid(row=0, column=c, padx=5, pady=2)
+            tk.Label(frame, text=h.upper(), font=ui_theme.mono_font(8),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG).grid(
+                row=0, column=c, padx=6, pady=4, sticky='e' if c else 'w')
     
         entries = []
         for r, row in enumerate(delivery_group['items'], start=1):
@@ -925,12 +1041,16 @@ class InventoryMixin:
             if not self.inventory_df.empty and item_id in self.inventory_df[COL_ITEM_ID].values:
                 name = self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id, COL_ITEM_NAME].values[0]
     
-            tk.Label(frame, text=f"{item_id} - {name}").grid(row=r, column=0, padx=5, pady=2, sticky='w')
+            tk.Label(frame, text=f"{item_id} - {name}", bg=THEME_BG,
+                     fg=THEME_TEXT, font=(ui_theme.THEME_FONT, 10)).grid(
+                row=r, column=0, padx=6, pady=3, sticky='w')
     
             qty_var = tk.StringVar(value=f"{qty:.1f}")
             cost_var = tk.StringVar(value=f"{cost:.2f}")
-            tk.Entry(frame, textvariable=qty_var, width=10).grid(row=r, column=1, padx=5, pady=2)
-            tk.Entry(frame, textvariable=cost_var, width=10).grid(row=r, column=2, padx=5, pady=2)
+            self.styled_entry(frame, textvariable=qty_var, width=10).grid(
+                row=r, column=1, padx=6, pady=3, sticky='e')
+            self.styled_entry(frame, textvariable=cost_var, width=10).grid(
+                row=r, column=2, padx=6, pady=3, sticky='e')
     
             entries.append({'item_id': item_id, 'original_qty': qty, 'original_cost': cost,
                            'qty_var': qty_var, 'cost_var': cost_var})
@@ -1054,10 +1174,14 @@ class InventoryMixin:
             except Exception as e:
                 messagebox.showerror("Error", f"Update failed: {e}", parent=top)
     
-        btn_frame = tk.Frame(top)
-        btn_frame.pack(pady=15)
-        tk.Button(btn_frame, text="Save Changes", command=save_edits, width=15).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Cancel", command=top.destroy, width=15).pack(side=tk.LEFT, padx=5)
+        tk.Frame(top, bg=THEME_BORDER, height=1).pack(fill='x', padx=20,
+                                                      pady=(14, 0))
+        btn_frame = tk.Frame(top, bg=THEME_BG)
+        btn_frame.pack(fill='x', padx=20, pady=12)
+        self.styled_button(btn_frame, "Save Changes", save_edits, width=15,
+                           variant='primary').pack(side=tk.LEFT, padx=(0, 8))
+        self.styled_button(btn_frame, "Cancel", top.destroy, width=15,
+                           variant='secondary').pack(side=tk.LEFT)
 
 
     def delete_delivery(self, timestamp, items, supplier=''):

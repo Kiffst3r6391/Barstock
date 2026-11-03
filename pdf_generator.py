@@ -10,10 +10,77 @@ from collections import defaultdict
 from fpdf import FPDF
 from conversions import convert_to_input, requires_conversion, get_input_label, DATE_FORMAT_DISPLAY
 from categories import is_delisted
+from money import allocate_money, inc_vat, round_money, sum_money
 
 # Standard UK VAT rate used to show inc-VAT equivalents on the executive summary.
 VAT_RATE = 0.20
 VAT_MULTIPLIER = 1.0 + VAT_RATE
+
+
+def format_report_period(start_date=None, end_date=None):
+    """Build the date-range label printed on a report.
+
+    Dates come from the date-range picker as datetime/date/Timestamp objects.
+    When no bounds were chosen the report covers everything, and the label says
+    so rather than leaving the page silent about its period.
+    """
+    def _fmt(value):
+        if hasattr(value, 'strftime'):
+            return value.strftime(DATE_FORMAT_DISPLAY)
+        return str(value).strip()
+
+    if start_date is None and end_date is None:
+        return 'All time'
+    if start_date is None:
+        return f'Up to {_fmt(end_date)}'
+    if end_date is None:
+        return f'From {_fmt(start_date)}'
+    return f'{_fmt(start_date)} to {_fmt(end_date)}'
+
+
+def allocate_division_inc_vat(division_totals):
+    """Return {division: inc-VAT sales} that adds up to the inc-VAT grand total.
+
+    Each division is first struck with the same single-rounding rule as the
+    item and dashboard figures. The few pence of residual needed to match the
+    grand total are then applied to the largest divisions by sales, so a small
+    line such as a single function keeps its exact inc-VAT amount instead of
+    absorbing the rounding.
+    """
+    division_names = list(division_totals)
+    if not division_names:
+        return {}
+
+    values = {name: inc_vat(division_totals[name]['sales_value'])
+              for name in division_names}
+    target = inc_vat(sum_money(
+        division_totals[name]['sales_value'] for name in division_names))
+    residual = round_money(target - sum_money(values.values()))
+    if residual:
+        step = 0.01 if residual > 0 else -0.01
+        order = sorted(
+            division_names,
+            key=lambda name: division_totals[name]['sales_value'],
+            reverse=True)
+        for position in range(int(round(abs(residual) / 0.01))):
+            name = order[position % len(order)]
+            values[name] = round_money(values[name] + step)
+    return values
+
+
+# ---------------------------------------------------------------------------
+# The Ledger on paper: core fonts only (no TTF bundling)
+# ---------------------------------------------------------------------------
+PDF_INK = (27, 34, 30)
+PDF_MUTED = (108, 117, 108)
+PDF_BOTTLE = (22, 68, 59)
+PDF_COPPER = (142, 90, 43)
+PDF_RULE = (215, 217, 205)
+PDF_RAIL = (242, 241, 233)
+PDF_PAPER = (255, 255, 255)
+PDF_ZEBRA = (250, 249, 244)
+PDF_FONT = 'helvetica'
+PDF_DISPLAY = 'times'
 
 
 def calculate_vat_summary(sales_value, gp, net_profit):
@@ -22,13 +89,18 @@ def calculate_vat_summary(sales_value, gp, net_profit):
     VAT is charged on sales, not on profit. GP and net profit are margins and
     must never be multiplied by the VAT factor -- doing so overstated them by
     20% on the executive summary.
+
+    Inc-VAT sales are the ex-VAT total plus the rounded VAT, so the two figures
+    add up exactly on the summary.
     """
+    sales_ex_vat = round_money(sales_value)
+    vat_on_sales = round_money(sales_ex_vat * VAT_RATE)
     return {
-        'sales_ex_vat': sales_value,
-        'sales_inc_vat': sales_value * VAT_MULTIPLIER,
-        'gp_ex_vat': gp,
-        'net_profit_ex_vat': net_profit,
-        'vat_on_sales': sales_value * VAT_RATE,
+        'sales_ex_vat': sales_ex_vat,
+        'sales_inc_vat': round_money(sales_ex_vat + vat_on_sales),
+        'gp_ex_vat': round_money(gp),
+        'net_profit_ex_vat': round_money(net_profit),
+        'vat_on_sales': vat_on_sales,
     }
 
 
@@ -87,38 +159,46 @@ DRAUGHT_YIELD_ITEMS = {
 class PDFReport(FPDF):
     """PDF Report generator with formatted sections and totals."""
 
+    # Period the report covers, set by generate_report. Printed under the title
+    # on every page so a saved PDF states the date range it was run for.
+    report_period = None
+
     def header(self):
         """Add header to each page."""
-        self.set_font('Arial', 'B', 16)
-        self.set_text_color(40, 40, 40)
+        self.set_font(PDF_DISPLAY, 'B', 16)
+        self.set_text_color(*PDF_INK)
         self.cell(0, 10, 'Prestonfield Golf Club - Bar Stock Report', 0, 1, 'C')
-        self.set_font('Arial', '', 10)
-        self.set_text_color(100, 100, 100)
+        self.set_font(PDF_FONT, '', 10)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
+        if self.report_period:
+            self.set_font(PDF_FONT, 'B', 10)
+            self.set_text_color(*PDF_INK)
+            self.cell(0, 5, f'Report period: {self.report_period}', 0, 1, 'C')
         self.ln(5)
-        self.set_draw_color(200, 200, 200)
+        self.set_draw_color(*PDF_RULE)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
 
     def footer(self):
         """Add footer to each page."""
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.set_text_color(128, 128, 128)
+        self.set_font(PDF_FONT, 'I', 8)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
     def chapter_title(self, title):
         """Add a section title."""
-        self.set_font('Arial', 'B', 12)
-        self.set_text_color(0, 51, 102)
+        self.set_font(PDF_DISPLAY, 'B', 13)
+        self.set_text_color(*PDF_BOTTLE)
         self.cell(0, 10, title, 0, 1, 'L')
         self.ln(2)
 
     def section_table_header(self, headers, widths, font_size=7):
         """Draw table header with styling."""
-        self.set_font('Arial', 'B', font_size)
-        self.set_fill_color(240, 240, 240)
-        self.set_text_color(0, 0, 0)
+        self.set_font(PDF_FONT, 'B', font_size)
+        self.set_fill_color(*PDF_RAIL)
+        self.set_text_color(*PDF_INK)
         for header, width in zip(headers, widths):
             self.cell(width, 6, header, 1, 0, 'C', True)
         self.ln()
@@ -126,13 +206,13 @@ class PDFReport(FPDF):
     def section_table_row(self, values, widths, is_total=False, font_size=7):
         """Draw table row."""
         if is_total:
-            self.set_font('Arial', 'B', font_size)
-            self.set_fill_color(230, 230, 230)
+            self.set_font(PDF_FONT, 'B', font_size)
+            self.set_fill_color(*PDF_RAIL)
         else:
-            self.set_font('Arial', '', font_size)
-            self.set_fill_color(255, 255, 255)
+            self.set_font(PDF_FONT, '', font_size)
+            self.set_fill_color(*PDF_PAPER)
 
-        self.set_text_color(0, 0, 0)
+        self.set_text_color(*PDF_INK)
         for value, width in zip(values, widths):
             align = 'R' if isinstance(value, (int, float)) or (isinstance(value, str) and value.startswith('£')) else 'L'
             self.cell(width, 5, str(value), 1, 0, align, True)
@@ -169,17 +249,19 @@ class PDFReport(FPDF):
         estimated_height = (header_height + len(rows) * row_height +
                             total_rows_count * row_height + notes_height + 15)
 
-        def _draw_row(values, is_total=False, fill_color=None):
+        def _draw_row(values, is_total=False, fill_color=None, zebra=False):
             if is_total:
-                self.set_font('Arial', 'B', font_size)
-                self.set_fill_color(230, 230, 230)
+                self.set_font(PDF_FONT, 'B', font_size)
+                self.set_fill_color(*PDF_RAIL)
             else:
-                self.set_font('Arial', '', font_size)
+                self.set_font(PDF_FONT, '', font_size)
                 if fill_color:
                     self.set_fill_color(*fill_color)
+                elif zebra:
+                    self.set_fill_color(*PDF_ZEBRA)
                 else:
-                    self.set_fill_color(255, 255, 255)
-            self.set_text_color(0, 0, 0)
+                    self.set_fill_color(*PDF_PAPER)
+            self.set_text_color(*PDF_INK)
             for value, width in zip(values, widths):
                 align = 'R' if isinstance(value, (int, float)) or (isinstance(value, str) and value.startswith('£')) else 'L'
                 self.cell(width, row_height, str(value), 1, 0, align, True)
@@ -193,13 +275,15 @@ class PDFReport(FPDF):
                 self.chapter_title(title)
             self.section_table_header(headers, widths, font_size=font_size)
             for idx, row_values in enumerate(rows):
-                _draw_row(row_values, fill_color=row_fill_colors[idx] if row_fill_colors else None)
+                _draw_row(row_values,
+                          fill_color=row_fill_colors[idx] if row_fill_colors else None,
+                          zebra=bool(idx % 2))
             if total_values is not None:
                 _draw_row(total_values, is_total=True)
             if notes:
                 self.ln(2)
-                self.set_font('Arial', 'I', notes_font_size)
-                self.set_text_color(0, 0, 0)
+                self.set_font(PDF_FONT, 'I', notes_font_size)
+                self.set_text_color(*PDF_INK)
                 for note in notes:
                     self.cell(0, notes_font_size * 0.5, note, 0, 1, 'L')
             return
@@ -215,7 +299,9 @@ class PDFReport(FPDF):
                 self.add_page()
                 if repeat_header:
                     self.section_table_header(headers, widths, font_size=font_size)
-            _draw_row(row_values, fill_color=row_fill_colors[idx] if row_fill_colors else None)
+            _draw_row(row_values,
+                      fill_color=row_fill_colors[idx] if row_fill_colors else None,
+                      zebra=bool(idx % 2))
 
         if total_values is not None:
             if self._available_page_space() < row_height + 10:
@@ -226,8 +312,8 @@ class PDFReport(FPDF):
 
         if notes:
             self.ln(2)
-            self.set_font('Arial', 'I', notes_font_size)
-            self.set_text_color(0, 0, 0)
+            self.set_font(PDF_FONT, 'I', notes_font_size)
+            self.set_text_color(*PDF_INK)
             for note in notes:
                 self.cell(0, notes_font_size * 0.5, note, 0, 1, 'L')
 
@@ -253,8 +339,8 @@ class PDFReport(FPDF):
         overall_gp_pct = (total_gp / total_sales_value * 100) if total_sales_value > 0 else 0
 
         self.add_page()
-        self.set_font('Arial', 'B', 15)
-        self.set_text_color(0, 51, 102)
+        self.set_font(PDF_DISPLAY, 'B', 15)
+        self.set_text_color(*PDF_BOTTLE)
         self.cell(0, 10, 'Executive Summary', 0, 1, 'C')
         self.ln(2)
 
@@ -279,22 +365,22 @@ class PDFReport(FPDF):
             x = start_x + col * (box_width + box_spacing)
             box_y = y + row * (box_height + box_spacing)
             self.set_xy(x, box_y)
-            self.set_fill_color(245, 245, 245)
-            self.set_draw_color(200, 200, 200)
+            self.set_fill_color(*PDF_RAIL)
+            self.set_draw_color(*PDF_RULE)
             self.rect(x, box_y, box_width, box_height, 'FD')
             self.set_xy(x, box_y + 2)
-            self.set_font('Arial', 'B', 7)
-            self.set_text_color(80, 80, 80)
+            self.set_font(PDF_FONT, 'B', 7)
+            self.set_text_color(*PDF_MUTED)
             self.cell(box_width, 5, label, 0, 2, 'C')
-            self.set_font('Arial', 'B', 12)
-            self.set_text_color(0, 51, 102)
+            self.set_font(PDF_FONT, 'B', 12)
+            self.set_text_color(*PDF_BOTTLE)
             self.cell(box_width, 9, value, 0, 2, 'C')
 
         self.ln((box_height + box_spacing) * 2 + 4)
 
         # Division performance (compact, with inc-VAT columns)
-        self.set_font('Arial', 'B', 10)
-        self.set_text_color(0, 51, 102)
+        self.set_font(PDF_FONT, 'B', 10)
+        self.set_text_color(*PDF_BOTTLE)
         self.cell(0, 6, 'Division Performance', 0, 1, 'L')
 
         div_headers = ['Division', 'Items', 'Stock Value', 'Sales ex-VAT', 'Sales inc-VAT', 'GP ex-VAT', 'GP%']
@@ -307,7 +393,7 @@ class PDFReport(FPDF):
                 len(by_division[division]),
                 f"£{totals['stock_value']:.2f}",
                 f"£{totals['sales_value']:.2f}",
-                f"£{totals['sales_value'] * VAT_MULTIPLIER:.2f}",
+                f"£{totals['sales_inc_vat']:.2f}",
                 f"£{totals['gp']:.2f}",
                 f"{gp_pct:.1f}%",
             ])
@@ -325,8 +411,8 @@ class PDFReport(FPDF):
         self.ln(2)
 
         # Key Metrics (compact, inline)
-        self.set_font('Arial', 'B', 10)
-        self.set_text_color(0, 51, 102)
+        self.set_font(PDF_FONT, 'B', 10)
+        self.set_text_color(*PDF_BOTTLE)
         self.cell(0, 6, 'Key Metrics', 0, 1, 'L')
 
         metric_rows = [
@@ -353,9 +439,11 @@ class PDFReport(FPDF):
                                 font_size=7, row_height=4)
         self.ln(2)
 
-        # Top 5 sales items
-        self.set_font('Arial', 'B', 10)
-        self.set_text_color(0, 51, 102)
+        # Top 5 sales items — keep the heading with its table
+        if self._available_page_space() < 45:
+            self.add_page()
+        self.set_font(PDF_FONT, 'B', 10)
+        self.set_text_color(*PDF_BOTTLE)
         self.cell(0, 6, 'Top 5 Sales Items', 0, 1, 'L')
 
         top_sales = sorted(
@@ -377,7 +465,8 @@ class PDFReport(FPDF):
         self.render_table_block(None, top_headers, top_widths, top_rows,
                                 font_size=7, row_height=4)
 
-    def generate_report(self, report_data, member_discount_pct=10, stocktake_data=None, running_surplus_value=None):
+    def generate_report(self, report_data, member_discount_pct=10, stocktake_data=None, running_surplus_value=None,
+                        report_period=None):
         """Generate the full report.
 
         Args:
@@ -386,10 +475,13 @@ class PDFReport(FPDF):
             stocktake_data: Stocktake Variance Report data for the selected period.
             running_surplus_value: Cumulative surplus/shortfall value from all
                 historical stocktakes, surviving baseline resets.
+            report_period: Date-range label for the period the report covers,
+                printed in the header of every page.
         """
-        # Filter out equipment/capital assets from report data
-        report_data = [item for item in report_data if item.get('division') != 'Equipment']
-
+        # Set before the first add_page() so every page header carries the range.
+        self.report_period = report_period
+        # Every item with a value in the dashboard's stock holding is reported,
+        # including equipment, so the committee pack and the app agree.
         # Determine whether any member split data exists
         has_member_data = any(i.get('member_sales_value', 0) > 0 for i in report_data)
 
@@ -401,55 +493,63 @@ class PDFReport(FPDF):
             if item['is_draught']:
                 draught_items.append(item)
 
-        # Pre-compute division totals
+        # Pre-compute division totals. Item values are already struck to the
+        # penny, so the division rows add up exactly to the grand totals.
         division_totals = {}
         for division, items in by_division.items():
+            member_revenue = sum_money(i['member_sales_value'] for i in items)
+            non_member_revenue = sum_money(i.get('non_member_sales_value', 0) for i in items)
+            member_gp = sum_money(i['member_gp'] for i in items)
+            non_member_gp = sum_money(i.get('non_member_gp', 0) for i in items)
             division_totals[division] = {
-                'stock_value': sum(i['stock_value'] for i in items),
-                'sales_value': sum(i['total_sales_value'] for i in items),
-                'gp': sum(i['sales_gp'] for i in items),
+                'stock_value': sum_money(i['stock_value'] for i in items),
+                'sales_value': round_money(member_revenue + non_member_revenue),
+                'gp': round_money(member_gp + non_member_gp),
                 'sales_qty': sum(i['total_sales_qty'] for i in items),
-                'member_gp': sum(i['member_gp'] for i in items),
-                'member_sales_value': sum(i['member_sales_value'] for i in items),
-                'member_gp_pct': (sum(i['member_gp'] for i in items) / sum(i['member_sales_value'] for i in items) * 100)
-                    if sum(i['member_sales_value'] for i in items) > 0 else 0,
-                'non_member_gp': sum(i.get('non_member_gp', 0) for i in items),
-                'non_member_sales_value': sum(i.get('non_member_sales_value', 0) for i in items),
-                'non_member_gp_pct': (sum(i.get('non_member_gp', 0) for i in items) /
-                    sum(i.get('non_member_sales_value', 0) for i in items) * 100)
-                    if sum(i.get('non_member_sales_value', 0) for i in items) > 0 else 0,
+                'member_gp': member_gp,
+                'member_sales_value': member_revenue,
+                'member_gp_pct': (member_gp / member_revenue * 100) if member_revenue > 0 else 0,
+                'non_member_gp': non_member_gp,
+                'non_member_sales_value': non_member_revenue,
+                'non_member_gp_pct': (non_member_gp / non_member_revenue * 100) if non_member_revenue > 0 else 0,
             }
 
+        # Inc-VAT sales per division, allocated so the rows add up to the total.
+        division_inc_vat = allocate_division_inc_vat(division_totals)
+        for name, value in division_inc_vat.items():
+            division_totals[name]['sales_inc_vat'] = value
+
         # Grand totals
-        total_stock_value = sum(d['stock_value'] for d in division_totals.values())
-        total_sales_value = sum(d['sales_value'] for d in division_totals.values())
-        total_gp = sum(d['gp'] for d in division_totals.values())
-        total_cost_of_sales = total_sales_value - total_gp
+        total_stock_value = sum_money(d['stock_value'] for d in division_totals.values())
+        total_sales_value = sum_money(d['sales_value'] for d in division_totals.values())
+        total_gp = sum_money(d['gp'] for d in division_totals.values())
+        total_sales_inc_vat = sum_money(d['sales_inc_vat'] for d in division_totals.values())
+        total_cost_of_sales = round_money(total_sales_value - total_gp)
         total_sales_qty = sum(d['sales_qty'] for d in division_totals.values())
-        total_member_gp_div = sum(d['member_gp'] for d in division_totals.values())
-        total_member_rev_div = sum(d['member_sales_value'] for d in division_totals.values())
+        total_member_gp_div = sum_money(d['member_gp'] for d in division_totals.values())
+        total_member_rev_div = sum_money(d['member_sales_value'] for d in division_totals.values())
         total_member_gp_pct_div = (total_member_gp_div / total_member_rev_div * 100) if total_member_rev_div > 0 else 0
-        total_non_member_gp_div = sum(d['non_member_gp'] for d in division_totals.values())
-        total_non_member_rev_div = sum(d['non_member_sales_value'] for d in division_totals.values())
+        total_non_member_gp_div = sum_money(d['non_member_gp'] for d in division_totals.values())
+        total_non_member_rev_div = sum_money(d['non_member_sales_value'] for d in division_totals.values())
         total_non_member_gp_pct_div = (total_non_member_gp_div / total_non_member_rev_div * 100) if total_non_member_rev_div > 0 else 0
 
         # Member/non-member overall totals
-        total_member_gp = sum(i['member_gp'] for i in report_data)
-        total_member_revenue = sum(i['member_sales_value'] for i in report_data)
+        total_member_gp = sum_money(i['member_gp'] for i in report_data)
+        total_member_revenue = sum_money(i['member_sales_value'] for i in report_data)
         overall_member_gp_pct = (total_member_gp / total_member_revenue * 100) if total_member_revenue > 0 else 0
-        total_non_member_gp = sum(i.get('non_member_gp', 0) for i in report_data)
-        total_non_member_revenue = sum(i.get('non_member_sales_value', 0) for i in report_data)
+        total_non_member_gp = sum_money(i.get('non_member_gp', 0) for i in report_data)
+        total_non_member_revenue = sum_money(i.get('non_member_sales_value', 0) for i in report_data)
         overall_non_member_gp_pct = (total_non_member_gp / total_non_member_revenue * 100) if total_non_member_revenue > 0 else 0
 
         # Stocktake / surplus
         items_with_stocktake = [i for i in report_data if i.get('surplus_value') is not None]
-        total_surplus_value = sum(i['surplus_value'] for i in items_with_stocktake) if items_with_stocktake else None
+        total_surplus_value = sum_money(i['surplus_value'] for i in items_with_stocktake) if items_with_stocktake else None
         has_stocktake = total_surplus_value is not None
 
         # Cost prices, stock values and sales revenue are now stored ex-VAT.
         # Gross profit and net profit are therefore ex-VAT. Inc-VAT figures are
         # shown separately in the report where useful.
-        total_net_profit = total_sales_value - total_cost_of_sales
+        total_net_profit = round_money(total_sales_value - total_cost_of_sales)
 
         # Pre-compute detailed item lists and their totals
         sales_items = [i for i in report_data if i['total_sales_qty'] > 0]
@@ -458,13 +558,34 @@ class PDFReport(FPDF):
         supplier_return_items = [i for i in report_data if i.get('supplier_return_qty', 0) > 0]
         comp_items = [i for i in report_data if i['complimentary_qty'] > 0]
         open_tab_items = [i for i in report_data if i['open_tab_qty'] > 0]
-        parent_adj_items = [i for i in report_data if i['parent_adj_qty'] > 0 and not i.get('is_hidden', False)]
-        variance_items = [i for i in report_data if i['expected_consumption'] > 0 and not i.get('is_hidden', False)]
+        parent_adj_items = [i for i in report_data if i['parent_adj_qty'] > 0
+                            and not i.get('is_hidden', False)
+                            and not i.get('is_delisted', False)]
+        variance_items = [i for i in report_data if i['expected_consumption'] > 0
+                          and not i.get('is_hidden', False)
+                          and not i.get('is_delisted', False)]
 
-        total_wastage_value = sum(i['wastage_qty'] * i['cost_price'] for i in wastage_items)
-        total_line_clean_value = sum(i.get('line_clean_qty', 0) * i['cost_price'] for i in line_clean_items)
-        total_supplier_return_value = sum(i['supplier_return_qty'] * i['cost_price'] for i in supplier_return_items)
-        total_comp_value = sum(i['complimentary_qty'] * i['sell_price'] for i in comp_items)
+        # Value each item column once, allocated to the penny, so the rows in
+        # each summary add up exactly to the total printed beneath them.
+        wastage_values = allocate_money(
+            [i['wastage_qty'] * i['cost_price'] for i in wastage_items])
+        line_clean_values = allocate_money(
+            [i.get('line_clean_qty', 0) * i['cost_price'] for i in line_clean_items])
+        supplier_return_values = allocate_money(
+            [i['supplier_return_qty'] * i['cost_price'] for i in supplier_return_items])
+        comp_values = allocate_money(
+            [i['complimentary_qty'] * i['sell_price'] for i in comp_items])
+        open_tab_values = allocate_money(
+            [i['open_tab_qty'] * i['cost_price'] for i in open_tab_items])
+        parent_adj_values = allocate_money(
+            [i['parent_adj_qty'] * i['cost_price'] for i in parent_adj_items])
+
+        total_wastage_value = sum_money(wastage_values)
+        total_line_clean_value = sum_money(line_clean_values)
+        total_supplier_return_value = sum_money(supplier_return_values)
+        total_comp_value = sum_money(comp_values)
+        total_open_tab_value = sum_money(open_tab_values)
+        total_adj_value = sum_money(parent_adj_values)
 
         # ------------------------------------------------------------------
         # PAGE 1: Executive Summary (directors' view)
@@ -518,9 +639,9 @@ class PDFReport(FPDF):
         if has_member_data:
             item_fin_total = [
                 'TOTAL',
-                f"£{total_sales_value:.2f}",
-                f"£{sum(i['sales_cost'] for i in sales_items):.2f}",
-                f"£{sum(i['sales_gp'] for i in sales_items):.2f}",
+                f"£{sum_money(i['total_sales_value'] for i in sales_items):.2f}",
+                f"£{sum_money(i['sales_cost'] for i in sales_items):.2f}",
+                f"£{sum_money(i['sales_gp'] for i in sales_items):.2f}",
                 '',
                 f"{sum(i.get('member_qty', 0) for i in sales_items):.1f}",
                 f"{sum(i.get('non_member_qty', 0) for i in sales_items):.1f}",
@@ -530,9 +651,9 @@ class PDFReport(FPDF):
         else:
             item_fin_total = [
                 'TOTAL',
-                f"£{total_sales_value:.2f}",
-                f"£{sum(i['sales_cost'] for i in sales_items):.2f}",
-                f"£{sum(i['sales_gp'] for i in sales_items):.2f}",
+                f"£{sum_money(i['total_sales_value'] for i in sales_items):.2f}",
+                f"£{sum_money(i['sales_cost'] for i in sales_items):.2f}",
+                f"£{sum_money(i['sales_gp'] for i in sales_items):.2f}",
                 '',
             ]
 
@@ -544,7 +665,7 @@ class PDFReport(FPDF):
             )
         else:
             self.chapter_title('1. Item Financial Breakdown')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No sales recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
@@ -686,13 +807,15 @@ class PDFReport(FPDF):
             )
         else:
             self.chapter_title('3. Stock Movement & Variance')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No stock consumption data available for variance calculation.', 0, 1, 'L')
 
         # ------------------------------------------------------------------
         # SECTION 4: Draught Yield Report
         # ------------------------------------------------------------------
-        draught_items = [i for i in draught_items if i['item_id'] in DRAUGHT_YIELD_ITEMS]
+        draught_items = [i for i in draught_items
+                         if i['item_id'] in DRAUGHT_YIELD_ITEMS
+                         and not i.get('is_delisted', False)]
         if draught_items:
             draught_headers = ['Item', 'Sales', 'Adj.', 'Wast', 'Comp', 'Open Tabs', 'Consumed', 'Closing', 'Yield%']
             draught_widths = [38, 16, 14, 14, 14, 16, 18, 18, 16]
@@ -725,13 +848,13 @@ class PDFReport(FPDF):
         wastage_widths = [60, 40, 25, 30, 30]
         wastage_rows = []
         total_wastage = sum(i['wastage_qty'] for i in wastage_items)
-        for item in wastage_items:
+        for item, value in zip(wastage_items, wastage_values):
             wastage_rows.append([
                 item['item_name'][:25],
                 item['division'][:18],
                 f"{item['wastage_qty']:.1f}",
                 f"£{item['cost_price']:.2f}",
-                f"£{item['wastage_qty'] * item['cost_price']:.2f}"
+                f"£{value:.2f}"
             ])
         wastage_total = ['TOTAL', '', f"{total_wastage:.1f}", '', f"£{total_wastage_value:.2f}"]
 
@@ -740,7 +863,7 @@ class PDFReport(FPDF):
                                     wastage_rows, total_values=wastage_total)
         else:
             self.chapter_title('5. Wastage Summary')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No wastage recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
@@ -751,13 +874,13 @@ class PDFReport(FPDF):
         line_clean_widths = [60, 40, 25, 30, 30]
         line_clean_rows = []
         total_line_clean = sum(i['line_clean_qty'] for i in line_clean_items)
-        for item in line_clean_items:
+        for item, value in zip(line_clean_items, line_clean_values):
             line_clean_rows.append([
                 item['item_name'][:25],
                 item['division'][:18],
                 f"{item['line_clean_qty']:.1f}",
                 f"£{item['cost_price']:.2f}",
-                f"£{item['line_clean_qty'] * item['cost_price']:.2f}"
+                f"£{value:.2f}"
             ])
         line_clean_total = ['TOTAL', '', f"{total_line_clean:.1f}", '', f"£{total_line_clean_value:.2f}"]
 
@@ -768,8 +891,8 @@ class PDFReport(FPDF):
         # Combined Wastage & Line Clean note
         if total_wastage_value > 0 or total_line_clean_value > 0:
             combined_total = total_wastage_value + total_line_clean_value
-            self.set_font('Arial', 'B', 11)
-            self.set_text_color(0, 0, 0)
+            self.set_font(PDF_FONT, 'B', 11)
+            self.set_text_color(*PDF_INK)
             self.cell(0, 8, f"Total Wastage Value (excluding line clean): £{total_wastage_value:.2f}", 0, 1, 'L')
             if total_line_clean_value > 0:
                 self.cell(0, 8, f"Total Line Clean Value: £{total_line_clean_value:.2f}", 0, 1, 'L')
@@ -783,7 +906,7 @@ class PDFReport(FPDF):
         supplier_return_widths = [40, 25, 18, 22, 25, 30, 25]
         supplier_return_rows = []
         total_supplier_return_qty = sum(i['supplier_return_qty'] for i in supplier_return_items)
-        for item in supplier_return_items:
+        for item, value in zip(supplier_return_items, supplier_return_values):
             supplier_return_rows.append([
                 item['item_name'][:20],
                 item['division'][:12],
@@ -791,7 +914,7 @@ class PDFReport(FPDF):
                 f"£{item['cost_price']:.2f}",
                 str(item.get('supplier_return_supplier', ''))[:12],
                 str(item.get('supplier_return_reason', ''))[:18],
-                f"£{item['supplier_return_qty'] * item['cost_price']:.2f}"
+                f"£{value:.2f}"
             ])
         supplier_return_total = ['TOTAL', '', f"{total_supplier_return_qty:.1f}", '', '', '', f"£{total_supplier_return_value:.2f}"]
 
@@ -801,13 +924,13 @@ class PDFReport(FPDF):
                                     total_values=supplier_return_total)
         else:
             self.chapter_title('7. Supplier Returns Summary')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No supplier returns recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
         if total_supplier_return_value > 0:
-            self.set_font('Arial', 'B', 11)
-            self.set_text_color(0, 0, 0)
+            self.set_font(PDF_FONT, 'B', 11)
+            self.set_text_color(*PDF_INK)
             self.cell(0, 8, f"Total Supplier Return Value (at cost): £{total_supplier_return_value:.2f}", 0, 1, 'L')
             self.ln(5)
 
@@ -821,11 +944,11 @@ class PDFReport(FPDF):
         )
         if total_delisted_value != 0:
             self.chapter_title('Delisted Stock Value')
-            self.set_font('Arial', '', 11)
-            self.set_text_color(0, 0, 0)
+            self.set_font(PDF_FONT, '', 11)
+            self.set_text_color(*PDF_INK)
             self.cell(0, 8, f"Total delisted stock value (excluded from active stock): £{total_delisted_value:.2f}", 0, 1, 'L')
             self.ln(2)
-            self.set_font('Arial', 'I', 8)
+            self.set_font(PDF_FONT, 'I', 8)
             self.cell(0, 5, 'Items are delisted from active stock but still physically held. Value is excluded from Total Stock Value.', 0, 1, 'L')
             self.ln(5)
 
@@ -836,12 +959,12 @@ class PDFReport(FPDF):
         comp_widths = [70, 50, 30, 35]
         comp_rows = []
         total_comp = sum(i['complimentary_qty'] for i in comp_items)
-        for item in comp_items:
+        for item, value in zip(comp_items, comp_values):
             comp_rows.append([
                 item['item_name'][:30],
                 item['division'][:22],
                 f"{item['complimentary_qty']:.1f}",
-                f"£{item['complimentary_qty'] * item['sell_price']:.2f}"
+                f"£{value:.2f}"
             ])
         comp_total = ['TOTAL', '', f"{total_comp:.1f}", f"£{total_comp_value:.2f}"]
 
@@ -850,7 +973,7 @@ class PDFReport(FPDF):
                                     comp_rows, total_values=comp_total)
         else:
             self.chapter_title('8. Complimentary Summary')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No complimentary items recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
@@ -861,14 +984,13 @@ class PDFReport(FPDF):
         open_tab_widths = [60, 40, 25, 30, 30]
         open_tab_rows = []
         total_open_tab = sum(i['open_tab_qty'] for i in open_tab_items)
-        total_open_tab_value = sum(i['open_tab_qty'] * i['cost_price'] for i in open_tab_items)
-        for item in open_tab_items:
+        for item, value in zip(open_tab_items, open_tab_values):
             open_tab_rows.append([
                 item['item_name'][:25],
                 item['division'][:18],
                 f"{item['open_tab_qty']:.1f}",
                 f"£{item['cost_price']:.2f}",
-                f"£{item['open_tab_qty'] * item['cost_price']:.2f}"
+                f"£{value:.2f}"
             ])
         open_tab_total = ['TOTAL', '', f"{total_open_tab:.1f}", '', f"£{total_open_tab_value:.2f}"]
 
@@ -877,7 +999,7 @@ class PDFReport(FPDF):
                                     open_tab_widths, open_tab_rows, total_values=open_tab_total)
         else:
             self.chapter_title('9. Open Tabs / Pending Sales Summary')
-            self.set_font('Arial', 'I', 10)
+            self.set_font(PDF_FONT, 'I', 10)
             self.cell(0, 10, 'No open tabs recorded in this period.', 0, 1, 'L')
         self.ln(5)
 
@@ -889,14 +1011,13 @@ class PDFReport(FPDF):
             parent_adj_widths = [50, 40, 25, 30, 30]
             parent_adj_rows = []
             total_adj_qty = sum(i['parent_adj_qty'] for i in parent_adj_items)
-            total_adj_value = sum(i['parent_adj_qty'] * i['cost_price'] for i in parent_adj_items)
-            for item in parent_adj_items:
+            for item, value in zip(parent_adj_items, parent_adj_values):
                 parent_adj_rows.append([
                     item['item_name'][:25],
                     item['division'][:18],
                     f"{item['parent_adj_qty']:.1f}",
                     f"£{item['cost_price']:.2f}",
-                    f"£{item['parent_adj_qty'] * item['cost_price']:.2f}"
+                    f"£{value:.2f}"
                 ])
             parent_adj_total = ['TOTAL', '', f"{total_adj_qty:.1f}", '', f"£{total_adj_value:.2f}"]
             self.render_table_block('10. Parent Stock Adjustments', parent_adj_headers,
@@ -968,7 +1089,7 @@ class PDFReport(FPDF):
                 )
             else:
                 self.ln(10)
-                self.set_font('Arial', 'I', 10)
+                self.set_font(PDF_FONT, 'I', 10)
                 self.cell(0, 10, 'No stocktake snapshots recorded. Use "Record Stocktake" to enter physical counts.', 0, 1, 'L')
 
     def generate_stock_count_sheet(self, inventory_data):
@@ -976,16 +1097,16 @@ class PDFReport(FPDF):
         self.add_page()
         self.chapter_title('Stock Count Sheet')
 
-        self.set_font('Arial', '', 10)
+        self.set_font(PDF_FONT, '', 10)
         self.cell(0, 8, f'Total items: {len(inventory_data)}', 0, 1, 'L')
         self.ln(2)
 
         headers = ['Item', 'Category', 'Expected', 'Counted', 'Variance', 'Notes']
         widths = [50, 28, 22, 22, 22, 46]
 
-        self.set_font('Arial', 'B', 9)
-        self.set_fill_color(220, 220, 220)
-        self.set_text_color(0, 0, 0)
+        self.set_font(PDF_FONT, 'B', 9)
+        self.set_fill_color(*PDF_RAIL)
+        self.set_text_color(*PDF_INK)
         for header, width in zip(headers, widths):
             self.cell(width, 8, header, 1, 0, 'C', True)
         self.ln()
@@ -994,32 +1115,31 @@ class PDFReport(FPDF):
         inventory_data = sorted(inventory_data, key=lambda x: (x.get('category', ''), x.get('item_name', '')))
         current_category = None
 
-        for item in inventory_data:
+        for index, item in enumerate(inventory_data):
+            item_id = item.get('item_id', '')
+            # Delisted lines hold no stock and are never counted.
+            if is_delisted(item_id):
+                continue
+
             category = item.get('category', '')
             if category != current_category:
                 current_category = category
-                self.set_font('Arial', 'B', 9)
-                self.set_fill_color(240, 240, 240)
+                self.set_font(PDF_FONT, 'B', 9)
+                self.set_fill_color(*PDF_RAIL)
+                self.set_text_color(*PDF_INK)
                 self.cell(sum(widths), 8, current_category, 1, 1, 'L', True)
 
-            item_id = item.get('item_id', '')
-            is_item_delisted = is_delisted(item_id)
             item_name = item.get('item_name', '')
-            if is_item_delisted:
-                item_name = f"{item_name} (DELISTED)"
 
-            self.set_font('Arial', '', 9)
-            self.set_fill_color(255, 255, 255)
-            self.set_text_color(0, 0, 0)
+            self.set_font(PDF_FONT, '', 9)
+            self.set_fill_color(*(PDF_ZEBRA if index % 2 else PDF_PAPER))
+            self.set_text_color(*PDF_INK)
             self.cell(widths[0], 8, item_name[:35], 1, 0, 'L', True)
             self.cell(widths[1], 8, item.get('category', '')[:20], 1, 0, 'L', True)
 
             # Convert to natural units (barrels, bottles, boxes, cartons) where applicable.
-            # Delisted items show no expected quantity because stock has been removed.
             txn_expected = item.get('txn_expected', 0)
-            if is_item_delisted:
-                expected_text = 'DELISTED'
-            elif requires_conversion(item_id):
+            if requires_conversion(item_id):
                 expected_val = convert_to_input(item_id, txn_expected)
                 unit = get_input_label(item_id) or ''
                 expected_text = f"{expected_val:.1f} {unit}"
@@ -1032,53 +1152,65 @@ class PDFReport(FPDF):
             self.cell(widths[5], 8, '', 1, 1, 'L', True)
 
         self.ln(5)
-        self.set_font('Arial', 'I', 8)
+        self.set_font(PDF_FONT, 'I', 8)
         self.cell(0, 5, 'Expected = transaction-based expected stock. Counted = write your physical count. Variance = Counted - Expected.', 0, 1, 'L')
 
 class PriceHistoryPDF(FPDF):
     """PDF generator for price history reports."""
 
+    # Date range the report was run for; printed under the title on every page.
+    report_period = None
+
     def header(self):
-        self.set_font('Arial', 'B', 16)
-        self.set_text_color(40, 40, 40)
+        self.set_font(PDF_DISPLAY, 'B', 16)
+        self.set_text_color(*PDF_INK)
         self.cell(0, 10, 'Prestonfield Golf Club - Price History Report', 0, 1, 'C')
-        self.set_font('Arial', '', 10)
-        self.set_text_color(100, 100, 100)
+        self.set_font(PDF_FONT, '', 10)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
+        if self.report_period:
+            self.set_font(PDF_FONT, 'B', 10)
+            self.set_text_color(*PDF_INK)
+            self.cell(0, 5, f'Report period: {self.report_period}', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.set_text_color(128, 128, 128)
+        self.set_font(PDF_FONT, 'I', 8)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
     @staticmethod
-    def generate(report_data, downloads_dir=None):
+    def generate(report_data, downloads_dir=None, report_period=None):
         """Generate and save a price history PDF report.
 
         Args:
             report_data: List of dicts with keys:
                 item_name, timestamp, supplier, cost_price, prev_price, change
             downloads_dir: Directory to save the PDF. Defaults to ~/Downloads.
+            report_period: Date-range label printed in the page header.
         """
         if downloads_dir is None:
             downloads_dir = os.path.expanduser('~/Downloads')
 
         pdf = PriceHistoryPDF()
+        pdf.report_period = report_period
         pdf.add_page()
-        pdf.set_font('Arial', '', 9)
+        pdf.set_font(PDF_FONT, '', 9)
 
-        pdf.set_fill_color(240, 240, 240)
-        pdf.set_font('Arial', 'B', 9)
+        pdf.set_fill_color(*PDF_RAIL)
+        pdf.set_text_color(*PDF_INK)
+        pdf.set_font(PDF_FONT, 'B', 9)
         headers = ['Item', 'Date', 'Supplier', 'Cost Price', 'Previous', 'Change']
         widths = [50, 30, 30, 25, 25, 25]
         for h, w in zip(headers, widths):
             pdf.cell(w, 8, h, 1, 0, 'C', True)
         pdf.ln()
 
-        pdf.set_font('Arial', '', 9)
-        for row in report_data:
+        pdf.set_font(PDF_FONT, '', 9)
+        pdf.set_text_color(*PDF_INK)
+        for index, row in enumerate(report_data):
+            pdf.set_fill_color(*(PDF_ZEBRA if index % 2 else PDF_PAPER))
             change_str = f"{'+' if row['change'] >= 0 else ''}{row['change']:.2f}"
             values = [
                 str(row.get('item_name', ''))[:30],
@@ -1089,7 +1221,7 @@ class PriceHistoryPDF(FPDF):
                 change_str
             ]
             for v, w in zip(values, widths):
-                pdf.cell(w, 7, v, 1, 0, 'C')
+                pdf.cell(w, 7, v, 1, 0, 'C', True)
             pdf.ln()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1104,19 +1236,19 @@ class StockOrderSheetPDF(FPDF):
 
     def header(self):
         """Add header to each page."""
-        self.set_font('Arial', 'B', 16)
-        self.set_text_color(40, 40, 40)
+        self.set_font(PDF_DISPLAY, 'B', 16)
+        self.set_text_color(*PDF_INK)
         self.cell(0, 10, 'Prestonfield Golf Club - Stock Order Sheet', 0, 1, 'C')
-        self.set_font('Arial', '', 10)
-        self.set_text_color(100, 100, 100)
+        self.set_font(PDF_FONT, '', 10)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 5, f'Generated: {datetime.now().strftime(f"{DATE_FORMAT_DISPLAY} at %H:%M")}', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
         """Add footer to each page."""
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.set_text_color(128, 128, 128)
+        self.set_font(PDF_FONT, 'I', 8)
+        self.set_text_color(*PDF_MUTED)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
     @staticmethod
@@ -1137,10 +1269,10 @@ class StockOrderSheetPDF(FPDF):
 
         pdf = StockOrderSheetPDF()
         pdf.add_page()
-        pdf.set_font('Arial', '', 9)
+        pdf.set_font(PDF_FONT, '', 9)
 
         if not report_data:
-            pdf.set_font('Arial', 'I', 12)
+            pdf.set_font(PDF_FONT, 'I', 12)
             pdf.cell(0, 10, 'No items available for order sheet.', 0, 1, 'C')
         else:
             # Preserve the supplier/category order supplied by the custom builder
@@ -1170,31 +1302,32 @@ class StockOrderSheetPDF(FPDF):
                 if supplier != last_supplier:
                     if last_supplier is not None:
                         pdf.ln(4)
-                    pdf.set_font('Arial', 'B', 13)
-                    pdf.set_text_color(0, 51, 102)
+                    pdf.set_font(PDF_FONT, 'B', 13)
+                    pdf.set_text_color(*PDF_BOTTLE)
                     pdf.cell(0, 10, _pdf_safe(supplier), 0, 1, 'L')
                     pdf.ln(1)
                     last_supplier = supplier
 
                 # Category subheading (skip if category is blank)
                 if category:
-                    pdf.set_font('Arial', 'B', 10)
-                    pdf.set_text_color(60, 60, 60)
-                    pdf.set_fill_color(230, 230, 230)
+                    pdf.set_font(PDF_FONT, 'B', 10)
+                    pdf.set_text_color(*PDF_INK)
+                    pdf.set_fill_color(*PDF_RAIL)
                     pdf.cell(sum(widths), 7, _pdf_safe(category), 1, 1, 'L', True)
 
                 # Table header
-                pdf.set_font('Arial', 'B', 8)
-                pdf.set_fill_color(240, 240, 240)
-                pdf.set_text_color(0, 0, 0)
+                pdf.set_font(PDF_FONT, 'B', 8)
+                pdf.set_fill_color(*PDF_RAIL)
+                pdf.set_text_color(*PDF_INK)
                 for header, width in zip(headers, widths):
                     pdf.cell(width, 6, _pdf_safe(header), 1, 0, 'C', True)
                 pdf.ln()
 
                 # Rows
-                pdf.set_font('Arial', '', 8)
-                pdf.set_fill_color(255, 255, 255)
-                for item in items:
+                pdf.set_font(PDF_FONT, '', 8)
+                pdf.set_text_color(*PDF_INK)
+                for index, item in enumerate(items):
+                    pdf.set_fill_color(*(PDF_ZEBRA if index % 2 else PDF_PAPER))
                     reorder_level = item.get('reorder_level', 0)
 
                     # Current column is intentionally left blank for manual counts
@@ -1213,8 +1346,8 @@ class StockOrderSheetPDF(FPDF):
 
                 pdf.ln(2)
 
-            pdf.set_font('Arial', 'I', 8)
-            pdf.set_text_color(100, 100, 100)
+            pdf.set_font(PDF_FONT, 'I', 8)
+            pdf.set_text_color(*PDF_MUTED)
             pdf.cell(0, 5, 'Order sheet. Current = blank for manual stock count. Reorder = recorded reorder level.', 0, 1, 'L')
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
