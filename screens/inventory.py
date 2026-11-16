@@ -22,6 +22,7 @@ from app_config import (
 from actions import ACTION_DELIVERY, ACTION_PRICE_UPDATE
 from categories import is_delisted
 from conversions import convert_to_input, convert_to_system, get_conversion, get_input_label, requires_conversion
+import data_manager as data_manager_module
 from data_manager import (
     InventoryDataManager, COL_ALLOW_NEGATIVE, COL_DIVISION, COL_REORDER_LEVEL,
 )
@@ -298,7 +299,7 @@ class InventoryMixin:
             if self._save_inventory():
                 # Keep master Items.csv in sync so new items survive database rebuilds
                 try:
-                    script_dir = get_script_directory()
+                    script_dir = data_manager_module.DATA_DIR
                     total_value = float(quantity) * float(cost_price)
                     append_item_to_items_csv(
                         script_dir=script_dir,

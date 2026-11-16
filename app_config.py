@@ -8,13 +8,17 @@ them from here so that no screen module has to import the application module
 
 import os
 import sys
+from pathlib import Path
+
+import club_profile
 
 
 def get_resource_path():
-    """Return the Application Support directory used for live data."""
-    app_support_path = os.path.expanduser('~/Library/Application Support/BarStockManagement')
-    os.makedirs(app_support_path, exist_ok=True)
-    return app_support_path
+    """Return the per-user data directory for the active club profile."""
+    profile = club_profile.get_profile()
+    data_dir = club_profile.resolve_data_dir(profile)
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
 
 
 def get_script_directory():
@@ -28,6 +32,58 @@ def get_script_directory():
 DATA_DIR = get_resource_path()
 INVENTORY_FILE = os.path.join(DATA_DIR, 'stock.csv')
 LOG_FILE = os.path.join(DATA_DIR, 'transaction_log.csv')
+ITEMS_FILE = os.path.join(DATA_DIR, 'Items.csv')
+
+
+def get_items_csv_path():
+    """Return the Items.csv master path.
+
+    The live master belongs in the data directory. In a source checkout the
+    repository file is still accepted when no data-dir master exists yet.
+    """
+    if os.path.exists(ITEMS_FILE):
+        return ITEMS_FILE
+    if not getattr(sys, 'frozen', False):
+        checkout = os.path.join(get_script_directory(), 'Items.csv')
+        if os.path.exists(checkout):
+            return checkout
+    return ITEMS_FILE
+
+
+def get_downloads_dir():
+    """Return a writable export directory, preferring the user's Downloads."""
+    downloads = os.path.expanduser('~/Downloads')
+    try:
+        os.makedirs(downloads, exist_ok=True)
+        if os.access(downloads, os.W_OK):
+            return downloads
+    except OSError:
+        pass
+    fallback = os.path.join(DATA_DIR, 'exports')
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
+def sqlite_ro_uri(path):
+    """Build a read-only SQLite URI that works with Windows paths and spaces."""
+    return Path(path).resolve().as_uri() + '?mode=ro'
+
+
+def format_day_of_month(value):
+    """Return the day without a leading zero (Windows-safe %-d replacement)."""
+    return str(value.day)
+
+
+def format_day_month(value):
+    return f"{value.day} {value.strftime('%b')}"
+
+
+def format_day_month_year(value):
+    return f"{value.day} {value.strftime('%b %Y')}"
+
+
+def format_weekday_day_month(value):
+    return f"{value.strftime('%A')} {value.day} {value.strftime('%B')}"
 
 # Column constants to avoid typos.
 COL_ITEM_ID = 'item_id'

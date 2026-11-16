@@ -37,12 +37,16 @@ from actions import (
 from categories import (SALES_INCLUDED_EXCLUDED_ITEMS, should_exclude,
                         is_delisted, UNTRACKED_SALES_ITEMS)
 from conversions import DATE_FORMAT_DISPLAY, format_quantity_display, get_conversion
+import data_manager as data_manager_module
 from data_manager import (
     COL_ALLOW_NEGATIVE, COL_MEMBER_QTY, COL_NON_MEMBER_QTY,
-    add_upload_hash, is_duplicate_upload,
+    InventoryDataManager, add_upload_hash, is_duplicate_upload,
 )
 from inventory_sync import update_items_csv_total_value
 from money import allocate_money, inc_vat, round_money, sum_money
+from reports import (
+    build_upload_period_health, find_overlapping_upload_periods,
+)
 from sales_mapping import (
     apply_sale_to_parent, check_apply_sale_to_parent, get_effective_cost_price,
     has_parent_stock, is_ignored_epos_product, normalize_product_name,
@@ -270,6 +274,28 @@ class UploadsMixin:
             return False
         return not (is_delisted(item_id) and current_qty <= 0)
 
+    @staticmethod
+    def _build_reconciliation(file_total_inc, preview_items, unrecorded_lines):
+        """Summarise the gap between the EPOS file total and recorded revenue.
+
+        ``unrecorded_lines`` carries one entry per product line left out of
+        the ledger, with the reason. Anything still unexplained after those
+        lines (a line with no EPOS total, or rounding) is returned as
+        ``residual_inc`` rather than being hidden.
+        """
+        reported_inc = sum_money(p['revenue_inc'] for p in preview_items)
+        unrecorded_inc = round_money(file_total_inc - reported_inc)
+        explained_inc = sum_money(line['revenue_inc'] for line in unrecorded_lines)
+        residual_inc = round_money(unrecorded_inc - explained_inc)
+        return {
+            'file_total_inc': round_money(file_total_inc),
+            'reported_inc': reported_inc,
+            'unrecorded_inc': unrecorded_inc,
+            'explained_inc': explained_inc,
+            'residual_inc': residual_inc,
+            'lines': unrecorded_lines,
+        }
+
     def upload_sales_report(self):
         """Upload and process weekly sales report CSV with preview and backup."""
         try:
@@ -299,7 +325,37 @@ class UploadsMixin:
                     )
                     if response is None or response is False:
                         return
-    
+
+                # Period guard: a re-exported file has a different hash but can
+                # still cover the same trading week. Warn before the preview.
+                try:
+                    full_log = InventoryDataManager.load_full_log(self.inventory_df)
+                except Exception:
+                    full_log = self.log_df
+                if start_date and end_date:
+                    overlaps = find_overlapping_upload_periods(
+                        start_date, end_date, full_log)
+                    if overlaps:
+                        preview = "\n".join(f"• {period}" for period in overlaps[:10])
+                        more = (f"\n... and {len(overlaps) - 10} more"
+                                if len(overlaps) > 10 else "")
+                        if not messagebox.askyesno(
+                            "Overlapping Sales Period",
+                            "This file's period overlaps sales already in the "
+                            "ledger:\n\n" + preview + more +
+                            "\n\nUploading it again may double-count those sales."
+                            "\n\nContinue anyway?"
+                        ):
+                            return
+                elif build_upload_period_health(full_log).get('periods'):
+                    if not messagebox.askyesno(
+                        "No Sales Period Detected",
+                        "The filename does not contain a recognisable date "
+                        "range, so this upload cannot be checked against "
+                        "existing sales periods.\n\nContinue anyway?"
+                    ):
+                        return
+
                 qty_col = None
                 for col in sales_df.columns:
                     if 'qty' in col.lower() and 'member' not in col.lower():
@@ -320,20 +376,57 @@ class UploadsMixin:
                             member_qty_col = col
     
                 # The export's own inc-VAT total across every product line,
-                # including lines this upload cannot record. Shown in the
-                # preview so the recorded figure can be checked against the
-                # CSV, exactly as the EPOS report totals it.
-                file_total_inc = 0.0
+                # including lines this upload does not record (till-only
+                # in/out lines, unmatched products, refunds). Prefer the
+                # export's stated Total row when it has one; otherwise sum the
+                # product lines. Any gap is itemised in the reconciliation.
+                line_total_sum = 0.0
+                stated_total_inc = None
+                unrecorded_lines = []
                 for _, file_row in sales_df.iterrows():
+                    first_cell = (str(file_row.iloc[0]).strip().lower()
+                                  if len(file_row) else '')
                     product = str(file_row.get('Product', '')).strip()
+                    if first_cell == 'total':
+                        stated_total_inc = self._epos_line_total(file_row)
+                        continue
                     if not product or product.lower() in ('nan', 'total'):
                         continue
-                    if is_ignored_epos_product(product):
-                        continue
                     line_total = self._epos_line_total(file_row)
-                    if line_total is not None:
-                        file_total_inc += line_total
-                file_total_inc = round_money(file_total_inc)
+                    if line_total is None:
+                        continue
+                    line_total_sum += line_total
+                    if is_ignored_epos_product(product):
+                        try:
+                            line_qty = float(file_row[qty_col]) if pd.notna(file_row[qty_col]) else 0
+                        except (TypeError, ValueError):
+                            line_qty = 0
+                        unrecorded_lines.append({
+                            'product': product,
+                            'qty': line_qty,
+                            'revenue_inc': line_total,
+                            'reason': ('Staff drink in/out line: charged on the '
+                                       'till, then refunded back to staff. It holds '
+                                       'no stock and nets to zero, so it is not '
+                                       'counted as revenue.'),
+                        })
+                line_total_sum = round_money(line_total_sum)
+                if stated_total_inc is not None:
+                    file_total_inc = round_money(stated_total_inc)
+                    if abs(file_total_inc - line_total_sum) >= 0.005:
+                        # The export's Total row disagrees with its own product
+                        # lines (a discount or rounding in the export). Keep the
+                        # difference visible rather than hiding it.
+                        unrecorded_lines.append({
+                            'product': 'EPOS Total row vs product lines',
+                            'qty': 0,
+                            'revenue_inc': round_money(file_total_inc - line_total_sum),
+                            'reason': ('The CSV Total row does not equal the sum of '
+                                       'its product lines (discount or rounding in '
+                                       'the export).'),
+                        })
+                else:
+                    file_total_inc = line_total_sum
 
                 # Parse CSV into preview data without modifying inventory
                 self.refresh_data()
@@ -343,22 +436,33 @@ class UploadsMixin:
                 total_cost = 0
     
                 for _, row in sales_df.iterrows():
+                    preview_count = len(preview_items)
                     try:
                         product_name = str(row['Product']).strip()
                         if not product_name or product_name.lower() == 'nan' or product_name.lower() == 'total':
                             continue
                         # Till-only in/out lines (e.g. the Blue WKD staff-tip
-                        # button) are not sales and are ignored entirely, so
-                        # they never appear as skipped or unrecorded revenue.
+                        # button) are not sales. They are kept out of revenue
+                        # but itemised in the reconciliation popup so the
+                        # difference from the EPOS file total is explained.
                         if is_ignored_epos_product(product_name):
                             continue
+                        line_revenue_inc = self._epos_line_total(row)
                         try:
                             quantity = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
                         except:
                             quantity = 0
                         if quantity <= 0:
+                            if line_revenue_inc:
+                                unrecorded_lines.append({
+                                    'product': product_name,
+                                    'qty': quantity,
+                                    'revenue_inc': line_revenue_inc,
+                                    'reason': 'Zero or negative quantity (refund/void line).',
+                                })
                             continue
-    
+
+
                         try:
                             member_qty = float(row[member_qty_col]) if member_qty_col and pd.notna(row[member_qty_col]) else None
                         except:
@@ -367,15 +471,21 @@ class UploadsMixin:
                             non_member_qty = float(row[non_member_qty_col]) if non_member_qty_col and pd.notna(row[non_member_qty_col]) else None
                         except:
                             non_member_qty = None
-    
+
                         normalized_id = normalize_product_name(product_name)
                         item_id = resolve_epos_item_id(normalized_id)
                         explicit_override = item_id != normalized_id
-    
+
                         if item_id not in self.inventory_df[COL_ITEM_ID].values:
                             if explicit_override:
                                 # Explicit EPOS mapping points to an item not in inventory; skip rather than guess.
                                 skipped_items.append(product_name)
+                                unrecorded_lines.append({
+                                    'product': product_name,
+                                    'qty': quantity,
+                                    'revenue_inc': line_revenue_inc or 0.0,
+                                    'reason': f"Maps to '{item_id}', which is not in the stock list.",
+                                })
                                 continue
                             match_found = False
                             for inv_id in self.inventory_df[COL_ITEM_ID].values:
@@ -386,10 +496,22 @@ class UploadsMixin:
                                     break
                             if not match_found:
                                 skipped_items.append(product_name)
+                                unrecorded_lines.append({
+                                    'product': product_name,
+                                    'qty': quantity,
+                                    'revenue_inc': line_revenue_inc or 0.0,
+                                    'reason': 'No matching item in the stock list.',
+                                })
                                 continue
-    
+
                         if should_exclude(item_id) and not has_parent_stock(item_id) and item_id not in SALES_INCLUDED_EXCLUDED_ITEMS:
                             skipped_items.append(f"{product_name} (excluded)")
+                            unrecorded_lines.append({
+                                'product': product_name,
+                                'qty': quantity,
+                                'revenue_inc': line_revenue_inc or 0.0,
+                                'reason': 'Excluded from sales tracking by a category rule.',
+                            })
                             continue
     
                         item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
@@ -441,9 +563,24 @@ class UploadsMixin:
                         })
                         total_revenue += line_revenue
                         total_cost += quantity * cost_price
-    
+
                     except Exception as item_error:
                         skipped_items.append(f"{row.get('Product', 'Unknown')}: {item_error}")
+                        # Only explain the line if it never reached the
+                        # preview; an error after the append still counts as
+                        # recorded and is covered by the residual row.
+                        if len(preview_items) == preview_count:
+                            error_product = str(row.get('Product', 'Unknown')).strip() or 'Unknown'
+                            try:
+                                error_amount = self._epos_line_total(row) or 0.0
+                            except Exception:
+                                error_amount = 0.0
+                            unrecorded_lines.append({
+                                'product': error_product,
+                                'qty': 0,
+                                'revenue_inc': error_amount,
+                                'reason': f'Could not process this line: {item_error}',
+                            })
     
                 if not preview_items:
                     messagebox.showwarning("No Transactions", "No valid transactions found in the CSV file.")
@@ -460,7 +597,10 @@ class UploadsMixin:
                 total_revenue = sum_money(p['revenue'] for p in preview_items)
                 total_cost = sum_money(p['cost_total'] for p in preview_items)
                 reported_inc = sum_money(p['revenue_inc'] for p in preview_items)
-                unrecorded_inc = round_money(file_total_inc - reported_inc)
+                reconciliation = self._build_reconciliation(
+                    file_total_inc, preview_items, unrecorded_lines)
+                unrecorded_inc = reconciliation['unrecorded_inc']
+                residual_inc = reconciliation['residual_inc']
 
                 # Negative stock guard: block unless allow_negative is True
                 blocking_negative = []
@@ -543,7 +683,8 @@ class UploadsMixin:
                 if abs(unrecorded_inc) < 0.005:
                     match_text = "matches the EPOS file total"
                 else:
-                    match_text = f"£{unrecorded_inc:,.2f} in the file not recorded"
+                    match_text = (f"£{unrecorded_inc:,.2f} in the file not "
+                                  "recorded — see Mismatch Details")
                 tk.Label(summary_frame,
                          text=(f"Recorded £{reported_inc:,.2f} inc VAT "
                                f"(£{total_revenue:,.2f} ex)  ·  "
@@ -551,7 +692,6 @@ class UploadsMixin:
                                f"{match_text}"),
                          font=ui_theme.mono_font(9), fg=THEME_TEXT,
                          bg=THEME_BG).pack(anchor='w', pady=(3, 0))
-    
                 tree_frame = tk.Frame(dialog, bg=THEME_BG)
                 tree_frame.pack(fill='both', expand=True, padx=18)
     
@@ -590,18 +730,25 @@ class UploadsMixin:
     
                 def confirm_upload():
                     dialog.destroy()
-                    self._apply_sales_upload(preview_items, skipped_items, file_hash, filepath, date_range_str, len(sales_df))
-    
+                    self._apply_sales_upload(preview_items, skipped_items, file_hash,
+                                            filepath, date_range_str, len(sales_df),
+                                            reconciliation)
+
                 def cancel_upload():
                     dialog.destroy()
                     self._set_status("Upload cancelled. No changes were made.", 'info')
-    
+
                 tk.Frame(dialog, bg=THEME_BORDER, height=1).pack(
                     fill='x', padx=18, pady=(14, 0))
                 btn_frame = tk.Frame(dialog, bg=THEME_BG)
                 btn_frame.pack(fill='x', padx=18, pady=12)
                 self.styled_button(btn_frame, "Confirm Upload", confirm_upload, width=15, variant='primary').pack(side=tk.LEFT, padx=10)
                 self.styled_button(btn_frame, "Cancel", cancel_upload, width=15, variant='secondary').pack(side=tk.LEFT, padx=10)
+                if unrecorded_lines or abs(residual_inc) >= 0.005:
+                    self.styled_button(
+                        btn_frame, "Mismatch Details",
+                        lambda: self._show_sales_reconciliation(reconciliation),
+                        width=18, variant='secondary').pack(side=tk.LEFT, padx=10)
     
             self._run_in_background(
                 "Reading sales report…",
@@ -615,7 +762,7 @@ class UploadsMixin:
             messagebox.showerror("Error", f"Failed to upload sales report: {e}")
 
 
-    def _apply_sales_upload(self, preview_items, skipped_items, file_hash, filepath, date_range_str, total_row_count):
+    def _apply_sales_upload(self, preview_items, skipped_items, file_hash, filepath, date_range_str, total_row_count, reconciliation=None):
         """Apply the confirmed sales upload after preview."""
         try:
             # Create backup before applying
@@ -628,7 +775,8 @@ class UploadsMixin:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             transactions = []
             recorded_revenue = 0.0
-    
+            applied_revenue_inc = []
+
             for p in preview_items:
                 item_id = p['item_id']
                 quantity = p['qty']
@@ -636,7 +784,7 @@ class UploadsMixin:
                 sell_price = p['sell']
                 member_qty = p['member_qty']
                 non_member_qty = p['non_member_qty']
-    
+
                 parent_adjustments = []
                 if not p.get('track_stock', True):
                     # Delisted item with no stock: revenue only, no movement.
@@ -648,6 +796,13 @@ class UploadsMixin:
                     )
                     if not parent_ok:
                         skipped_items.append(f"{p['name']} (parent stock: {'; '.join(parent_issues)})")
+                        if reconciliation is not None:
+                            reconciliation['lines'].append({
+                                'product': p['name'],
+                                'qty': quantity,
+                                'revenue_inc': p.get('revenue_inc') or 0.0,
+                                'reason': f"Not recorded because parent stock would go negative: {'; '.join(parent_issues)}",
+                            })
                         continue
                     parent_adjustments = apply_sale_to_parent(
                         item_id, quantity, self.inventory_df,
@@ -669,6 +824,7 @@ class UploadsMixin:
                                               columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON, COL_MEMBER_QTY, COL_NON_MEMBER_QTY])
                 self.log_df = pd.concat([self.log_df, new_log_entry], ignore_index=True)
                 recorded_revenue += float(csv_revenue or 0.0)
+                applied_revenue_inc.append(float(p.get('revenue_inc') or inc_vat(csv_revenue or 0.0)))
     
                 for parent_id, deduction, desc in parent_adjustments:
                     parent_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == parent_id].iloc[0]
@@ -677,9 +833,20 @@ class UploadsMixin:
                     parent_log_entry = pd.DataFrame([[parent_id, ACTION_PARENT_STOCK_ADJ, deduction, timestamp, parent_cost, parent_sell, f"From {item_id}", date_range_str, "", 0, 0]],
                                                       columns=[COL_ITEM_ID, COL_ACTION, COL_QUANTITY, COL_TIMESTAMP, COL_COST_PRICE, COL_SELL_PRICE, COL_SUPPLIER, COL_DATE_RANGE, COL_REASON, COL_MEMBER_QTY, COL_NON_MEMBER_QTY])
                     self.log_df = pd.concat([self.log_df, parent_log_entry], ignore_index=True)
-    
+
                 transactions.append(f"{p['name']}: {quantity:.1f} units")
-    
+
+            # Recompute the reconciliation after the apply pass: a line can
+            # still be dropped here if its parent stock check fails.
+            if reconciliation is not None:
+                reconciliation['reported_inc'] = sum_money(applied_revenue_inc)
+                reconciliation['unrecorded_inc'] = round_money(
+                    reconciliation['file_total_inc'] - reconciliation['reported_inc'])
+                reconciliation['explained_inc'] = sum_money(
+                    line['revenue_inc'] for line in reconciliation['lines'])
+                reconciliation['residual_inc'] = round_money(
+                    reconciliation['unrecorded_inc'] - reconciliation['explained_inc'])
+
             if self._persist():
                 self.update_dashboard_stats()
                 add_upload_hash(file_hash, os.path.basename(filepath), datetime.now().isoformat(), date_range_str, total_row_count, 'sales')
@@ -690,6 +857,16 @@ class UploadsMixin:
                 success_msg += f"Transactions recorded: {len(transactions)}\n"
                 success_msg += (f"Revenue: £{inc_vat(recorded_revenue):,.2f} inc VAT "
                                 f"(£{round_money(recorded_revenue):,.2f} ex)\n\n")
+                has_mismatch = (
+                    reconciliation is not None
+                    and abs(reconciliation['unrecorded_inc']) >= 0.005
+                )
+                if has_mismatch:
+                    success_msg += (
+                        f"EPOS file: £{reconciliation['file_total_inc']:,.2f} inc VAT  ·  "
+                        f"£{reconciliation['unrecorded_inc']:,.2f} not recorded\n"
+                        "A breakdown of every unrecorded line and why follows in the next window.\n\n"
+                    )
                 if skipped_items:
                     success_msg += f"Skipped items: {len(skipped_items)}\n"
                     if len(skipped_items) <= 10:
@@ -697,10 +874,97 @@ class UploadsMixin:
                     else:
                         success_msg += "\n" + "\n".join(skipped_items[:10]) + f"\n... and {len(skipped_items) - 10} more"
                 messagebox.showinfo("Success", success_msg)
+                if has_mismatch:
+                    self._show_sales_reconciliation(reconciliation)
             else:
                 messagebox.showerror("Error", "Failed to save transactions.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to apply sales upload: {e}")
+
+
+    def _show_sales_reconciliation(self, reconciliation):
+        """Popup explaining any gap between the EPOS file total and revenue.
+
+        Every line left out of the ledger is listed with its value and the
+        reason it was left out, so a mismatch is never silent.
+        """
+        file_total = reconciliation['file_total_inc']
+        recorded = reconciliation['reported_inc']
+        unrecorded = reconciliation['unrecorded_inc']
+        residual = reconciliation['residual_inc']
+        lines = reconciliation['lines']
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Revenue Reconciliation")
+        dialog.geometry("880x480")
+        self._fit_dialog(dialog, 880, 480)
+        dialog.configure(bg=THEME_BG)
+
+        tk.Label(dialog, text="REVENUE RECONCILIATION",
+                 font=ui_theme.mono_font(8), fg=THEME_TEXT_MUTED,
+                 bg=THEME_BG).pack(anchor='w', padx=18, pady=(16, 2))
+        tk.Label(dialog, text="What the EPOS file shows vs what was recorded",
+                 font=ui_theme.display_font(15), fg=THEME_TEXT,
+                 bg=THEME_BG).pack(anchor='w', padx=18)
+        tk.Label(dialog,
+                 text=(f"EPOS file £{file_total:,.2f} inc VAT   ·   "
+                       f"Recorded £{recorded:,.2f} inc VAT   ·   "
+                       f"Not recorded £{unrecorded:,.2f}"),
+                 font=ui_theme.mono_font(9), fg=THEME_TEXT,
+                 bg=THEME_BG).pack(anchor='w', padx=18, pady=(6, 10))
+
+        tree_frame = tk.Frame(dialog, bg=THEME_BG)
+        tree_frame.pack(fill='both', expand=True, padx=18)
+
+        tree = ttk.Treeview(tree_frame,
+                            columns=('product', 'qty', 'amount', 'reason'),
+                            show='headings', height=12)
+        tree.heading('product', text='Line', anchor='w')
+        tree.heading('qty', text='Qty', anchor='e')
+        tree.heading('amount', text='Not recorded', anchor='e')
+        tree.heading('reason', text='Why it is not revenue', anchor='w')
+        tree.column('product', width=190, anchor='w')
+        tree.column('qty', width=60, anchor='e')
+        tree.column('amount', width=110, anchor='e')
+        tree.column('reason', width=440, anchor='w')
+        tree.tag_configure('alt', background=TBL_ROW_ALT, foreground=THEME_TEXT)
+        tree.pack(side=tk.LEFT, fill='both', expand=True)
+
+        sb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=sb.set)
+        self._bind_treeview_mousewheel(tree)
+
+        shown = 0
+        for line in lines:
+            if abs(line['revenue_inc']) < 0.005:
+                continue
+            tree.insert('', tk.END,
+                        tags=('alt',) if shown % 2 else (),
+                        values=(line['product'],
+                                f"{line['qty']:.1f}",
+                                f"£{line['revenue_inc']:,.2f}",
+                                line['reason']))
+            shown += 1
+
+        if abs(residual) >= 0.005:
+            tree.insert('', tk.END,
+                        values=('Unaccounted', '', f"£{residual:,.2f}",
+                                'Rounding, or a line with no EPOS line total. '
+                                'Check the upload log.'))
+            shown += 1
+
+        if shown == 0:
+            tree.insert('', tk.END, values=(
+                'None', '', '£0.00',
+                'Every line in the EPOS file was recorded. The totals match.'))
+
+        tk.Frame(dialog, bg=THEME_BORDER, height=1).pack(fill='x', padx=18,
+                                                        pady=(12, 0))
+        btn_frame = tk.Frame(dialog, bg=THEME_BG)
+        btn_frame.pack(fill='x', padx=18, pady=12)
+        self.styled_button(btn_frame, "Close", dialog.destroy, width=14,
+                           variant='primary').pack(side=tk.RIGHT, padx=10)
 
 
     @staticmethod
@@ -1639,7 +1903,7 @@ class UploadsMixin:
             if not self._persist():
                 raise RuntimeError("Failed to save invoice price updates")
     
-            script_dir = get_script_directory()
+            script_dir = data_manager_module.DATA_DIR
             for item_id in updated_items:
                 item_row = self.inventory_df[self.inventory_df[COL_ITEM_ID] == item_id].iloc[0]
                 quantity = float(item_row[COL_QUANTITY])

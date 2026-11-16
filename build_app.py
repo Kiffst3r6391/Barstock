@@ -134,6 +134,13 @@ def create_entitlements_file():
     print("Created entitlements.plist for Application Support access")
 
 
+def stage_club_profile():
+    """Bundle the seller profile explicitly so its branding is not a fallback."""
+    os.makedirs('build_support', exist_ok=True)
+    shutil.copyfile('profiles/prestonfield.json',
+                    'build_support/club_profile.json')
+
+
 def build_with_pyinstaller():
     """Build the app from BarStock.spec, the single source of truth for the bundle."""
     print("\n" + "=" * 60)
@@ -257,6 +264,7 @@ def main():
 
     app_dir = os.path.join('dist', 'BarStock.app')
     version = project_version()
+    stage_club_profile()
 
     if not build_with_pyinstaller():
         print("\n✗ Build failed. Check the output above for errors.")

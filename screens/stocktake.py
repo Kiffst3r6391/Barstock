@@ -14,6 +14,7 @@ from ui_theme import (
 )
 from app_config import (
     COL_CATEGORY, COL_ITEM_ID, COL_ITEM_NAME, COL_MEASURE, COL_QUANTITY,
+    get_downloads_dir,
 )
 from categories import get_category, should_exclude, is_delisted
 from conversions import convert_to_input, get_conversion, requires_conversion
@@ -728,7 +729,7 @@ class StocktakeMixin:
             filename = f"Stock_Count_Sheet_{timestamp}.pdf"
     
             # Save to Downloads folder
-            downloads_dir = os.path.expanduser('~/Downloads')
+            downloads_dir = get_downloads_dir()
             filepath = os.path.join(downloads_dir, filename)
             pdf.output(filepath)
     

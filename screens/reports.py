@@ -14,6 +14,7 @@ from ui_theme import (
     THEME_TEXT, THEME_TEXT_MUTED, THEME_WARNING,
     TBL_ROW_ALT, TBL_ROW_WARN, TBL_ROW_DANGER,
 )
+import club_profile
 
 try:
     import matplotlib
@@ -29,15 +30,22 @@ from fpdf import FPDF
 from app_config import (
     COL_ACTION, COL_CATEGORY, COL_COST_PRICE, COL_ITEM_ID, COL_ITEM_NAME,
     COL_QUANTITY, COL_SELL_PRICE, COL_SUPPLIER, COL_TIMESTAMP,
-    get_script_directory,
+    get_downloads_dir, get_script_directory,
 )
-from actions import ACTION_COMPLIMENTARY, ACTION_SALES, ACTION_WASTAGE
+from actions import (
+    ACTION_COMPLIMENTARY, ACTION_SALES, ACTION_STOCKTAKE_BASELINE,
+    ACTION_WASTAGE,
+)
 from categories import is_delisted
 from conversions import DATE_FORMAT_DISPLAY, parse_display_date
+import data_manager as data_manager_module
 from data_manager import (
     InventoryDataManager, COL_REORDER_LEVEL, get_stocktake_history,
 )
-from pdf_generator import PDFReport, PriceHistoryPDF, StockOrderSheetPDF, format_report_period
+from pdf_generator import (
+    PDFReport, PriceHistoryPDF, StockOrderSheetPDF, format_report_period,
+    calculate_vat_position,
+)
 from reports import (
     filter_log_by_date,
     build_gp_report_data,
@@ -51,6 +59,15 @@ from reports import (
     build_comparison_report_data,
     build_stock_order_sheet_data,
     build_custom_stock_order_sheet_data,
+    build_previous_period_log,
+    build_period_comparison_summary,
+    build_supplier_spend_summary,
+    build_reason_value_summary,
+    build_value_movement_bridge,
+    build_report_reconciliation_notes,
+    build_upload_period_health,
+    build_price_change_alerts,
+    build_executive_narrative,
 )
 from screens.widgets import DateRangeDialog
 
@@ -559,7 +576,7 @@ class ReportsMixin:
                 return
 
             from reports import build_reconciliation_report
-            script_dir = get_script_directory()
+            script_dir = data_manager_module.DATA_DIR
             report = build_reconciliation_report(self.inventory_df, self.log_df, script_dir=script_dir)
 
             summary_lines = []
@@ -1056,6 +1073,11 @@ class ReportsMixin:
 
     def generate_stock_order_sheet(self):
         """Generate the custom printable stock order sheet PDF."""
+        if not club_profile.feature_enabled('stock_order_sheet'):
+            messagebox.showinfo(
+                "Stock Order Sheet",
+                "No order-sheet layout is configured for this club yet.")
+            return
         try:
             self.refresh_data()
             report_data = build_custom_stock_order_sheet_data(self.inventory_df, self.log_df)
@@ -1304,7 +1326,53 @@ class ReportsMixin:
             if not report_data:
                 messagebox.showwarning("No Data", "No data available for the selected period.")
                 return
-    
+
+            # Insight data for the summary page and the new themed sections.
+            previous_log, _prev_start, _prev_end = build_previous_period_log(
+                full_log_df, start_date, end_date, filtered_log)
+            comparison = build_period_comparison_summary(
+                self.inventory_df, filtered_log, previous_log,
+                int(self.get_member_discount_pct()))
+            vat_position = calculate_vat_position(
+                comparison['current'].get('sales_ex_vat', 0),
+                comparison['current'].get('delivery_spend', 0))
+            supplier_spend = build_supplier_spend_summary(filtered_log)
+            wastage_reasons = build_reason_value_summary(
+                filtered_log, self.inventory_df, 'wastage')
+            line_clean_reasons = build_reason_value_summary(
+                filtered_log, self.inventory_df, 'line_clean')
+            comp_reasons = build_reason_value_summary(
+                filtered_log, self.inventory_df, 'comp', 'retail')
+            price_changes = build_price_change_alerts(
+                self.inventory_df, filtered_log, days=None,
+                threshold_pct=5.0, limit=20)
+            upload_health = build_upload_period_health(filtered_log)
+            value_bridge = build_value_movement_bridge(report_data)
+            reconciliation_notes = build_report_reconciliation_notes(
+                self.inventory_df, filtered_log, report_data, upload_health)
+            narrative = build_executive_narrative(
+                comparison, supplier_spend=supplier_spend,
+                vat_position=vat_position)
+            insights = {
+                'comparison': comparison,
+                'narrative': narrative,
+                'vat_position': vat_position,
+                'supplier_spend': supplier_spend,
+                'price_changes': price_changes,
+                'wastage_reasons': wastage_reasons,
+                'line_clean_reasons': line_clean_reasons,
+                'comp_reasons': comp_reasons,
+                'upload_health': upload_health,
+                'value_bridge': value_bridge,
+                'reconciliation_notes': reconciliation_notes,
+                'has_baseline': (
+                    COL_ACTION in filtered_log.columns
+                    and not filtered_log.empty
+                    and (filtered_log[COL_ACTION]
+                         == ACTION_STOCKTAKE_BASELINE).any()
+                ),
+            }
+
             # Create PDF
             pdf = PDFReport()
             pdf.generate_report(
@@ -1313,6 +1381,7 @@ class ReportsMixin:
                 stocktake_data=stocktake_data,
                 running_surplus_value=running_surplus_value,
                 report_period=period_text,
+                insights=insights,
             )
     
             # Generate timestamp for filename
@@ -1320,11 +1389,11 @@ class ReportsMixin:
             filename = f"Bar_Stock_Full_Report_{timestamp}.pdf"
     
             # Save to Downloads folder
-            downloads_dir = os.path.expanduser('~/Downloads')
+            downloads_dir = get_downloads_dir()
             filepath = os.path.join(downloads_dir, filename)
             pdf.output(filepath)
     
-            messagebox.showinfo("Report Generated", f"Comprehensive PDF report saved to:\n{filepath}\n\nReport period: {period_text}\n\nThe report includes:\n• Stock Summary by Division\n• Sales Performance\n• Wastage & Complimentary Summary\n• Draught Yield Report\n• Financial Summary with Totals\n• Stocktake Variance Report (if recorded)")
+            messagebox.showinfo("Report Generated", f"Comprehensive PDF report saved to:\n{filepath}\n\nReport period: {period_text}\n\nThe report includes:\n• Executive summary and period comparison\n• Sales, GP and division performance\n• Stock movement and value bridge\n• Supplier spend and price changes\n• Wastage, line cleaning and complimentary by reason\n• VAT summary\n• Stocktake variance and reconciliation notes")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate report: {e}")

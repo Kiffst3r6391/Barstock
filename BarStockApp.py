@@ -1,7 +1,7 @@
 """
 Bar Stock Management System - Basic Version
 
-Simple tkinter-based stock management for Prestonfield Golf Club.
+Simple tkinter-based bar stock management.
 """
 
 import tkinter as tk
@@ -64,10 +64,14 @@ except ImportError:
 # app_config, and the colour tokens in ui_theme, so screen modules can import
 # them without importing this module (which would be circular).
 from app_config import *  # noqa: F401,F403
-from app_config import DATA_DIR, INVENTORY_FILE, LOG_FILE, get_resource_path, get_script_directory
+from app_config import (
+    DATA_DIR, INVENTORY_FILE, LOG_FILE, get_downloads_dir,
+    get_items_csv_path, get_resource_path, get_script_directory,
+)
 from ui_theme import *  # noqa: F401,F403
 from ui_theme import THEME_FONT, THEME_FONT_STACK
 import ui_theme
+import club_profile
 
 
 from data_manager import (
@@ -139,7 +143,27 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
     def __init__(self, root):
         """Initialize the application window and UI elements."""
         self.root = root
-        self.root.title(f"Prestonfield Golf Club - Bar Stock Management v{APP_VERSION}")
+        # Apply profile item rules once, before any screen reads the maps.
+        try:
+            club_profile.apply_item_rules()
+        except Exception:
+            logger.warning("Could not apply club item rules", exc_info=True)
+        try:
+            club_profile.apply_settings_overrides(get_setting)
+        except Exception:
+            logger.warning("Could not apply club profile settings", exc_info=True)
+
+        self.root.title(
+            f"{club_profile.club_name()} - "
+            f"{club_profile.app_display_name()} v{APP_VERSION}")
+        self._logo_image = None
+        logo_path = club_profile.get_logo_path()
+        if logo_path:
+            try:
+                self._logo_image = tk.PhotoImage(file=logo_path)
+                self.root.iconphoto(True, self._logo_image)
+            except tk.TclError:
+                self._logo_image = None
         # Maximize window on launch
         self.root.update_idletasks()
         screen_width = self.root.winfo_screenwidth()
@@ -186,12 +210,13 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         # Sync check: collect any missing conversion/category/order-sheet mappings
         # so they can be shown in a non-blocking dashboard banner instead of a modal dialog.
         self.startup_sync_report = None
-        try:
-            missing = find_missing_mappings(self.inventory_df)
-            if has_sync_issues(missing):
-                self.startup_sync_report = format_sync_report(missing)
-        except Exception as e:
-            print(f"Startup sync check failed: {e}")
+        if club_profile.feature_enabled('mapping_warnings'):
+            try:
+                missing = find_missing_mappings(self.inventory_df)
+                if has_sync_issues(missing):
+                    self.startup_sync_report = format_sync_report(missing)
+            except Exception as e:
+                print(f"Startup sync check failed: {e}")
 
         # Reconcile inventory against its own transaction log. A failure here
         # means every balance and report below it is wrong, so surface it on
@@ -242,8 +267,8 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                 lambda: messagebox.showinfo(
                     "Welcome to BarStock",
                     "No stock items have been set up yet.\n\n"
-                    "Use Settings → Init from Items.csv to import an item list, "
-                    "or add items individually.",
+                    "Use More Actions → System → Init from Items.csv to import "
+                    "an item list, or add items individually in Manage Stock.",
                 ),
             )
 
@@ -891,13 +916,27 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                          highlightbackground=THEME_TEXT, highlightthickness=1)
         crest.pack(side='left')
         crest.pack_propagate(False)
-        tk.Label(crest, text="PGC", font=ui_theme.display_font(13),
-                 fg=THEME_TEXT, bg=THEME_SIDEBAR).pack(expand=True)
+        logo_shown = False
+        if self._logo_image is not None:
+            try:
+                # The bundled crest is 160px; 40px keeps the rail proportions.
+                self._sidebar_logo = self._logo_image.subsample(4)
+                tk.Label(crest, image=self._sidebar_logo,
+                         bg=THEME_SIDEBAR).pack(expand=True)
+                logo_shown = True
+            except tk.TclError:
+                self._sidebar_logo = None
+        if not logo_shown:
+            tk.Label(crest, text=club_profile.crest_text(),
+                     font=ui_theme.display_font(13),
+                     fg=THEME_TEXT, bg=THEME_SIDEBAR).pack(expand=True)
         names = tk.Frame(brand, bg=THEME_SIDEBAR)
         names.pack(side='left', padx=(10, 0))
-        tk.Label(names, text="Prestonfield", font=ui_theme.display_font(14),
+        tk.Label(names, text=club_profile.club_short_name(),
+                 font=ui_theme.display_font(14),
                  fg=THEME_TEXT, bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
-        tk.Label(names, text="Golf Club", font=(THEME_FONT, 9),
+        tk.Label(names, text=club_profile.strap_line(),
+                 font=(THEME_FONT, 9),
                  fg=THEME_TEXT_MUTED, bg=THEME_SIDEBAR, anchor='w').pack(fill='x')
 
         groups = [
@@ -948,14 +987,15 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         title_frame = tk.Frame(topbar, bg=THEME_BG)
         title_frame.pack(side='left', fill='y')
         now = datetime.now()
-        tk.Label(title_frame, text=now.strftime('%A %-d %B').upper(),
+        tk.Label(title_frame, text=format_weekday_day_month(now).upper(),
                  font=ui_theme.mono_font(9), fg=THEME_TEXT_MUTED,
                  bg=THEME_BG, anchor='w').pack(fill='x', pady=(0, 4))
         if active_tab == "Dashboard":
             hour = now.hour
             part = "morning" if hour < 12 else ("afternoon" if hour < 18 else "evening")
-            heading = f"Good {part}, Chris"
-            subtitle = "Bar stock at Prestonfield Golf Club"
+            name = club_profile.greeting_name().strip()
+            heading = f"Good {part}, {name}" if name else f"Good {part}"
+            subtitle = f"Bar stock at {club_profile.club_name()}"
         else:
             heading = active_tab
             subtitle = {
@@ -1645,6 +1685,9 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         ]
 
         for heading, items in groups:
+            if not club_profile.feature_enabled('stock_order_sheet'):
+                items = [item for item in items
+                         if item[0] != 'Stock Order Sheet']
             head = self.themed_frame(self.main_menu)
             head.pack(fill='x', pady=(16, 2))
             self.themed_label(head, heading.upper(),
@@ -1814,6 +1857,12 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
 
     def refresh_csv_mirrors(self):
         """Write the current inventory to stock.csv and Items.csv on demand."""
+        if self.inventory_df.empty:
+            messagebox.showinfo(
+                "CSV Mirrors",
+                "There are no stock items yet. Add or import items first.",
+            )
+            return
         if InventoryDataManager.export_csv_mirrors(self.inventory_df):
             messagebox.showinfo(
                 "CSV Mirrors",
@@ -1842,10 +1891,8 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             items_df = pd.read_csv(filepath, compression=None)
 
             # Check required columns
-            required_cols = ['Name', 'Division', 'Total Stock', 'Total Value']
-            missing_cols = [col for col in required_cols if col not in items_df.columns]
-            if missing_cols:
-                messagebox.showerror("Invalid CSV", f"Items.csv is missing required columns: {', '.join(missing_cols)}")
+            if 'Name' not in items_df.columns:
+                messagebox.showerror("Invalid CSV", "Items.csv is missing the required 'Name' column.")
                 return
 
             # Confirm before overwriting
@@ -1864,9 +1911,11 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
             for _, row in items_df.iterrows():
                 try:
                     item_name = str(row['Name']).strip()
-                    division = str(row.get('Division', 'Uncategorized')).strip()
-                    total_stock = float(row['Total Stock']) if pd.notna(row['Total Stock']) else 0
-                    total_value = float(row['Total Value']) if pd.notna(row['Total Value']) else 0
+                    division_value = row.get('Division', 'Uncategorized')
+                    division_raw = (str(division_value).strip()
+                                    if pd.notna(division_value) else 'Uncategorized')
+                    total_stock = float(row['Total Stock']) if 'Total Stock' in row and pd.notna(row['Total Stock']) else 0
+                    total_value = float(row['Total Value']) if 'Total Value' in row and pd.notna(row['Total Value']) else 0
 
                     # Skip empty items
                     if not item_name:
@@ -1875,18 +1924,30 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                     # Create item_id using the same canonical normaliser as uploads.
                     item_id = normalize_product_name(item_name)
 
-                    # Calculate cost price per unit (if total_value and total_stock are valid)
-                    if total_stock > 0 and total_value > 0:
+                    # Explicit Cost Price / Sell Price columns win; otherwise
+                    # derive cost from Total Value / Total Stock and use a 30%
+                    # markup as a starting sell price.
+                    explicit_cost = (
+                        float(row['Cost Price'])
+                        if 'Cost Price' in row and pd.notna(row['Cost Price'])
+                        else None)
+                    explicit_sell = (
+                        float(row['Sell Price'])
+                        if 'Sell Price' in row and pd.notna(row['Sell Price'])
+                        else None)
+                    if explicit_cost is not None:
+                        cost_price = explicit_cost
+                    elif total_stock > 0 and total_value > 0:
                         cost_price = total_value / total_stock
                     else:
                         cost_price = 0
+                    sell_price = (explicit_sell if explicit_sell is not None
+                                  else cost_price * 1.3)
 
-                    # Default sell price (can be adjusted later)
-                    sell_price = cost_price * 1.3  # 30% markup
-
-                    # Determine measure and category from Division column
-                    unit = str(row.get('Unit', '')).lower()
-                    division = str(row.get('Division', '')).lower()
+                    # Determine measure and category from Unit/Division.
+                    unit_value = row.get('Unit', '')
+                    unit = str(unit_value).lower() if pd.notna(unit_value) else ''
+                    division = division_raw.lower()
 
                     # Determine measure
                     if 'pint' in unit or 'draught' in division:
@@ -1917,19 +1978,19 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                             # Only update non-price fields for locked items
                             self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id,
                                                  [COL_ITEM_NAME, COL_QUANTITY, COL_MEASURE, COL_CATEGORY, COL_DIVISION]] = \
-                                [item_name, total_stock, measure, category, division]
+                                [item_name, total_stock, measure, category, division_raw]
                         else:
                             # Update all fields for unlocked items
                             self.inventory_df.loc[self.inventory_df[COL_ITEM_ID] == item_id,
                                                  [COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_DIVISION]] = \
-                                [item_name, total_stock, cost_price, sell_price, measure, category, division]
+                                [item_name, total_stock, cost_price, sell_price, measure, category, division_raw]
                         items_updated += 1
                     else:
                         # Add new item with every inventory column populated.
                         # Leaving allow_negative/reorder_level out produced NaN,
                         # and bool(np.nan) is True, so imported items silently
                         # became allowed to go negative.
-                        new_item = pd.DataFrame([[item_id, item_name, total_stock, cost_price, sell_price, measure, category, False, False, 0, division]],
+                        new_item = pd.DataFrame([[item_id, item_name, total_stock, cost_price, sell_price, measure, category, False, False, 0, division_raw]],
                                               columns=[COL_ITEM_ID, COL_ITEM_NAME, COL_QUANTITY, COL_COST_PRICE, COL_SELL_PRICE, COL_MEASURE, COL_CATEGORY, COL_PRICE_LOCKED, COL_ALLOW_NEGATIVE, COL_REORDER_LEVEL, COL_DIVISION])
                         self.inventory_df = pd.concat([self.inventory_df, new_item], ignore_index=True)
                         items_added += 1
@@ -1939,6 +2000,18 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
 
             # Save inventory
             if self._save_inventory():
+                # Keep the selected file as the live Items.csv master in the
+                # data folder (never in the read-only bundle).
+                try:
+                    import shutil
+                    master = os.path.join(DATA_DIR, 'Items.csv')
+                    temp_copy = master + '.tmp'
+                    shutil.copy2(filepath, temp_copy)
+                    if os.path.exists(master):
+                        os.replace(master, master + '.bak')
+                    os.replace(temp_copy, master)
+                except Exception as csv_err:
+                    logger.warning("Could not install Items.csv master: %s", csv_err)
                 self.update_dashboard_stats()
                 success_msg = f"Stock initialization complete!\n\n"
                 success_msg += f"Items added: {items_added}\n"

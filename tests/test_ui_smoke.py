@@ -287,3 +287,26 @@ def test_retired_item_leaves_the_stock_list(app):
     finally:
         retirement.unretire_item("peroni")
         retirement.reset_cache()
+
+
+def test_backup_now_runs_and_resets_the_button(app, monkeypatch, tmp_path):
+    """The dashboard button must actually create a backup and re-enable."""
+    import screens.dashboard as dashboard
+
+    created = {}
+
+    def fake_run(message, work, on_success=None, on_error=None, title=''):
+        created['path'] = work()
+        on_success(created['path'])
+
+    monkeypatch.setattr(app, '_run_in_background', fake_run)
+    monkeypatch.setattr(
+        dashboard, 'create_backup',
+        lambda reason='': str(tmp_path / f'barstock_backup_{reason}.db'))
+    monkeypatch.setattr(dashboard.messagebox, 'showinfo', lambda *a, **k: None)
+
+    app._backup_now()
+
+    assert created['path'].endswith('barstock_backup_dashboard.db')
+    assert getattr(app, '_backup_in_progress', False) is False
+    assert 'Backup created' in app.status_var.get()

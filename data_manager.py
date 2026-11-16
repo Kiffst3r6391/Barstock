@@ -17,6 +17,10 @@ from tkinter import messagebox
 from datetime import datetime
 
 from sales_mapping import SALES_TO_PARENT, normalize_product_name
+from app_config import (
+    DATA_DIR, INVENTORY_FILE, LOG_FILE, get_items_csv_path,
+    get_resource_path, get_script_directory, sqlite_ro_uri,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,28 +61,10 @@ LOG_COLUMNS = [
 ]
 
 
-def get_resource_path():
-    """Get the correct path for data files."""
-    app_support_path = os.path.expanduser('~/Library/Application Support/BarStockManagement')
-    os.makedirs(app_support_path, exist_ok=True)
-    return app_support_path
-
-
-def get_script_directory():
-    """Get the directory where the script/app is located."""
-    if getattr(sys, 'frozen', False):
-        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-
-DATA_DIR = get_resource_path()
 DB_PATH = os.path.join(DATA_DIR, 'barstock.db')
 # Bump when a migration changes the schema. The first launch after an upgrade
 # takes a safety backup before any schema change is applied.
 SCHEMA_VERSION = 4
-INVENTORY_FILE = os.path.join(DATA_DIR, 'stock.csv')
-LOG_FILE = os.path.join(DATA_DIR, 'transaction_log.csv')
 
 
 def _get_connection():
@@ -404,9 +390,9 @@ def _migrate_from_csv(conn):
     # Rename CSVs after migration
     try:
         if os.path.exists(INVENTORY_FILE):
-            os.rename(INVENTORY_FILE, INVENTORY_FILE + '.bak')
+            os.replace(INVENTORY_FILE, INVENTORY_FILE + '.bak')
         if os.path.exists(LOG_FILE):
-            os.rename(LOG_FILE, LOG_FILE + '.bak')
+            os.replace(LOG_FILE, LOG_FILE + '.bak')
     except Exception as e:
         print(f"Warning: Could not rename CSV backups: {e}")
 
@@ -689,6 +675,44 @@ def _write_stock_csv(csv_path, df):
         writer.writerows(rows)
 
 
+def ensure_items_csv_master(df=None):
+    """Create the live Items.csv master from inventory when it is missing.
+
+    A frozen buyer install starts without Items.csv. After the first import or
+    manual item add, this gives the app a master file to keep updated instead
+    of silently writing nowhere.
+    """
+    if df is None:
+        df = InventoryDataManager.load_inventory()
+    if df is None or df.empty:
+        return None
+    target = os.path.join(DATA_DIR, 'Items.csv')
+    if os.path.exists(target):
+        return target
+    header = ['Name', 'Division', 'Unit', 'Total Stock', 'Total Value',
+              'Active', 'Min Alert', 'Max Alert']
+    rows = []
+    for _, row in df.iterrows():
+        quantity = float(row.get(COL_QUANTITY, 0) or 0)
+        cost = float(row.get(COL_COST_PRICE, 0) or 0)
+        rows.append([
+            str(row.get(COL_ITEM_NAME, '')),
+            str(row.get(COL_DIVISION, '') or ''),
+            str(row.get(COL_MEASURE, '') or ''),
+            f"{quantity:.2f}",
+            f"{quantity * cost:.2f}",
+            '',
+            '0.0',
+            '0.0',
+        ])
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(target, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerows(rows)
+    return target
+
+
 def _update_items_csv(items_csv_path, df):
     """Update Items.csv Total Stock/Total Value from the live inventory."""
     if not os.path.exists(items_csv_path):
@@ -776,6 +800,7 @@ def _sync_inventory_to_csv(df):
             logger.warning("Could not write stock.csv to %s: %s", csv_path, e)
 
     try:
+        ensure_items_csv_master(df)
         _update_items_csv(items_csv_path, df)
     except Exception as e:
         logger.warning("Could not update Items.csv: %s", e)
@@ -1765,6 +1790,73 @@ def get_last_stocktake_date():
         return None
 
 
+def get_last_stocktake_summary(include_baseline=False, now=None):
+    """Return the most recent stocktake and its age in days.
+
+    The dashboard only needs one row, so this avoids loading the full history
+    on every render. Baseline snapshots are bookkeeping rather than a physical
+    count; they are excluded unless ``include_baseline`` is True.
+    """
+    now = now or datetime.now()
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        if include_baseline:
+            cursor.execute(
+                "SELECT timestamp, note FROM stocktake_snapshots "
+                "ORDER BY timestamp DESC LIMIT 1")
+        else:
+            cursor.execute(
+                "SELECT timestamp, note FROM stocktake_snapshots "
+                "WHERE COALESCE(note, '') NOT LIKE '%Baseline%' "
+                "ORDER BY timestamp DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        timestamp_str, note = row[0], row[1]
+        try:
+            timestamp = datetime.fromisoformat(
+                str(timestamp_str).replace('Z', '+00:00')).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            timestamp = None
+        return {
+            'timestamp': timestamp_str,
+            'datetime': timestamp,
+            'note': note or '',
+            'is_baseline': 'baseline' in str(note or '').lower(),
+            'days_since': ((now - timestamp).days if timestamp else None),
+        }
+    except Exception:
+        return None
+
+
+def get_backup_health(warn_days=3, overdue_days=7, now=None):
+    """Summarise the age of the newest backup for the dashboard."""
+    now = now or datetime.now()
+    backups = list_backups()
+    if not backups:
+        return {'latest': None, 'age_days': None, 'status': 'none'}
+    try:
+        latest = datetime.strptime(backups[0]['timestamp'], '%Y-%m-%d %H:%M:%S')
+    except (KeyError, ValueError):
+        return {'latest': None, 'age_days': None, 'status': 'unknown'}
+    age_days = (now - latest).days
+    if age_days >= overdue_days:
+        status = 'overdue'
+    elif age_days >= warn_days:
+        status = 'warning'
+    else:
+        status = 'ok'
+    return {
+        'latest': latest,
+        'name': backups[0].get('name', ''),
+        'kind': backups[0].get('kind', ''),
+        'age_days': age_days,
+        'status': status,
+    }
+
+
 def delete_stocktake(snapshot_id):
     """Delete a stocktake snapshot by ID."""
     try:
@@ -2294,7 +2386,7 @@ def get_backups_dir():
 
 def _copy_database(dest_path):
     """Copy the live database consistently and verify the copy."""
-    source = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    source = sqlite3.connect(sqlite_ro_uri(DB_PATH), uri=True)
     target = sqlite3.connect(dest_path)
     try:
         source.backup(target)
@@ -2302,7 +2394,7 @@ def _copy_database(dest_path):
         target.close()
         source.close()
 
-    check = sqlite3.connect(f"file:{dest_path}?mode=ro", uri=True)
+    check = sqlite3.connect(sqlite_ro_uri(dest_path), uri=True)
     try:
         return check.execute("PRAGMA integrity_check").fetchone()[0]
     finally:
@@ -2349,14 +2441,16 @@ def cleanup_old_backups(max_backups=20):
 
 
 def list_backups():
-    """List available backups with metadata."""
+    """List available backups with metadata.
+
+    Includes daily auto-backups as well as manual/pre-action backups, so the
+    footer's "latest backup" and the restore menu agree on what exists.
+    """
     try:
         backups_dir = get_backups_dir()
-        backups = sorted(
-            glob.glob(os.path.join(backups_dir, 'barstock_backup_*.db')),
-            key=os.path.getmtime,
-            reverse=True
-        )
+        paths = (glob.glob(os.path.join(backups_dir, 'barstock_backup_*.db'))
+                 + glob.glob(os.path.join(backups_dir, 'barstock_auto_*.db')))
+        backups = sorted(paths, key=os.path.getmtime, reverse=True)
         result = []
         for path in backups:
             name = os.path.basename(path)
@@ -2366,7 +2460,8 @@ def list_backups():
                 'path': path,
                 'name': name,
                 'timestamp': mtime.strftime('%Y-%m-%d %H:%M:%S'),
-                'size_kb': round(size / 1024, 1)
+                'size_kb': round(size / 1024, 1),
+                'kind': 'auto' if name.startswith('barstock_auto_') else 'manual',
             })
         return result
     except Exception:
@@ -2383,7 +2478,7 @@ def verify_database(path):
     if not path or not os.path.exists(path):
         return False, 'file not found'
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_ro_uri(path), uri=True)
         try:
             status = conn.execute("PRAGMA integrity_check").fetchone()[0]
             if status != 'ok':

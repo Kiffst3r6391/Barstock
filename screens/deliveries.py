@@ -22,6 +22,7 @@ from conversions import (
     get_conversion, get_input_label, parse_display_date, requires_conversion,
 )
 from sales_mapping import get_hidden_items
+import club_profile
 
 
 class DeliveriesMixin:
@@ -46,17 +47,30 @@ class DeliveriesMixin:
         field_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
         tk.Label(field_frame, text="SUPPLIER", font=ui_theme.mono_font(8),
                  fg=THEME_TEXT_MUTED, bg=THEME_CARD, anchor='w').pack(fill='x')
-        supplier_var = tk.StringVar(value="Booker")
+        existing_suppliers = []
+        if (not self.log_df.empty and COL_SUPPLIER in self.log_df.columns):
+            existing_suppliers = sorted({
+                str(value).strip()
+                for value in self.log_df[COL_SUPPLIER].dropna()
+                if str(value).strip()
+            })
+        supplier_values = list(dict.fromkeys(
+            club_profile.suppliers() + existing_suppliers))
+        default_supplier = club_profile.default_supplier()
+        if not default_supplier and supplier_values:
+            default_supplier = supplier_values[0]
+        supplier_var = tk.StringVar(value=default_supplier)
         supplier_dropdown = ttk.Combobox(field_frame, textvariable=supplier_var,
-                                          values=["Booker", "Tennents"],
-                                          width=40, state="readonly")
+                                          values=supplier_values,
+                                          width=40, state="normal")
         supplier_dropdown.pack(fill='x', pady=(4, 0))
-        supplier_dropdown.set("Select supplier...")
-    
+        if default_supplier:
+            supplier_dropdown.set(default_supplier)
+
         def proceed_with_delivery():
-            selected_supplier = supplier_var.get()
-            if selected_supplier == "Select supplier...":
-                messagebox.showerror("Error", "Please select a supplier.")
+            selected_supplier = supplier_var.get().strip()
+            if not selected_supplier or selected_supplier == "Select supplier...":
+                messagebox.showerror("Error", "Please select or type a supplier.")
                 return
             self.current_delivery_supplier = selected_supplier
             self.process_delivery_multi_item()
@@ -76,16 +90,17 @@ class DeliveriesMixin:
         btn_frame.pack(fill='x', pady=(10, 0))
     
         def repeat_last():
-            selected = supplier_var.get()
-            if selected == "Select supplier...":
+            selected = supplier_var.get().strip()
+            if not selected or selected == "Select supplier...":
                 selected = None
             self.repeat_last_delivery(selected)
-    
+
         self.styled_button(btn_frame, "Proceed", proceed_with_delivery, width=16, variant='primary').pack(side='left', padx=(0, 10))
         self.styled_button(btn_frame, "Repeat Last Delivery", repeat_last,
                            width=20, variant='secondary').pack(side='left', padx=(0, 10))
-        self.styled_button(btn_frame, "Upload Invoice to Price Check", upload_invoice_for_price_check,
-                           width=26, variant='secondary').pack(side='left', padx=(0, 10))
+        if club_profile.feature_enabled('booker_invoice_price_check'):
+            self.styled_button(btn_frame, "Upload Invoice to Price Check", upload_invoice_for_price_check,
+                               width=26, variant='secondary').pack(side='left', padx=(0, 10))
         self.styled_button(btn_frame, "Back", self.show_dashboard, width=16, variant='secondary').pack(side='left')
     
         # Recent deliveries

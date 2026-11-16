@@ -11,16 +11,30 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 
+import app_config
+
 APP_NAME = "BarStock Management"
 
 
 def resolve_version() -> str:
     """Report the version that is actually running.
 
-    The packaged bundle carries its version in Info.plist (pyproject.toml is
-    not shipped), so the title bar used to keep showing whatever number was
-    hard-coded here long after the build had moved on.
+    macOS bundles carry it in Info.plist; the Windows build ships a plain
+    ``version.txt``. ``BARSTOCK_VERSION`` and a source ``pyproject.toml`` are
+    also accepted so a frozen build never falls back to 0.0.0.
     """
+    override = os.environ.get("BARSTOCK_VERSION", "").strip()
+    if override:
+        return override
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = []
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(script_dir, "version.txt"))
+        candidates.append(os.path.join(
+            os.path.dirname(sys.executable), "version.txt"))
+    candidates.append(os.path.join(script_dir, "pyproject.toml"))
+
     if getattr(sys, "frozen", False):
         plist = os.path.join(os.path.dirname(sys.executable), "..", "Info.plist")
         try:
@@ -32,15 +46,20 @@ def resolve_version() -> str:
         except (OSError, ValueError):
             pass
 
-    pyproject = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml")
-    try:
-        import re
-        with open(pyproject, encoding="utf-8") as fh:
-            match = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.MULTILINE)
-        if match:
-            return match.group(1)
-    except OSError:
-        pass
+    for path in candidates:
+        try:
+            import re
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            if path.endswith("version.txt"):
+                value = text.strip()
+                if value:
+                    return value
+            match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if match:
+                return match.group(1)
+        except OSError:
+            continue
     return "0.0.0"
 
 
@@ -50,9 +69,7 @@ _LOCK_HANDLE = None
 
 
 def get_app_support_dir() -> str:
-    path = os.path.expanduser("~/Library/Application Support/BarStockManagement")
-    os.makedirs(path, exist_ok=True)
-    return path
+    return app_config.get_resource_path()
 
 
 def get_log_path() -> str:
@@ -104,19 +121,31 @@ def acquire_single_instance_lock():
     if _LOCK_HANDLE is not None:
         return _LOCK_HANDLE
 
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover - non-POSIX platform
-        # No advisory locking available; let the app run rather than block it.
-        return True
-
     lock_path = os.path.join(get_app_support_dir(), "barstock.lock")
     handle = open(lock_path, "a+")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return None
+    if os.name == "nt":
+        import msvcrt
+        try:
+            handle.seek(0)
+            if handle.read(1) == "":
+                handle.write(" ")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            handle.close()
+            return None
+    else:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - non-POSIX platform
+            handle.close()
+            return True
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            return None
 
     handle.seek(0)
     handle.truncate()

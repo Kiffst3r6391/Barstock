@@ -43,8 +43,9 @@ from order_sheet_layout import get_order_sheet_layout
 from sales_mapping import SALES_TO_PARENT, normalize_product_name
 from actions import ACTION_SALES, ACTION_SALES_ONE_UNIT
 from reports import calculate_expected_remaining_series
+from app_config import DATA_DIR, sqlite_ro_uri
 
-APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "BarStockManagement"
+APP_SUPPORT_DIR = Path(DATA_DIR)
 DEFAULT_DB = APP_SUPPORT_DIR / "barstock.db"
 
 
@@ -290,7 +291,7 @@ def check_stock_vs_log(stock_df: pd.DataFrame, log_df: pd.DataFrame) -> list[str
 def _load_sqlite(db_path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
     try:
         inv = pd.read_sql_query(
             "SELECT item_id, item_name, quantity, allow_negative "
@@ -308,7 +309,7 @@ def _load_sqlite(db_path: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
 def _db_counts(db_path: Path) -> dict:
     if not db_path.exists():
         return {}
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_ro_uri(db_path), uri=True)
     try:
         return {
             "inventory": conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0],

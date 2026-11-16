@@ -17,6 +17,7 @@ from conversions import STOCK_CONVERSIONS
 from categories import CATEGORY_MAP, should_exclude, DELISTED_ITEMS
 from order_sheet_layout import get_order_sheet_layout
 from sales_mapping import SALES_TO_PARENT, is_hidden_from_stock_view, normalize_product_name
+import club_profile
 
 COL_ITEM_ID = 'item_id'
 COL_ITEM_NAME = 'item_name'
@@ -84,7 +85,9 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
     if inventory_df.empty:
         return {'missing_conversion': [], 'missing_category': [], 'missing_order_sheet': []}
 
-    order_sheet_ids = _collect_order_sheet_item_ids()
+    order_sheet_ids = (_collect_order_sheet_item_ids()
+                        if club_profile.feature_enabled('stock_order_sheet')
+                        else set())
     conversion_ids = {k.lower() for k in STOCK_CONVERSIONS.keys()}
     category_ids = {k.lower() for k in CATEGORY_MAP.keys()}
 
@@ -120,7 +123,8 @@ def find_missing_mappings(inventory_df: pd.DataFrame) -> Dict[str, List[Dict[str
 
         # Order sheet: hidden/excluded/retired/delisted items don't need to appear
         # on the printable order sheet, so don't flag them at startup.
-        if (item_lower not in order_sheet_ids
+        if (club_profile.feature_enabled('stock_order_sheet')
+                and item_lower not in order_sheet_ids
                 and not is_hidden_or_excluded
                 and item_lower not in DELISTED_ITEMS):
             missing_order_sheet.append(info)

@@ -85,3 +85,37 @@ def test_blue_wkd_till_item_is_ignored():
 def test_ordinary_products_are_not_ignored():
     assert is_ignored_epos_product('Tennents Lager') is False
     assert is_ignored_epos_product('Can') is False
+
+
+def test_reconciliation_explains_ignored_blue_wkd():
+    # The real 1-8 Nov export: every line records except the £3.47 Blue WKD
+    # in/out line. The gap must be attributed to that line, not left as an
+    # unexplained difference.
+    preview = [{'revenue_inc': 2271.85}]
+    unrecorded = [{
+        'product': 'Blue WKD',
+        'qty': 1,
+        'revenue_inc': 3.47,
+        'reason': 'Till-only staff-tip/refund in-out line.',
+    }]
+    rec = UploadsMixin._build_reconciliation(2275.32, preview, unrecorded)
+    assert rec['reported_inc'] == 2271.85
+    assert rec['unrecorded_inc'] == 3.47
+    assert rec['explained_inc'] == 3.47
+    assert rec['residual_inc'] == 0.0
+    assert rec['lines'] == unrecorded
+
+
+def test_reconciliation_keeps_unexplained_money_visible():
+    rec = UploadsMixin._build_reconciliation(
+        10.00, [{'revenue_inc': 9.00}], [])
+    assert rec['unrecorded_inc'] == 1.00
+    assert rec['explained_inc'] == 0.00
+    assert rec['residual_inc'] == 1.00
+
+
+def test_reconciliation_is_zero_when_every_line_records():
+    rec = UploadsMixin._build_reconciliation(
+        12.34, [{'revenue_inc': 12.34}], [])
+    assert rec['unrecorded_inc'] == 0.0
+    assert rec['residual_inc'] == 0.0

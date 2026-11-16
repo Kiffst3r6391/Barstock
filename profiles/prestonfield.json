@@ -1,0 +1,32 @@
+{
+  "profile_id": "prestonfield",
+  "club_name": "Prestonfield Golf Club",
+  "club_short_name": "Prestonfield",
+  "strap_line": "Golf Club",
+  "crest_text": "PGC",
+  "logo_path": "",
+  "footer_credit": "Created by Chris Armstrong",
+  "greeting_name": "Chris",
+  "data_dir_name": "BarStockManagement",
+  "app_display_name": "Bar Stock Management",
+  "pdf_header_prefix": "Prestonfield Golf Club",
+  "complimentary_reasons": [
+    "Complaint",
+    "Chris",
+    "Tour Group",
+    "Hospitality",
+    "Manager",
+    "Other"
+  ],
+  "suppliers": [
+    "Booker",
+    "Tennents"
+  ],
+  "default_supplier": "Tennents",
+  "features": {
+    "stock_order_sheet": true,
+    "booker_invoice_price_check": true,
+    "mapping_warnings": true
+  },
+  "item_rules": {}
+}

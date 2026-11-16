@@ -73,17 +73,17 @@ def _resolve(root, stack, fallback):
 
 def resolve_font(root):
     """Resolve the body sans family."""
-    return _resolve(root, THEME_FONT_STACK, 'Helvetica')
+    return _resolve(root, THEME_FONT_STACK, 'Arial')
 
 
 def resolve_display_font(root):
     """Resolve the serif display/figures family."""
-    return _resolve(root, THEME_DISPLAY_STACK, 'Georgia')
+    return _resolve(root, THEME_DISPLAY_STACK, 'Times New Roman')
 
 
 def resolve_mono_font(root):
     """Resolve the monospaced label/caption family."""
-    return _resolve(root, THEME_MONO_STACK, 'Menlo')
+    return _resolve(root, THEME_MONO_STACK, 'Courier New')
 
 
 def _font_tuple(family, size, weight):

@@ -28,15 +28,17 @@ from pathlib import Path
 
 import pandas as pd
 
+from app_config import DATA_DIR, sqlite_ro_uri
+
 VAT_MULTIPLIER = 1.2
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "BarStockManagement"
+APP_SUPPORT_DIR = Path(DATA_DIR)
 
 # Files we may mutate
-STOCK_CSV = SCRIPT_DIR / "stock.csv"
-ITEMS_CSV = SCRIPT_DIR / "Items.csv"
-LOG_CSV = SCRIPT_DIR / "transaction_log.csv"
+STOCK_CSV = APP_SUPPORT_DIR / "stock.csv"
+ITEMS_CSV = APP_SUPPORT_DIR / "Items.csv"
+LOG_CSV = APP_SUPPORT_DIR / "transaction_log.csv"
 DB_PATH = APP_SUPPORT_DIR / "barstock.db"
 
 
@@ -230,7 +232,7 @@ def _read_price_basis() -> str | None:
     if not DB_PATH.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_ro_uri(DB_PATH), uri=True)
         try:
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = 'price_basis'"

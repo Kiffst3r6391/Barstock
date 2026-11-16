@@ -479,7 +479,7 @@ def test_create_backup_writes_a_verified_copy(db):
     path = dm.create_backup("test")
 
     assert path and os.path.exists(path)
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(dm.sqlite_ro_uri(path), uri=True)
     try:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1

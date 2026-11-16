@@ -224,8 +224,9 @@ def resolve_epos_item_id(raw_item_id):
 
 
 # Till-only products that must never be recorded by an upload. They are used as
-# in/out mechanisms (for example the Blue WKD staff-tip button) and hold no
-# stock, so any revenue they show is a pass-through rather than a sale.
+# in/out mechanisms (for example the Blue WKD staff-drink button: charged on
+# the till then refunded back to staff) and hold no stock, so any revenue they
+# show is a pass-through rather than a sale.
 IGNORED_EPOS_ITEMS = {
     'blue_wkd',
 }

@@ -1,6 +1,7 @@
 pandas
-fpdf
+fpdf2>=2.7,<3
 matplotlib
 tkcalendar
 babel
 pdfplumber
+Pillow>=10

@@ -1,0 +1,28 @@
+{
+  "profile_id": "bruntsfield",
+  "club_name": "Bruntsfield Links",
+  "club_short_name": "Bruntsfield",
+  "strap_line": "Golf Club",
+  "crest_text": "BL",
+  "logo_path": "assets/bruntsfield_logo.png",
+  "footer_credit": "",
+  "greeting_name": "",
+  "data_dir_name": "BruntsfieldBarStock",
+  "app_display_name": "Bar Stock Management",
+  "pdf_header_prefix": "Bruntsfield Links",
+  "complimentary_reasons": [
+    "Complaint",
+    "Hospitality",
+    "Manager",
+    "Tour Group",
+    "Other"
+  ],
+  "suppliers": [],
+  "default_supplier": "",
+  "features": {
+    "stock_order_sheet": false,
+    "booker_invoice_price_check": false,
+    "mapping_warnings": false
+  },
+  "item_rules": {}
+}

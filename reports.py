@@ -7,6 +7,7 @@ Returns raw data structures (dicts, DataFrames) for UI rendering.
 
 import json
 import os
+import re
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -21,11 +22,11 @@ from actions import (
     ACTION_IMPORT, ACTION_SUPPLIER_RETURN,
 )
 from categories import get_category, should_exclude, is_delisted, CATEGORY_ORDER
-from sales_mapping import is_hidden_from_stock_view
+from sales_mapping import is_hidden_from_stock_view, get_parent_for_sale
 from supplier_mapping import get_supplier, get_supplier_order, supplier_rank
 from order_sheet_layout import get_order_sheet_layout
 from conversions import parse_display_date, DATE_FORMAT_DISPLAY
-from money import allocate_money, round_money, sum_money
+from money import allocate_money, round_money, sum_money, inc_vat
 
 
 def _format_delivery_date(timestamp_str):
@@ -181,24 +182,58 @@ def sales_money_by_item(log_df, member_discount_pct=10):
 
 
 def item_division_lookup(inventory_df):
-    """Map item_id -> division from the live inventory, falling back to Items.csv.
+    """Map item_id -> division from the live inventory, then sensible fallbacks.
 
     The Division report and the comprehensive PDF both use this lookup, so a
-    sale lands in the same division in both.
+    sale lands in the same division in both. Child/mixer items (half pints,
+    shandies, orange & lemonade) often have no division of their own, so they
+    inherit the division of their parent stock item rather than defaulting to
+    "Unknown".
     """
     division_mapping = get_division_mapping(os.path.dirname(os.path.abspath(__file__)))
     lookup = {}
     if inventory_df is None or inventory_df.empty:
         return lookup
 
-    for _, row in inventory_df.iterrows():
-        item_id = row[COL_ITEM_ID]
+    rows = list(inventory_df.iterrows())
+
+    # First pass: explicit divisions from the live inventory.
+    for _, row in rows:
+        item_id = str(row[COL_ITEM_ID])
         live = row.get(COL_DIVISION, '')
         if pd.notna(live) and str(live).strip():
             lookup[item_id] = normalize_division_name(str(live))
-        else:
-            lookup[item_id] = normalize_division_name(
-                division_mapping.get(str(row[COL_ITEM_NAME]).lower(), 'Unknown'))
+
+    # Items whose display name / item_id does not map cleanly.
+    explicit = {
+        'guinness_0_0': 'Beer - Bottled',
+        'sours': 'Spirits',
+        'cart_roll_tea_coffee': 'Hot Drinks',
+        'coke_half': 'Post Mix',
+        'diet_coke_half': 'Post Mix',
+        'coke_pm': 'Post Mix',
+        'diet_coke_pm': 'Post Mix',
+    }
+
+    # Second pass: Items.csv, then the parent's division, then explicit.
+    for _, row in rows:
+        item_id = str(row[COL_ITEM_ID])
+        if item_id in lookup:
+            continue
+        mapped = division_mapping.get(str(row[COL_ITEM_NAME]).lower(), '')
+        if not mapped or mapped == 'Unknown':
+            parent = get_parent_for_sale(item_id)
+            if parent:
+                parent_ids = (parent[0] if isinstance(parent[0], list)
+                              else [parent[0]])
+                for parent_id in parent_ids:
+                    parent_id = str(parent_id)
+                    if parent_id in lookup and lookup[parent_id] != 'Unknown':
+                        mapped = lookup[parent_id]
+                        break
+        if not mapped or mapped == 'Unknown':
+            mapped = explicit.get(item_id, 'Unknown')
+        lookup[item_id] = normalize_division_name(str(mapped))
     return lookup
 
 
@@ -413,18 +448,36 @@ def normalize_division_name(name):
 
 
 def get_division_mapping(script_dir):
-    """Load division mapping from Items.csv."""
-    division_mapping = {}
-    items_csv_path = os.path.join(script_dir, 'Items.csv')
-    if os.path.exists(items_csv_path):
+    """Load the division mapping from Items.csv.
+
+    In the packaged app the bundle no longer carries Items.csv (it is live
+    data), so fall back to the Application Support copy before giving up.
+    """
+    candidates = [os.path.join(script_dir, 'Items.csv')]
+    try:
+        from app_config import DATA_DIR
+        candidates.append(os.path.join(DATA_DIR, 'Items.csv'))
+    except Exception:
+        pass
+    candidates.append(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'Items.csv'))
+
+    for items_csv_path in candidates:
+        if not os.path.exists(items_csv_path):
+            continue
         try:
             items_df = pd.read_csv(items_csv_path, compression=None)
             if 'Name' in items_df.columns and 'Division' in items_df.columns:
-                raw_mapping = dict(zip(items_df['Name'].str.lower(), items_df['Division']))
-                division_mapping = {k: normalize_division_name(v) for k, v in raw_mapping.items()}
+                raw_mapping = dict(zip(items_df['Name'].str.lower(),
+                                       items_df['Division']))
+                division_mapping = {
+                    key: normalize_division_name(value)
+                    for key, value in raw_mapping.items()}
+                if division_mapping:
+                    return division_mapping
         except Exception:
-            pass
-    return division_mapping
+            continue
+    return {}
 
 
 def build_gp_report_data(log_df, member_discount_pct=10):
@@ -809,7 +862,11 @@ def _get_currently_open_tab_ids():
     Cancelled or closed tabs are excluded because their stock has already been
     restored or recognised as sales.
     """
-    db_path = os.path.expanduser('~/Library/Application Support/BarStockManagement/barstock.db')
+    try:
+        import data_manager
+        db_path = data_manager.DB_PATH
+    except Exception:
+        return set()
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -839,7 +896,8 @@ def _get_latest_baseline_snapshot():
     except Exception:
         db_path = None
     if not db_path:
-        db_path = os.path.expanduser('~/Library/Application Support/BarStockManagement/barstock.db')
+        from app_config import DATA_DIR
+        db_path = os.path.join(DATA_DIR, 'barstock.db')
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -1717,3 +1775,812 @@ def build_reconciliation_report(
     report['recent_negative'] = find_recent_negative_items(inventory_df, log_df, days=negative_days)
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# Dashboard / PDF insight builders
+#
+# These are pure functions over DataFrames so the dashboard and the PDF share
+# one set of money rules. Every figure is allocated or summed through money.py.
+# ---------------------------------------------------------------------------
+
+UPLOAD_OVERDUE_DAYS = 8
+UPLOAD_GAP_DAYS = 8
+PRICE_ALERT_DAYS = 30
+PRICE_ALERT_PCT = 10.0
+STOCKTAKE_WARN_DAYS = 28
+STOCKTAKE_DUE_DAYS = 35
+BACKUP_WARN_DAYS = 3
+BACKUP_OVERDUE_DAYS = 7
+
+
+def _safe_float(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if np.isfinite(number) else default
+
+
+def _inventory_price_lookups(inventory_df):
+    """Return (cost_by_id, sell_by_id, name_by_id) from the inventory."""
+    costs, sells, names = {}, {}, {}
+    if inventory_df is None or inventory_df.empty or COL_ITEM_ID not in inventory_df.columns:
+        return costs, sells, names
+    for _, row in inventory_df.iterrows():
+        item_id = str(row.get(COL_ITEM_ID, '')).strip()
+        if not item_id:
+            continue
+        costs[item_id] = _safe_float(row.get(COL_COST_PRICE, 0))
+        sells[item_id] = _safe_float(row.get(COL_SELL_PRICE, 0))
+        names[item_id] = str(row.get(COL_ITEM_NAME, item_id))
+    return costs, sells, names
+
+
+def _activity_value(log_df, actions, price_by_id, price_column=COL_COST_PRICE,
+                    exclude_reason=None, only_reason=None,
+                    prefer_inventory=False):
+    """Value matching log rows at a price, falling back to inventory prices.
+
+    ``prefer_inventory`` values the rows at the current inventory price, which
+    is the basis the report's item tables use; leave it False for
+    transaction-cost views. Returns an exact penny total via ``sum_money``.
+    """
+    if log_df is None or log_df.empty or COL_ACTION not in log_df.columns:
+        return 0.0
+    rows = log_df[log_df[COL_ACTION].isin(actions)]
+    if rows.empty:
+        return 0.0
+    if COL_REASON in rows.columns:
+        reasons = rows[COL_REASON].astype(str).str.strip().str.lower()
+        if exclude_reason:
+            rows = rows[reasons != exclude_reason.strip().lower()]
+        if only_reason:
+            rows = rows[reasons == only_reason.strip().lower()]
+    if rows.empty:
+        return 0.0
+    values = []
+    for _, row in rows.iterrows():
+        item_id = str(row.get(COL_ITEM_ID, '')).strip()
+        quantity = _safe_float(row.get(COL_QUANTITY, 0))
+        inventory_price = _safe_float(price_by_id.get(item_id, 0))
+        price = _safe_float(row.get(price_column, 0))
+        if prefer_inventory and inventory_price:
+            price = inventory_price
+        elif price == 0:
+            price = inventory_price
+        values.append(quantity * price)
+    return sum_money(values)
+
+
+def _period_totals(log_df, inventory_df, member_discount_pct=10):
+    """Return the dashboard/PDF figures for one trading period."""
+    cost_by_id, sell_by_id, _ = _inventory_price_lookups(inventory_df)
+    money = sales_money_by_item(log_df, member_discount_pct)
+    if money.empty:
+        sales_ex = cost = gp = 0.0
+        sales_qty = 0.0
+    else:
+        sales_ex = sum_money(money['total_revenue'])
+        cost = sum_money(money['total_cost'])
+        gp = sum_money(money['gp'])
+        sales_qty = _safe_float(money['sales_qty'].sum())
+    gp_pct = (gp / sales_ex * 100) if sales_ex else 0.0
+
+    wastage_cost = _activity_value(
+        log_df, {ACTION_WASTAGE}, cost_by_id, COL_COST_PRICE,
+        exclude_reason='Line Clean', prefer_inventory=True)
+    line_clean_cost = _activity_value(
+        log_df, {ACTION_WASTAGE}, cost_by_id, COL_COST_PRICE,
+        only_reason='Line Clean', prefer_inventory=True)
+    line_clean_cost = round_money(line_clean_cost + _activity_value(
+        log_df, {ACTION_LINE_CLEAN}, cost_by_id, COL_COST_PRICE,
+        prefer_inventory=True))
+    comp_retail = _activity_value(
+        log_df, {ACTION_COMPLIMENTARY}, sell_by_id, COL_SELL_PRICE,
+        prefer_inventory=True)
+    comp_cost = _activity_value(
+        log_df, {ACTION_COMPLIMENTARY}, cost_by_id, COL_COST_PRICE,
+        prefer_inventory=True)
+    supplier_returns_cost = _activity_value(
+        log_df, {ACTION_SUPPLIER_RETURN}, cost_by_id, COL_COST_PRICE,
+        prefer_inventory=True)
+    delivery_spend = _activity_value(
+        log_df, {ACTION_DELIVERY}, cost_by_id, COL_COST_PRICE)
+
+    return {
+        'sales_ex_vat': round_money(sales_ex),
+        'sales_inc_vat': inc_vat(sales_ex),
+        'cost_of_sales': round_money(cost),
+        'gp': round_money(gp),
+        'gp_pct': gp_pct,
+        'sales_qty': sales_qty,
+        'wastage_cost': round_money(wastage_cost),
+        'line_clean_cost': line_clean_cost,
+        'complimentary_retail': round_money(comp_retail),
+        'complimentary_cost': round_money(comp_cost),
+        'supplier_returns_cost': round_money(supplier_returns_cost),
+        'delivery_spend': round_money(delivery_spend),
+    }
+
+
+def _change(current, previous, key, higher_is_good=True):
+    """Describe the movement of one metric."""
+    if previous is None or current is None:
+        return {'delta': None, 'pct': None, 'pp': None,
+                'direction': 'flat', 'good': None}
+    delta = round_money(current - previous)
+    if key == 'gp_pct':
+        pct = None
+        pp = delta
+    else:
+        pct = (delta / abs(previous) * 100) if previous else None
+        pp = None
+    if abs(delta) < 0.005:
+        direction = 'flat'
+    else:
+        direction = 'up' if delta > 0 else 'down'
+    good = None
+    if direction != 'flat':
+        good = (delta > 0) == higher_is_good
+    return {'delta': delta, 'pct': pct, 'pp': pp,
+            'direction': direction, 'good': good}
+
+
+def _filter_fully_within(log_df, start, end):
+    """Keep rows whose trading period (or timestamp) sits inside the window.
+
+    A catch-up upload can span several weeks. Counting the whole upload in a
+    comparison window that only touches one of its days would distort the
+    previous-period figures, so partial overlaps are excluded rather than
+    silently prorated.
+    """
+    if log_df is None or log_df.empty:
+        return log_df
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = (pd.Timestamp(end).normalize()
+              + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
+    keep = []
+    for index, row in log_df.iterrows():
+        period = _parse_period_range(row.get(COL_DATE_RANGE))
+        if period:
+            period_start, period_end = period
+            if (pd.Timestamp(period_start).normalize() >= start_ts
+                    and pd.Timestamp(period_end).normalize() <= end_ts.normalize()):
+                keep.append(index)
+            continue
+        timestamp = pd.to_datetime(row.get(COL_TIMESTAMP), errors='coerce')
+        if pd.notna(timestamp) and start_ts <= timestamp <= end_ts:
+            keep.append(index)
+    return log_df.loc[keep]
+
+
+def build_previous_period_log(full_log_df, start_date, end_date, current_log=None):
+    """Return the equal-length period immediately before ``start_date``.
+
+    Weekly uploads can straddle a boundary because ``filter_log_by_date``
+    includes any row whose ``date_range`` overlaps. Rows already present in
+    ``current_log`` are removed from the previous period so the same sale is
+    never counted twice.
+    """
+    if full_log_df is None or start_date is None or end_date is None:
+        return None, None, None
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+    if end < start:
+        start, end = end, start
+    span_days = (end - start).days + 1
+    previous_end = start - pd.Timedelta(days=1)
+    previous_start = previous_end - pd.Timedelta(days=span_days - 1)
+    previous_log = filter_log_by_date(
+        full_log_df, previous_start.to_pydatetime(),
+        previous_end.to_pydatetime())
+    # Exclude upload periods that only partly fall inside the window. A
+    # multi-week catch-up upload otherwise lands wholly in one comparison.
+    previous_log = _filter_fully_within(
+        previous_log, previous_start, previous_end)
+    if current_log is not None and not current_log.empty:
+        previous_log = previous_log.drop(index=current_log.index, errors='ignore')
+    return (previous_log, previous_start.to_pydatetime(),
+            previous_end.to_pydatetime())
+
+
+def build_period_comparison_summary(inventory_df, current_log, previous_log,
+                                    member_discount_pct=10,
+                                    current_label='', previous_label=''):
+    """Return current/previous/delta figures for the dashboard and PDF."""
+    current = _period_totals(current_log, inventory_df, member_discount_pct)
+    previous = (_period_totals(previous_log, inventory_df, member_discount_pct)
+                if previous_log is not None else None)
+
+    # Stock holding is inherently current-only; no invented prior valuation.
+    stock_holding = 0.0
+    if inventory_df is not None and not inventory_df.empty:
+        qty = pd.to_numeric(
+            inventory_df.get(COL_QUANTITY, 0), errors='coerce').fillna(0)
+        cost = pd.to_numeric(
+            inventory_df.get(COL_COST_PRICE, 0), errors='coerce').fillna(0)
+        active = ~inventory_df[COL_ITEM_ID].astype(str).map(is_delisted)
+        stock_holding = sum_money(qty[active] * cost[active])
+    current['stock_holding'] = round_money(stock_holding)
+
+    higher_is_good = {
+        'sales_ex_vat': True,
+        'sales_inc_vat': True,
+        'cost_of_sales': False,
+        'gp': True,
+        'gp_pct': True,
+        'sales_qty': True,
+        'wastage_cost': False,
+        'line_clean_cost': False,
+        'complimentary_retail': False,
+        'complimentary_cost': False,
+        'supplier_returns_cost': False,
+        'delivery_spend': True,
+        'stock_holding': True,
+    }
+    changes = {}
+    for key, good_when_up in higher_is_good.items():
+        prev_value = previous.get(key) if previous is not None else None
+        changes[key] = _change(current.get(key, 0.0), prev_value, key,
+                               higher_is_good=good_when_up)
+
+    return {
+        'current': current,
+        'previous': previous,
+        'changes': changes,
+        'labels': {'current': current_label, 'previous': previous_label},
+    }
+
+
+def _parse_period_range(value):
+    """Parse a date_range string into (start, end) datetimes, or None."""
+    if not isinstance(value, str):
+        return None
+    match = re.search(
+        r'(\d{2}[/-]\d{2}[/-]\d{4})\s+-\s+(\d{2}[/-]\d{2}[/-]\d{4})', value)
+    if not match:
+        return None
+    try:
+        return parse_display_date(match.group(1)), parse_display_date(match.group(2))
+    except ValueError:
+        return None
+
+
+def build_upload_period_health(log_df, today=None):
+    """Summarise sales-upload coverage: latest period, gaps and overlaps."""
+    today = today or datetime.now()
+    result = {
+        'periods': [],
+        'latest_period': None,
+        'latest_period_end': None,
+        'days_since_period_end': None,
+        'last_upload_timestamp': None,
+        'overlaps': [],
+        'latest_overlaps': [],
+        'largest_gap_days': 0,
+        'status': 'none',
+    }
+    if log_df is None or log_df.empty:
+        return result
+    sales = log_df[log_df[COL_ACTION].isin([ACTION_SALES, ACTION_SALES_ONE_UNIT])]
+    if sales.empty:
+        return result
+
+    raw_periods = set()
+    if COL_DATE_RANGE in sales.columns:
+        for value in sales[COL_DATE_RANGE].dropna().astype(str):
+            parsed = _parse_period_range(value)
+            if parsed:
+                raw_periods.add((parsed[0], parsed[1], value.strip()))
+    periods = sorted(raw_periods, key=lambda item: (item[0], item[1]))
+    result['periods'] = [
+        {'period': label, 'start': start, 'end': end}
+        for start, end, label in periods
+    ]
+
+    if periods:
+        latest = periods[-1]
+        result['latest_period'] = latest[2]
+        result['latest_period_end'] = latest[1]
+        result['days_since_period_end'] = (today.date() - latest[1].date()).days
+        for earlier in periods[:-1]:
+            if latest[0] <= earlier[1] and latest[1] >= earlier[0]:
+                result['latest_overlaps'].append({
+                    'first': earlier[2],
+                    'second': latest[2],
+                })
+
+    for index in range(1, len(periods)):
+        previous_end = periods[index - 1][1]
+        current_start = periods[index][0]
+        if current_start <= previous_end:
+            result['overlaps'].append({
+                'first': periods[index - 1][2],
+                'second': periods[index][2],
+            })
+        else:
+            gap = (current_start.date() - previous_end.date()).days - 1
+            result['largest_gap_days'] = max(result['largest_gap_days'], gap)
+
+    if COL_TIMESTAMP in sales.columns and not sales.empty:
+        timestamps = pd.to_datetime(sales[COL_TIMESTAMP], errors='coerce').dropna()
+        if not timestamps.empty:
+            result['last_upload_timestamp'] = timestamps.max().to_pydatetime()
+
+    if result['days_since_period_end'] is not None and \
+            result['days_since_period_end'] > UPLOAD_OVERDUE_DAYS:
+        result['status'] = 'overdue'
+    elif result['latest_overlaps'] or result['largest_gap_days'] > UPLOAD_GAP_DAYS:
+        result['status'] = 'warning'
+    elif periods:
+        result['status'] = 'ok'
+    return result
+
+
+def build_price_change_alerts(inventory_df, log_df, days=PRICE_ALERT_DAYS,
+                              threshold_pct=PRICE_ALERT_PCT, today=None,
+                              limit=3):
+    """Find recent delivery cost increases above ``threshold_pct``.
+
+    Each item's deliveries are compared with its previous distinct unit cost,
+    so a split delivery at the same price does not create a false alert.
+    """
+    if log_df is None or log_df.empty or COL_ACTION not in log_df.columns:
+        return []
+    today = today or datetime.now()
+    deliveries = log_df[log_df[COL_ACTION] == ACTION_DELIVERY].copy()
+    if deliveries.empty:
+        return []
+    deliveries['_ts'] = pd.to_datetime(deliveries[COL_TIMESTAMP], errors='coerce')
+    deliveries = deliveries.dropna(subset=['_ts'])
+    if days is not None:
+        cutoff = pd.Timestamp(today) - pd.Timedelta(days=days)
+        deliveries = deliveries[deliveries['_ts'] >= cutoff]
+    if deliveries.empty:
+        return []
+
+    _, _, name_by_id = _inventory_price_lookups(inventory_df)
+    alerts = []
+    for item_id, rows in deliveries.sort_values('_ts').groupby(COL_ITEM_ID):
+        rows = rows.drop_duplicates(subset=['_ts', COL_COST_PRICE])
+        previous_cost = None
+        for _, row in rows.iterrows():
+            cost = _safe_float(row.get(COL_COST_PRICE, 0))
+            if cost <= 0:
+                continue
+            if previous_cost is not None and previous_cost > 0:
+                change_pct = (cost - previous_cost) / previous_cost * 100
+                if change_pct >= threshold_pct:
+                    alerts.append({
+                        'item_id': str(item_id),
+                        'item_name': name_by_id.get(str(item_id), str(item_id)),
+                        'supplier': str(row.get(COL_SUPPLIER, '') or 'Unassigned'),
+                        'date': row['_ts'].to_pydatetime(),
+                        'old_cost': round_money(previous_cost),
+                        'new_cost': round_money(cost),
+                        'change_pct': change_pct,
+                        'target': 'price_history',
+                    })
+            previous_cost = cost
+
+    alerts.sort(key=lambda alert: (alert['change_pct'], alert['date']),
+                reverse=True)
+    return alerts[:limit] if limit is not None else alerts
+
+
+def build_supplier_spend_summary(log_df):
+    """Return delivery spend by supplier, ex VAT, with exact shares."""
+    rows = []
+    if log_df is None or log_df.empty or COL_ACTION not in log_df.columns:
+        return rows
+    deliveries = log_df[log_df[COL_ACTION] == ACTION_DELIVERY].copy()
+    if deliveries.empty:
+        return rows
+    deliveries[COL_SUPPLIER] = deliveries.get(
+        COL_SUPPLIER, '').fillna('').astype(str).str.strip()
+    deliveries.loc[deliveries[COL_SUPPLIER] == '', COL_SUPPLIER] = 'Unassigned'
+    values = []
+    grouped = []
+    for supplier, group in deliveries.groupby(COL_SUPPLIER):
+        spend = sum_money(
+            _safe_float(row.get(COL_QUANTITY, 0)) *
+            _safe_float(row.get(COL_COST_PRICE, 0))
+            for _, row in group.iterrows())
+        values.append(spend)
+        grouped.append((supplier, group, spend))
+    allocated = allocate_money(values)
+    total = sum_money(allocated)
+    for (supplier, group, _), spend in zip(grouped, allocated):
+        rows.append({
+            'supplier': supplier,
+            'lines': int(len(group)),
+            'units': _safe_float(group[COL_QUANTITY].sum()),
+            'spend_ex_vat': spend,
+            'share_pct': (spend / total * 100) if total else 0.0,
+        })
+    rows.sort(key=lambda row: row['spend_ex_vat'], reverse=True)
+    return rows
+
+
+def build_reason_value_summary(log_df, inventory_df, kind='wastage',
+                               value_basis='cost'):
+    """Group wastage, line-clean or complimentary activity by reason.
+
+    ``kind`` is ``wastage``, ``line_clean`` or ``comp``. Values are allocated
+    to the penny so the reason rows add up to the section total.
+    """
+    cost_by_id, sell_by_id, _ = _inventory_price_lookups(inventory_df)
+    if kind == 'comp':
+        actions = {ACTION_COMPLIMENTARY}
+        price_map = sell_by_id if value_basis == 'retail' else cost_by_id
+        price_column = COL_SELL_PRICE if value_basis == 'retail' else COL_COST_PRICE
+        exclude_reason = None
+        only_reason = None
+    elif kind == 'line_clean':
+        actions = {ACTION_LINE_CLEAN}
+        price_map = cost_by_id
+        price_column = COL_COST_PRICE
+        exclude_reason = None
+        only_reason = None
+    else:
+        actions = {ACTION_WASTAGE}
+        price_map = cost_by_id
+        price_column = COL_COST_PRICE
+        exclude_reason = 'Line Clean'
+        only_reason = None
+
+    if log_df is None or log_df.empty or COL_ACTION not in log_df.columns:
+        return []
+    rows = log_df[log_df[COL_ACTION].isin(actions)]
+    if kind == 'wastage' and COL_REASON in rows.columns:
+        # Line cleaning is reported separately, never as wastage.
+        rows = rows[rows[COL_REASON].astype(str).str.strip().str.lower()
+                    != 'line clean']
+    if kind == 'line_clean':
+        # Legacy line-clean rows may be recorded as Wastage/Line Clean.
+        legacy = log_df[log_df[COL_ACTION] == ACTION_WASTAGE]
+        if COL_REASON in legacy.columns:
+            legacy = legacy[legacy[COL_REASON].astype(str).str.strip().str.lower()
+                            == 'line clean']
+        rows = pd.concat([rows, legacy], ignore_index=True)
+    if rows.empty:
+        return []
+    reasons = rows.get(COL_REASON, pd.Series([''] * len(rows), index=rows.index))
+    rows = rows.copy()
+    rows['_reason'] = reasons.fillna('').astype(str).str.strip()
+    rows.loc[rows['_reason'] == '', '_reason'] = 'Unspecified'
+
+    grouped = []
+    values = []
+    for reason, group in rows.groupby('_reason'):
+        value = _activity_value(
+            group, set(group[COL_ACTION].unique()), price_map, price_column,
+            exclude_reason=exclude_reason if kind == 'wastage' else None,
+            only_reason=only_reason, prefer_inventory=True)
+        values.append(value)
+        grouped.append((reason, group, value))
+    allocated = allocate_money(values)
+    total = sum_money(allocated)
+    result = []
+    for (reason, group, _), value in zip(grouped, allocated):
+        result.append({
+            'reason': reason,
+            'quantity': _safe_float(group[COL_QUANTITY].sum()),
+            'value': value,
+            'share_pct': (value / total * 100) if total else 0.0,
+        })
+    result.sort(key=lambda row: row['value'], reverse=True)
+    return result
+
+
+def build_value_movement_bridge(report_data, total_stock_value=None):
+    """Build the value bridge from opening stock to closing stock.
+
+    The bridge deliberately exposes a balancing line: GP uses transaction cost
+    while stock is valued at current cost, so the two can differ by a cost
+    revaluation. Hiding that difference would make the report lie.
+    """
+    if not report_data:
+        return {'rows': [], 'closing': 0.0, 'difference': 0.0}
+    opening = sum_money(
+        _safe_float(item.get('opening_stock', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    deliveries = sum_money(
+        _safe_float(item.get('delivery_qty', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    cost_of_sales = sum_money(
+        _safe_float(item.get('sales_cost', 0)) for item in report_data)
+    wastage = sum_money(
+        _safe_float(item.get('wastage_qty', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    line_clean = sum_money(
+        _safe_float(item.get('line_clean_qty', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    complimentary = sum_money(
+        _safe_float(item.get('complimentary_qty', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    supplier_returns = sum_money(
+        _safe_float(item.get('supplier_return_qty', 0)) *
+        _safe_float(item.get('cost_price', 0)) for item in report_data)
+    variance_values = [
+        _safe_float(item.get('surplus_value'))
+        for item in report_data if item.get('surplus_value') is not None]
+    variance = sum_money(variance_values) if variance_values else 0.0
+    closing = round_money(
+        total_stock_value if total_stock_value is not None
+        else sum_money(_safe_float(item.get('stock_value', 0))
+                       for item in report_data))
+    expected_closing = round_money(
+        opening + deliveries - cost_of_sales - wastage - line_clean
+        - complimentary - supplier_returns + variance)
+    difference = round_money(closing - expected_closing)
+    rows = [
+        ('Opening stock at cost', opening),
+        ('Plus deliveries at cost', deliveries),
+        ('Less cost of sales', -cost_of_sales),
+        ('Less wastage at cost', -wastage),
+        ('Less line cleaning at cost', -line_clean),
+        ('Less complimentary at cost', -complimentary),
+        ('Less supplier returns at cost', -supplier_returns),
+        ('Stocktake variance', variance),
+        ('Expected closing stock', expected_closing),
+        ('Closing stock at current cost', closing),
+        ('Difference (cost revaluation)', difference),
+    ]
+    return {
+        'rows': [{'label': label, 'value': round_money(value)}
+                 for label, value in rows],
+        'closing': closing,
+        'expected_closing': expected_closing,
+        'difference': difference,
+    }
+
+
+def build_report_reconciliation_notes(inventory_df, log_df, report_data,
+                                      upload_health=None):
+    """Build data-driven notes explaining non-sales and reconciliation lines."""
+    notes = []
+    if report_data:
+        zero_cost = [
+            item for item in report_data
+            if _safe_float(item.get('total_sales_value', 0)) > 0
+            and _safe_float(item.get('sales_cost', 0)) == 0]
+        if zero_cost:
+            notes.append({
+                'title': 'Zero-cost sales lines',
+                'detail': (f"{len(zero_cost)} item{'s' if len(zero_cost) != 1 else ''} {'carry' if len(zero_cost) != 1 else 'carries'} revenue with no "
+                           "recorded cost, so their GP is 100%."),
+            })
+
+        delisted = [item for item in report_data
+                    if item.get('is_delisted') or item.get('delisted_stock_value')]
+        if delisted:
+            value = sum_money(_safe_float(item.get('delisted_stock_value', 0))
+                              for item in delisted)
+            notes.append({
+                'title': 'Delisted items',
+                'detail': (f"{len(delisted)} delisted line{'s' if len(delisted) != 1 else ''} {'are' if len(delisted) != 1 else 'is'} excluded from "
+                           f"active stock value (£{value:,.2f} held separately)."),
+            })
+
+        negative = [item for item in report_data
+                    if _safe_float(item.get('current_stock', 0)) < 0]
+        if negative:
+            notes.append({
+                'title': 'Negative stock',
+                'detail': (f"{len(negative)} item{'s' if len(negative) != 1 else ''} {'are' if len(negative) != 1 else 'is'} negative at the report "
+                           "date; check recent deliveries and sales."),
+            })
+
+    if log_df is not None and not log_df.empty and COL_ACTION in log_df.columns:
+        deliveries = log_df[log_df[COL_ACTION] == ACTION_DELIVERY]
+        if COL_SUPPLIER in deliveries.columns:
+            unnamed = deliveries[
+                deliveries[COL_SUPPLIER].fillna('').astype(str).str.strip() == '']
+            if not unnamed.empty:
+                spend = sum_money(
+                    _safe_float(row.get(COL_QUANTITY, 0)) *
+                    _safe_float(row.get(COL_COST_PRICE, 0))
+                    for _, row in unnamed.iterrows())
+                notes.append({
+                    'title': 'Unassigned deliveries',
+                    'detail': (f"{len(unnamed)} delivery line{'s' if len(unnamed) != 1 else ''} {'have' if len(unnamed) != 1 else 'has'} no supplier "
+                               f"(£{spend:,.2f} ex VAT)."),
+                })
+
+    if upload_health:
+        if upload_health.get('overlaps'):
+            notes.append({
+                'title': 'Overlapping sales uploads',
+                'detail': (f"{len(upload_health['overlaps'])} overlapping sales "
+                           "period(s) were found. Check the upload history before "
+                           "relying on the period total."),
+            })
+        if upload_health.get('largest_gap_days', 0) > UPLOAD_GAP_DAYS:
+            notes.append({
+                'title': 'Sales coverage gap',
+                'detail': (f"The largest gap between sales upload periods is "
+                           f"{upload_health['largest_gap_days']} days."),
+            })
+
+    notes.append({
+        'title': 'Cost basis',
+        'detail': ('Sales, costs and stock are reported ex VAT at 20%. GP uses '
+                   'transaction cost; closing stock uses current cost, so the '
+                   'value bridge may show a cost-revaluation difference.'),
+    })
+    return notes
+
+
+def build_executive_narrative(comparison, division_totals=None,
+                              supplier_spend=None, vat_position=None):
+    """Create short, plain-language bullets for the PDF summary page."""
+    bullets = []
+    if comparison:
+        current = comparison.get('current') or {}
+        changes = comparison.get('changes') or {}
+        sales_change = changes.get('sales_ex_vat') or {}
+        if sales_change.get('pct') is not None:
+            direction = 'up' if sales_change['direction'] == 'up' else 'down'
+            bullets.append(
+                f"Sales are {direction} {abs(sales_change['pct']):.1f}% "
+                f"against the previous period (£{current.get('sales_ex_vat', 0):,.2f} ex VAT).")
+        gp_change = changes.get('gp_pct') or {}
+        if gp_change.get('pp') is not None:
+            direction = 'up' if gp_change['direction'] == 'up' else 'down'
+            bullets.append(
+                f"GP margin is {direction} {abs(gp_change['pp']):.1f} percentage "
+                f"points at {current.get('gp_pct', 0):.1f}%.")
+        waste_change = changes.get('wastage_cost') or {}
+        if waste_change.get('delta') is not None:
+            direction = 'higher' if waste_change['direction'] == 'up' else 'lower'
+            bullets.append(
+                f"Wastage is £{current.get('wastage_cost', 0):,.2f}, "
+                f"{direction} than the previous period.")
+    if division_totals:
+        top_division = max(
+            division_totals.items(),
+            key=lambda item: item[1].get('sales_value', 0) or 0,
+            default=(None, None))
+        if top_division[0]:
+            bullets.append(
+                f"{top_division[0]} is the largest division at "
+                f"£{top_division[1].get('sales_value', 0):,.2f} ex VAT.")
+    if supplier_spend:
+        top = supplier_spend[0]
+        bullets.append(
+            f"{top['supplier']} is the largest supplier at "
+            f"£{top['spend_ex_vat']:,.2f} ex VAT.")
+    if vat_position:
+        net = vat_position.get('net_vat', 0)
+        position = 'payable' if net >= 0 else 'repayable'
+        bullets.append(
+            f"Net VAT is £{abs(net):,.2f} {position} for the period (estimate only).")
+    return bullets[:6]
+
+
+def find_overlapping_upload_periods(start_date, end_date, log_df):
+    """Return existing sales periods that overlap a proposed upload period.
+
+    Used by the sales-upload guard: a re-exported file has a different hash but
+    can still double-count the same trading week.
+    """
+    if start_date is None or end_date is None:
+        return []
+    new_start = pd.Timestamp(start_date).normalize()
+    new_end = pd.Timestamp(end_date).normalize()
+    if new_end < new_start:
+        new_start, new_end = new_end, new_start
+    overlaps = []
+    for period in build_upload_period_health(log_df).get('periods', []):
+        if new_start <= pd.Timestamp(period['end']).normalize() and \
+                new_end >= pd.Timestamp(period['start']).normalize():
+            overlaps.append(period['period'])
+    return overlaps
+
+
+def build_division_stock_movement(report_data, target_revaluation=None):
+    """Aggregate stock movement by division for the directors' PDF.
+
+    Values use current cost for opening/closing/wastage and transaction cost
+    for cost of sales, the same basis as the value bridge. Each money column is
+    allocated to the penny so the division rows add up to the total row.
+    """
+    if not report_data:
+        return {'rows': [], 'total': {}}
+    grouped = defaultdict(lambda: {
+        'opening': 0.0, 'deliveries': 0.0, 'cogs': 0.0,
+        'shrinkage': 0.0, 'returns': 0.0, 'closing': 0.0,
+    })
+    for item in report_data:
+        division = str(item.get('division', 'Unknown') or 'Unknown')
+        cost = _safe_float(item.get('cost_price', 0))
+        bucket = grouped[division]
+        bucket['opening'] += _safe_float(item.get('opening_stock', 0)) * cost
+        bucket['deliveries'] += _safe_float(item.get('delivery_qty', 0)) * cost
+        bucket['cogs'] += _safe_float(item.get('sales_cost', 0))
+        bucket['shrinkage'] += (
+            _safe_float(item.get('wastage_qty', 0))
+            + _safe_float(item.get('line_clean_qty', 0))
+            + _safe_float(item.get('complimentary_qty', 0))) * cost
+        bucket['returns'] += _safe_float(item.get('supplier_return_qty', 0)) * cost
+        bucket['closing'] += _safe_float(item.get('stock_value', 0))
+
+    divisions = list(grouped)
+    for key in ('opening', 'deliveries', 'cogs', 'shrinkage', 'returns', 'closing'):
+        allocated = allocate_money([grouped[d][key] for d in divisions])
+        for division, value in zip(divisions, allocated):
+            grouped[division][key] = value
+
+    rows = []
+    for division in divisions:
+        bucket = grouped[division]
+        rows.append({
+            'division': division,
+            'opening': round_money(bucket['opening']),
+            'deliveries': round_money(bucket['deliveries']),
+            'cogs': round_money(bucket['cogs']),
+            'shrinkage': round_money(bucket['shrinkage']),
+            'returns': round_money(bucket['returns']),
+            'closing': round_money(bucket['closing']),
+            'revaluation': round_money(
+                bucket['closing']
+                - (bucket['opening'] + bucket['deliveries']
+                   - bucket['cogs'] - bucket['shrinkage']
+                   - bucket['returns'])),
+        })
+    rows.sort(key=lambda row: row['closing'], reverse=True)
+    if target_revaluation is not None and rows:
+        current_total = sum_money(row['revaluation'] for row in rows)
+        residual = round_money(target_revaluation - current_total)
+        if residual:
+            index = max(range(len(rows)),
+                        key=lambda i: abs(rows[i]['revaluation']))
+            rows[index]['revaluation'] = round_money(
+                rows[index]['revaluation'] + residual)
+    total = {
+        key: sum_money(row[key] for row in rows)
+        for key in ('opening', 'deliveries', 'cogs', 'shrinkage',
+                    'returns', 'closing', 'revaluation')
+    }
+    return {'rows': rows, 'total': total}
+
+
+def build_stock_exceptions(stocktake_data, report_data, limit=10):
+    """Return the largest stocktake variances and negative-stock items."""
+    division_by_id = {
+        str(item.get('item_id', '')): item.get('division', 'Unknown')
+        for item in (report_data or [])
+    }
+    variances = []
+    for row in (stocktake_data or []):
+        if not row.get('has_stocktake', False):
+            continue
+        variances.append({
+            'item_id': row.get('item_id', ''),
+            'item_name': row.get('item_name', ''),
+            'division': division_by_id.get(str(row.get('item_id', '')), 'Unknown'),
+            'expected': _safe_float(row.get('expected_quantity', 0)),
+            'counted': _safe_float(row.get('counted_quantity', 0)),
+            'variance': _safe_float(row.get('variance', 0)),
+            'variance_value': _safe_float(row.get('variance_value', 0)),
+        })
+    variances.sort(key=lambda row: abs(row['variance_value']), reverse=True)
+
+    negative = []
+    for item in (report_data or []):
+        current_stock = _safe_float(item.get('current_stock', 0))
+        if current_stock < 0:
+            negative.append({
+                'item_id': item.get('item_id', ''),
+                'item_name': item.get('item_name', ''),
+                'division': item.get('division', 'Unknown'),
+                'current_stock': current_stock,
+                'stock_value': _safe_float(item.get('stock_value', 0)),
+            })
+    negative.sort(key=lambda row: row['current_stock'])
+    return {
+        'variances': variances[:limit],
+        'negative': negative[:limit],
+    }

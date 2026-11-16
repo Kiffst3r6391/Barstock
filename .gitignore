@@ -33,3 +33,10 @@ apply_baseline_reset.py
 
 # Claude session files
 .claude/
+
+# Windows build staging
+build_support/
+BarStockManagement-Windows-x64.zip
+
+# Keep the buyer template tracked despite the generated-CSV rule
+!Items_template.csv

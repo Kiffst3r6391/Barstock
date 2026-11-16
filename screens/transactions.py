@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 import ui_theme
 from ui_theme import (TBL_ROW_ALT, THEME_ACCENT, THEME_BG, THEME_BORDER,
                       THEME_CARD, THEME_TEXT, THEME_TEXT_MUTED)
+import club_profile
 from app_config import (
     COL_ACTION, COL_COST_PRICE, COL_DATE_RANGE, COL_DIVISION, COL_ITEM_ID,
     COL_ITEM_NAME, COL_QUANTITY, COL_REASON, COL_SELL_PRICE, COL_SUPPLIER,
@@ -134,9 +135,10 @@ class TransactionsMixin:
     
                     log_tree.insert('', tk.END, values=values,
                                     tags=('alt',) if index % 2 else ())
-    
-                if self.log_df.empty:
-                    tk.Label(self.main_menu, text="No transactions recorded yet.").pack(pady=20)
+            else:
+                tk.Label(frame, text="No transactions recorded yet.",
+                         font=(ui_theme.THEME_FONT, 10),
+                         fg=THEME_TEXT_MUTED, bg=THEME_BG).pack(pady=20)
     
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}")
@@ -757,7 +759,7 @@ class TransactionsMixin:
                 row=4, column=0, padx=5, pady=8, sticky="e")
             reason_var = tk.StringVar(value="Complaint")
             reason_dropdown = ttk.Combobox(entry_frame, textvariable=reason_var,
-                                           values=["Complaint", "Chris", "Tour Group", "Hospitality"],
+                                           values=club_profile.complimentary_reasons(),
                                            width=38, state="readonly")
             reason_dropdown.grid(row=4, column=1, padx=5, pady=8, sticky="w")
             stock_row = 5
@@ -776,10 +778,10 @@ class TransactionsMixin:
             tk.Label(entry_frame, text="SUPPLIER", font=ui_theme.mono_font(8),
                      bg=THEME_BG, fg=THEME_TEXT_MUTED).grid(
                 row=5, column=0, padx=5, pady=8, sticky="e")
-            supplier_var = tk.StringVar(value="Tennents")
+            supplier_var = tk.StringVar(value=club_profile.default_supplier())
             supplier_dropdown = ttk.Combobox(entry_frame, textvariable=supplier_var,
-                                             values=get_supplier_order() + ["Other"],
-                                             width=38, state="readonly")
+                                             values=club_profile.suppliers() + ["Other"],
+                                             width=38, state="normal")
             supplier_dropdown.grid(row=5, column=1, padx=5, pady=8, sticky="w")
             stock_row = 6
             conv_row = 7
