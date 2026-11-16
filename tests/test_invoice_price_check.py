@@ -33,7 +33,10 @@ def app(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk is not available in this environment")
     root.withdraw()
     app = BarStockManagementSystem(root)
     root.destroy()
