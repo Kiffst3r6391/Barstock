@@ -69,7 +69,12 @@ def verify(app_dir: Path) -> None:
     exe = app_dir / 'BarStockManagement.exe'
     if not exe.exists():
         raise SystemExit(f'Missing executable: {exe}')
-    profile = json.loads((app_dir / 'club_profile.json').read_text(encoding='utf-8'))
+    profile_path = app_dir / 'club_profile.json'
+    if not profile_path.exists():
+        profile_path = app_dir / '_internal' / 'club_profile.json'
+    if not profile_path.exists():
+        raise SystemExit(f'Missing bundled profile: {profile_path}')
+    profile = json.loads(profile_path.read_text(encoding='utf-8'))
     if profile.get('profile_id') != 'bruntsfield':
         raise SystemExit('Bundled profile is not bruntsfield')
 

@@ -37,7 +37,7 @@ datas = [
 binaries = []
 hiddenimports = [
     'pandas', 'numpy', 'tkinter', 'tkinter.messagebox', 'tkinter.ttk',
-    'fpdf', 'fpdf.FPDF', 'defusedxml', 'PIL', 'tkcalendar', 'babel',
+    'fpdf', 'defusedxml', 'PIL', 'tkcalendar', 'babel',
     'babel.numbers', 'matplotlib', 'matplotlib.pyplot',
     'matplotlib.backends.backend_tkagg', 'matplotlib.dates',
     'categories', 'conversions', 'sales_mapping', 'supplier_mapping',
