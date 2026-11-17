@@ -276,6 +276,22 @@ def apply_settings_overrides(get_setting) -> dict[str, Any]:
             value = None
         if value not in (None, ''):
             profile[key] = str(value)
+
+    try:
+        raw_suppliers = get_setting('suppliers')
+        if raw_suppliers:
+            parsed = json.loads(raw_suppliers)
+            if isinstance(parsed, list):
+                profile['suppliers'] = [str(v).strip() for v in parsed
+                                        if str(v).strip()]
+    except Exception:
+        pass
+    current_default = str(profile.get('default_supplier', '') or '')
+    values = profile.get('suppliers') or []
+    if values and current_default not in values:
+        profile['default_supplier'] = values[0]
+    if not values:
+        profile['default_supplier'] = ''
     return profile
 
 

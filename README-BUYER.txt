@@ -22,6 +22,19 @@ If Sell Price is omitted, a starting price of cost x 1.3 is used.
 
 You can also add items one at a time in Manage Stock.
 
+SUPPLIERS
+---------
+Go to More Actions -> System -> Suppliers to add, rename or remove suppliers.
+You can also type a new supplier directly into the Deliveries supplier box.
+
+PASSWORD PROTECTION
+-------------------
+Go to More Actions -> System -> Password Protection.
+You can enable, change or disable a startup password there.
+This locks the app window; it does NOT encrypt the database or CSV files.
+If the password is lost, the app can only be opened by removing the
+app_password setting from the database.
+
 WHERE YOUR DATA LIVES
 ---------------------
 Your live database, backups and logs are stored outside the app folder:

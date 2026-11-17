@@ -7,6 +7,7 @@ Simple tkinter-based bar stock management.
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog, simpledialog
 import pandas as pd
+import json
 import os
 import sys
 import logging
@@ -72,6 +73,7 @@ from ui_theme import *  # noqa: F401,F403
 from ui_theme import THEME_FONT, THEME_FONT_STACK
 import ui_theme
 import club_profile
+import security
 
 
 from data_manager import (
@@ -1581,6 +1583,10 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
                  self.show_open_tabs),
             ]),
             ("System", [
+                ("Suppliers", "Add, rename or remove suppliers.",
+                 self.open_supplier_manager),
+                ("Password Protection", "Require a password at startup.",
+                 self.open_password_settings),
                 ("Settings", "Member discount and system preferences.",
                  self.open_settings),
                 ("Restore Backup", "Roll the database back to an earlier copy.",
@@ -2028,6 +2034,243 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
         except Exception as e:
             messagebox.showerror("Error", f"Failed to initialize stock: {e}")
 
+    def open_supplier_manager(self):
+        """Add, rename and remove the suppliers offered by the app."""
+        top = tk.Toplevel(self.root)
+        top.title("Suppliers")
+        top.geometry("560x560")
+        self._fit_dialog(top, 560, 560)
+        top.transient(self.root)
+        top.grab_set()
+        top.configure(bg=THEME_BG)
+
+        frame = tk.Frame(top, padx=24, pady=20, bg=THEME_BG)
+        frame.pack(fill='both', expand=True)
+        tk.Label(frame, text="Suppliers", font=ui_theme.display_font(18),
+                 fg=THEME_TEXT, bg=THEME_BG, anchor='w').pack(fill='x')
+        tk.Label(frame,
+                 text=("These names appear in Deliveries and Supplier Return. "
+                       "You can still type a new supplier directly into the "
+                       "delivery screen."),
+                 font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w', justify='left', wraplength=500).pack(
+                     fill='x', pady=(2, 12))
+
+        raw = get_setting('suppliers')
+        suppliers = []
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    suppliers = [str(v).strip() for v in parsed
+                                 if str(v).strip()]
+            except Exception:
+                suppliers = []
+        if not suppliers:
+            suppliers = list(club_profile.suppliers())
+
+        list_frame = tk.Frame(frame, bg=THEME_BG)
+        list_frame.pack(fill='both', expand=True)
+        listbox = tk.Listbox(
+            list_frame, font=(THEME_FONT, 11), bg=THEME_CARD,
+            fg=THEME_TEXT, selectbackground=THEME_ACCENT,
+            selectforeground=THEME_TEXT, exportselection=False, bd=1,
+            relief='solid', highlightthickness=0)
+        listbox.pack(side='left', fill='both', expand=True)
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical',
+                                  command=listbox.yview)
+        scrollbar.pack(side='right', fill='y')
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        def refresh():
+            listbox.delete(0, tk.END)
+            for value in suppliers:
+                listbox.insert(tk.END, value)
+
+        entry_var = tk.StringVar()
+        entry_row = tk.Frame(frame, bg=THEME_BG)
+        entry_row.pack(fill='x', pady=(10, 0))
+        entry = ttk.Entry(entry_row, textvariable=entry_var,
+                          font=(THEME_FONT, 11))
+        entry.pack(side='left', fill='x', expand=True, ipady=3)
+
+        def add_supplier():
+            value = entry_var.get().strip()
+            if not value:
+                return
+            if any(value.lower() == existing.lower() for existing in suppliers):
+                messagebox.showinfo("Suppliers", "That supplier is already listed.")
+                return
+            suppliers.append(value)
+            suppliers.sort(key=str.lower)
+            entry_var.set('')
+            refresh()
+
+        def selected_index():
+            selection = listbox.curselection()
+            return selection[0] if selection else None
+
+        def rename_supplier():
+            index = selected_index()
+            if index is None:
+                messagebox.showinfo("Suppliers", "Select a supplier first.")
+                return
+            new_name = simpledialog.askstring(
+                "Rename supplier", "New supplier name:",
+                initialvalue=suppliers[index], parent=top)
+            if not new_name or not new_name.strip():
+                return
+            new_name = new_name.strip()
+            if any(new_name.lower() == existing.lower()
+                   for position, existing in enumerate(suppliers)
+                   if position != index):
+                messagebox.showinfo("Suppliers", "That supplier is already listed.")
+                return
+            suppliers[index] = new_name
+            suppliers.sort(key=str.lower)
+            refresh()
+
+        def remove_supplier():
+            index = selected_index()
+            if index is None:
+                messagebox.showinfo("Suppliers", "Select a supplier first.")
+                return
+            if not messagebox.askyesno(
+                    "Remove supplier",
+                    f"Remove '{suppliers[index]}' from the supplier list?\n\n"
+                    "Existing delivery records keep the name."):
+                return
+            del suppliers[index]
+            refresh()
+
+        buttons = tk.Frame(frame, bg=THEME_BG)
+        buttons.pack(fill='x', pady=(8, 0))
+        self.styled_button(buttons, "Add", add_supplier, width=10,
+                           variant='primary').pack(side='left')
+        self.styled_button(buttons, "Rename", rename_supplier, width=10,
+                           variant='secondary').pack(side='left', padx=(6, 0))
+        self.styled_button(buttons, "Remove", remove_supplier, width=10,
+                           variant='secondary').pack(side='left', padx=(6, 0))
+
+        def save_and_close():
+            if set_setting('suppliers', json.dumps(suppliers)):
+                club_profile.apply_settings_overrides(get_setting)
+                self._set_status("Supplier list saved.", 'success')
+                top.destroy()
+            else:
+                messagebox.showerror("Suppliers", "Could not save the supplier list.")
+
+        footer = tk.Frame(frame, bg=THEME_BG)
+        footer.pack(fill='x', pady=(14, 0))
+        self.styled_button(footer, "Save", save_and_close, width=14,
+                           variant='primary').pack(side='right')
+        self.styled_button(footer, "Cancel", top.destroy, width=14,
+                           variant='secondary').pack(side='right', padx=(0, 8))
+
+        entry.bind('<Return>', lambda event: add_supplier())
+        refresh()
+        top.update_idletasks()
+        self._apply_legacy_theme(top)
+
+    def open_password_settings(self):
+        """Enable, change or disable the startup password."""
+        enabled = security.password_enabled()
+        top = tk.Toplevel(self.root)
+        top.title("Password Protection")
+        top.geometry("520x440")
+        self._fit_dialog(top, 520, 440)
+        top.transient(self.root)
+        top.grab_set()
+        top.configure(bg=THEME_BG)
+
+        frame = tk.Frame(top, padx=24, pady=20, bg=THEME_BG)
+        frame.pack(fill='both', expand=True)
+        tk.Label(frame, text="Password Protection",
+                 font=ui_theme.display_font(18), fg=THEME_TEXT, bg=THEME_BG,
+                 anchor='w').pack(fill='x')
+        tk.Label(frame,
+                 text=("Locks the app window at startup. This does not encrypt "
+                       "the database or CSV files."),
+                 font=(THEME_FONT, 9), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w', justify='left', wraplength=460).pack(
+                     fill='x', pady=(2, 12))
+
+        status_var = tk.BooleanVar(value=enabled)
+        tk.Checkbutton(
+            frame, text="Enable password protection",
+            variable=status_var, font=(THEME_FONT, 11), fg=THEME_TEXT,
+            bg=THEME_BG, activebackground=THEME_BG,
+            selectcolor=THEME_CARD).pack(anchor='w', pady=(0, 12))
+
+        def field(label, show=None):
+            row = tk.Frame(frame, bg=THEME_BG)
+            row.pack(fill='x', pady=(0, 8))
+            tk.Label(row, text=label, font=(THEME_FONT, 10, 'bold'),
+                     fg=THEME_TEXT_MUTED, bg=THEME_BG, anchor='w',
+                     width=20).pack(side='left')
+            var = tk.StringVar()
+            ttk.Entry(row, textvariable=var, show=show or '',
+                      font=(THEME_FONT, 11)).pack(
+                          side='left', fill='x', expand=True, ipady=3)
+            return var
+
+        current_var = field("Current password", '*') if enabled else None
+        new_var = field("New password", '*')
+        confirm_var = field("Confirm new password", '*')
+
+        tk.Label(frame,
+                 text=("If the password is lost, the app can only be opened by "
+                       "removing the app_password setting from the database."),
+                 font=(THEME_FONT, 8), fg=THEME_TEXT_MUTED, bg=THEME_BG,
+                 anchor='w', justify='left', wraplength=460).pack(
+                     fill='x', pady=(4, 0))
+
+        def save():
+            want = bool(status_var.get())
+            current = current_var.get() if current_var is not None else ''
+            new_password = new_var.get()
+            confirm = confirm_var.get()
+
+            if enabled and not security.verify_password(current):
+                messagebox.showerror("Password", "Current password is incorrect.")
+                return
+
+            if not want:
+                if enabled and not security.disable_password(current):
+                    messagebox.showerror("Password", "Could not disable the password.")
+                    return
+                self._set_status("Password protection disabled.", 'success')
+                top.destroy()
+                return
+
+            if not new_password:
+                if enabled:
+                    top.destroy()  # keep the existing password unchanged
+                else:
+                    messagebox.showerror("Password", "Enter a new password.")
+                return
+            if new_password != confirm:
+                messagebox.showerror("Password", "The new passwords do not match.")
+                return
+            if new_password.strip() == '':
+                messagebox.showerror("Password", "Password cannot be blank.")
+                return
+            if security.set_password(new_password, True):
+                self._set_status("Password protection enabled.", 'success')
+                top.destroy()
+            else:
+                messagebox.showerror("Password", "Could not save the password.")
+
+        footer = tk.Frame(frame, bg=THEME_BG)
+        footer.pack(fill='x', pady=(18, 0))
+        self.styled_button(footer, "Save", save, width=14,
+                           variant='primary').pack(side='right')
+        self.styled_button(footer, "Cancel", top.destroy, width=14,
+                           variant='secondary').pack(side='right', padx=(0, 8))
+
+        top.update_idletasks()
+        self._apply_legacy_theme(top)
+
     def open_settings(self):
         """Open the settings dialog."""
         top = tk.Toplevel(self.root)
@@ -2282,5 +2525,11 @@ if __name__ == "__main__":
         root.destroy()
         raise SystemExit(0)
     install_exception_hooks(root)
+    if security.password_enabled():
+        root.withdraw()
+        if not security.prompt_for_password(root):
+            root.destroy()
+            raise SystemExit(0)
+        root.deiconify()
     app = BarStockManagementSystem(root)
     root.mainloop()
