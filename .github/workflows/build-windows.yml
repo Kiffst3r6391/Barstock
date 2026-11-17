@@ -25,6 +25,15 @@ jobs:
         run: python -m pytest -q
       - name: Build portable ZIP
         run: python build_windows.py --profile bruntsfield
+      - name: Run packaged self-test
+        shell: pwsh
+        run: |
+          $exe = "dist\BarStockManagement\BarStockManagement.exe"
+          if (!(Test-Path $exe)) { throw "Executable not found: $exe" }
+          $proc = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          $report = Join-Path $env:TEMP "barstock_self_test.txt"
+          if (Test-Path $report) { Get-Content $report }
+          if ($proc.ExitCode -ne 0) { throw "Self-test failed with exit code $($proc.ExitCode)" }
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:

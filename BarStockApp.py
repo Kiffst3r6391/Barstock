@@ -10,6 +10,10 @@ import pandas as pd
 import json
 import os
 import sys
+if '--self-test' in sys.argv and not os.environ.get('BARSTOCK_DATA_DIR'):
+    import tempfile
+    os.environ['BARSTOCK_DATA_DIR'] = tempfile.mkdtemp(
+        prefix='barstock-self-test-')
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -2513,6 +2517,9 @@ class BarStockManagementSystem(DashboardMixin, DeliveriesMixin, InventoryMixin,
 
 
 if __name__ == "__main__":
+    if '--self-test' in sys.argv:
+        from self_test import run_self_test
+        raise SystemExit(run_self_test())
     root = tk.Tk()
     if INSTANCE_LOCK is None:
         root.withdraw()
